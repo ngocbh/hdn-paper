@@ -1,0 +1,634 @@
+\RequirePackage[svgnames,table]{xcolor}
+
+\documentclass[11pt,letterpaper,logo]{yalearxiv}
+
+\input{preamble}
+\input{command}
+
+
+\newtcolorbox{simpleElegantQuote}{
+    colback=AliceBlue!50!White,
+    colframe=RoyalBlue!75!Black,
+    boxrule=0.5pt,
+    arc=2mm,
+    boxsep=4pt,
+    left=10pt, right=10pt,
+    top=8pt, bottom=8pt,
+    fontupper=\itshape,
+}
+
+\title{HyperDeltaNet: Manifold-Constrained Memory for Linear Attention}
+
+
+\runningtitle{HyperDeltaNet}
+
+\usepackage{fontawesome5}
+\definecolor{myorange}{RGB}{250,99,57}
+\newcommand{\orgfire}{\textcolor{myorange}{\faFire*}}
+\newcommand{\trimkv}{TrimKV\textsuperscript{ \orgfire}}
+\newcommand{\dbtrimkv}{DBTrimKV\textsuperscript{ \orgfire}}
+
+\definecolor{yaleblue}{RGB}{0,58,112}
+\definecolor{jpmcbrown}{RGB}{153,108,72}
+\newcommand{\yale}{%
+  \textsuperscript{%
+    {\usefont{T1}{pbk}{m}{n}\textcolor{yaleblue}{\textbf{Y}}}%
+  }%
+}
+
+\author{Ngoc Bui\yale, Rex Ying\yale\\
+\yale Department of Computer Science, Yale University\\
+\faGithub~\textbf{Source Code:} \href{https://github.com/ngocbh/hyper-delta-net}{\texttt{https://github.com/ngocbh/hyper-delta-net}}
+}
+
+\hypersetup{colorlinks=true, linkcolor=blue!50!black, citecolor=blue!50!black,
+            urlcolor=blue!50!black}
+
+\newcommand{\alphaa}{\alpha}
+\newcommand{\betab}{\beta}
+\newcommand{\neff}[1][]{n_{\text{eff}#1}}
+
+% Provisional / preliminary number tag
+\newcommand{\prelim}[1]{\textcolor{red!70!black}{#1$^{\dagger}$}}
+
+% --- draft-local notation ---
+\newcommand{\smax}{\sigma_{\max}}
+\newcommand{\Tcarry}{T}          % horizontal carry operator T_t
+\newcommand{\Hres}{H_{\mathrm{res}}}
+\newcommand{\Hpre}{H_{\mathrm{pre}}}
+\newcommand{\Hpost}{H_{\mathrm{post}}}
+
+
+\begin{document}
+
+
+\begin{abstract}
+\vspace{-1mm}
+{\centering\section*{Abstract}}
+Linear-attention models compress an unbounded KV cache into a fixed-size recurrent
+state, so the central design question is how to \emph{edit} that compressed memory
+without scrambling stored associations. Gated DeltaNet-2 (GDN-2) advances this by
+\emph{decoupling} the erase and write operations into separate channel-wise gates,
+setting a new frontier for recurrent long-context retrieval. We show that this
+decoupling carries a hidden, and in fact \emph{unavoidable}, cost: the per-step
+state-transition operator becomes \emph{non-normal}, so its largest singular value
+strictly exceeds one whenever the erase gate is genuinely channel-wise. We prove a
+tight closed form for this spectral norm and show equality with one holds
+\emph{only} when the model collapses back to a scalar (KDA-style) erase. GDN-2 thus
+buys expressiveness by selling step-wise non-expansiveness --- precisely in the
+long-memory regime where it claims its gains. We recast the memory recurrence as the
+\emph{time-axis} analog of the residual carry in hyper-connections, which lets us
+import the manifold-constraint principle of mHC. The impossibility result forces
+exactly two remedies --- \emph{damp} the transition onto the non-expansive set, or
+\emph{enrich} it with orthogonal structure --- which we develop as HyperDeltaNet.
+We further generalize the state into multiple doubly-stochastically mixed streams,
+and prove that constrained per-stream transitions compose with mass-preserving
+mixing into a memory operator that is non-expansive by construction. We lay out an
+experimental program to test whether the predicted instability is empirically
+consequential and whether the fix improves long-context retrieval.
+\end{abstract}
+
+
+\maketitle
+
+
+% =============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Linear attention replaces the growing key--value cache of softmax attention with a
+fixed-size recurrent state $S_t \in \R^{d_k \times d_v}$, trading unbounded memory
+for constant-time, constant-memory inference \citep{katharopoulos2020transformers}.
+The price is that every token must be \emph{written into} a compressed store that
+cannot grow: the model must continually decide what to overwrite, what to preserve,
+and what to forget. The delta-rule family \citep{schlag2021linear,yang2024parallelizing}
+made this an explicit, associative edit --- remove the old value bound to a key
+before writing the new one \citep{schlag2021linear,yang2024parallelizing} --- and
+successive refinements
+(Gated DeltaNet \citep{yang2024gdn}, Kimi Delta Attention) added gating and
+channel-wise decay for finer control.
+
+Gated DeltaNet-2 (GDN-2) \citep{hatamizadeh2026gdn2} pushes this line furthest by
+\emph{decoupling} two decisions that all prior delta-rule models had tied to a
+single scalar gate $\beta_t$: a channel-wise \emph{erase} gate $b_t$ that selects
+which key-side coordinates of the state to remove, and a channel-wise \emph{write}
+gate $w_t$ that selects which value-side coordinates to commit. This decoupling is
+GDN-2's headline contribution and delivers its strongest results on
+interference-heavy multi-key retrieval, exactly the setting that stresses memory
+editing.
+
+\paragraph{This paper.} We identify a structural cost of that decoupling and turn it
+into a design principle. Our starting observation is that the memory recurrence
+$S_t = \Tcarry_t S_{t-1} + \text{write}_t$ is \emph{structurally identical} to the
+residual update $x_{l+1} = \Hres\, x_l + F(\cdot)$ of hyper-connections
+\citep{zhu2024hyperconnections} and its manifold-constrained variant mHC
+\citep{deepseek2025mhc}: the horizontal (cross-\emph{time}) carry $\Tcarry_t$ is the
+analog of the depth (cross-\emph{layer}) carry $\Hres$. mHC's central idea is to
+constrain $\Hres$ to a norm-controlled manifold so the residual highway neither
+explodes nor vanishes across depth. We ask whether the same discipline stabilizes
+the memory highway across time --- and find that GDN-2's decoupling is precisely
+what makes it necessary.
+
+\paragraph{Contributions.}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,topsep=2pt]
+  \item \textbf{An impossibility result (\S\ref{sec:gap}).} We give a closed form
+  for the largest singular value of GDN-2's rank-one erase factor and prove
+  $\smax \ge 1$ \emph{always}, with equality iff the erase gate is a per-head
+  scalar. Decoupled ($e \not\parallel k$), rank-one, and step-wise non-expansive
+  cannot hold simultaneously.
+  \item \textbf{Direction A --- constraining the single carry (\S\ref{sec:dirA}).}
+  The impossibility forces two escape routes: \emph{damp} the transition back onto
+  the non-expansive set (A0, a closed-form drop-in), or \emph{enrich} it with
+  orthogonal structure so norm preservation is recovered (A1, Householder/Givens).
+  \item \textbf{Direction B --- multi-stream hyper-memory (\S\ref{sec:dirB}).} We
+  replace the single state with $n$ streams mixed by a doubly-stochastic matrix at
+  chunk boundaries --- hyper-connections along the \emph{memory} axis --- at
+  negligible overhead.
+  \item \textbf{Composition (\S\ref{sec:compose}).} Non-expansive per-stream carries
+  and mass-preserving mixing compose into a memory operator that is provably
+  non-expansive, retaining GDN-2's decoupled expressiveness \emph{inside} each
+  stream.
+  \item \textbf{An honest experimental program (\S\ref{sec:exp}).} We specify the
+  measurements that would confirm (or refute) that the predicted non-normal
+  amplification is consequential at trained scale, before any kernel work.
+\end{itemize}
+
+
+% =============================================================================
+\section{Background}
+\label{sec:bg}
+
+\subsection{Two residuals}
+\label{sec:two-residuals}
+
+\paragraph{The depth axis: hyper-connections and mHC.}
+With $s$ residual streams, a hyper-connection layer updates
+\begin{equation}
+  x_{l+1} \;=\; \Hres\, x_l \;+\; \Hpost^{\tr}\, F\!\big(\Hpre\, x_l,\, W_l\big),
+  \label{eq:hc}
+\end{equation}
+where $\Hres \in \R^{s\times s}$ mixes streams and $\Hpre,\Hpost$ are separate
+read/write maps. mHC \citep{deepseek2025mhc} constrains $\Hres$ to a norm-controlled
+manifold --- the Birkhoff polytope (doubly stochastic, via Sinkhorn) or the
+orthostochastic set (squared entries of an orthogonal matrix, via Newton--Schulz) ---
+so the deep residual highway stays norm-controlled across depth. Crucially, the
+\emph{carry} $\Hres$ and the \emph{read/write} maps $\Hpre \neq \Hpost$ are
+constrained \emph{separately}.
+
+\paragraph{The time axis: the delta-rule ladder.}
+Linear-attention memories share the recurrence $S_t = (\text{carry})\, S_{t-1} +
+(\text{write})$, with output $o_t = S_t^{\tr} q_t$. Table~\ref{tab:ladder} places the
+main variants on a ladder by their carry operator. Reading down the table, the carry
+grows from the identity to a scalar decay, to a symmetric rank-one \emph{projector}
+(the delta rule), to gated and channel-wise-decayed versions, and finally to GDN-2's
+\emph{non-symmetric} carry.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Model & State update $S_t=\dots$ & Carry on $S_{t-1}$ \\
+\midrule
+Linear attn & $S_{t-1} + k_t v_t^{\tr}$ & $I$ \\
+Mamba-2 & $\alpha_t S_{t-1} + k_t v_t^{\tr}$ & $\alpha_t I$ \\
+DeltaNet & $(I - \beta_t k_t k_t^{\tr})S_{t-1} + \beta_t k_t v_t^{\tr}$ & $I - \beta_t k_t k_t^{\tr}$ (\textbf{sym.}) \\
+Gated DeltaNet & $\alpha_t(I - \beta_t k_t k_t^{\tr})S_{t-1} + \beta_t k_t v_t^{\tr}$ & $\alpha_t(I - \beta_t k_t k_t^{\tr})$ \\
+KDA & $(I - \beta_t k_t k_t^{\tr})D_t S_{t-1} + \beta_t k_t v_t^{\tr}$ & $(I - \beta_t k_t k_t^{\tr})D_t$ \\
+\textbf{GDN-2} & $(I - k_t e_t^{\tr})D_t S_{t-1} + k_t z_t^{\tr}$ & $(I - k_t e_t^{\tr})D_t$ (\textbf{non-sym.}) \\
+\bottomrule
+\end{tabular}
+\caption{The delta-rule ladder. $D_t=\diag(\alpha_t)$; for GDN-2,
+$e_t = b_t \odot k_t$ (channel-wise erase) and $z_t = w_t \odot v_t$
+(channel-wise write). GDN-2 recovers KDA when $b_t = w_t = \beta_t \Onef$, and
+Gated DeltaNet when the decay is also scalar.}
+\label{tab:ladder}
+\end{table}
+
+\subsection{Non-expansive vs.\ expansive carries}
+\label{sec:sigmax}
+
+A linear map $M$ is \emph{non-expansive} if $\|Mx\| \le \|x\|$ for all $x$, i.e.\
+$\smax(M) = \|M\|_2 \le 1$; it is \emph{expansive} if some direction is stretched
+($\smax(M) > 1$). Because the recurrence multiplies the state by $\Tcarry_t$ every
+step, old memory passes through the product $\Tcarry_L \cdots \Tcarry_1$; a
+non-expansive carry lets old memory only stay or shrink (legal forgetting), while an
+expansive carry can let it grow step after step and swamp new writes.
+
+The subtlety is that eigenvalues govern the \emph{asymptotic} fate while singular
+values govern a \emph{single step}. A \emph{non-normal} matrix (non-orthogonal
+eigenvectors) can have all eigenvalues $\le 1$ yet still stretch transiently:
+\begin{equation}
+  k=(\tfrac1{\sqrt2},\tfrac1{\sqrt2}),\ \ b=(1,0)
+  \ \Rightarrow\ e = b\odot k = (\tfrac1{\sqrt2},0),\ \
+  M = I - k e^{\tr} = \begin{bmatrix} 0.5 & 0\\ -0.5 & 1\end{bmatrix},\ \
+  \text{eig}=\{0.5,1\},\ \smax\approx 1.14 .
+  \label{eq:nonnormal-ex}
+\end{equation}
+Symmetric matrices are \emph{normal}, so eigenvalues equal singular values --- for
+DeltaNet/GDN/KDA, ``eigenvalues $\le 1$'' already implies non-expansive. GDN-2's
+decoupling makes the erase non-symmetric and opens the gap.
+
+
+% =============================================================================
+\section{The Non-Expansiveness Gap}
+\label{sec:gap}
+
+\subsection{The core mapping}
+Define the horizontal carry $\Tcarry_t = (I - k_t e_t^{\tr}) D_t$. Then
+$S_t = \Tcarry_t S_{t-1} + k_t z_t^{\tr}$ is structurally identical to the
+hyper-connection update~\eqref{eq:hc}. This gives the correspondence that organizes
+the paper:
+\begin{center}
+\emph{$\Tcarry_t$ is the time-axis analog of $\Hres$; the erase gate $b_t$ and write
+gate $w_t$ are the analog of $\Hpre$ and $\Hpost$.}
+\end{center}
+Stability of the long-context recurrence is governed by the spectral behavior of the
+cumulative product $\Tcarry_t \cdots \Tcarry_1$ --- exactly what mHC controls for
+depth.
+
+\subsection{The impossibility result}
+
+\begin{theorem}[Non-expansiveness boundary]
+\label{thm:boundary}
+Let $k \in \R^{d_k}$ with $\|k\|=1$, let $b \in \R^{d_k}$, and set $e = b \odot k$,
+$M = I - k e^{\tr}$. Write $c = k^{\tr} e = \sum_i b_i k_i^2$ and
+$p = \|e\|^2 = \sum_i b_i^2 k_i^2$. Then
+\begin{equation}
+  \smax(M)^2 = 1 + \lambda_+,
+  \qquad
+  \lambda_+ = \tfrac12\!\left[(p - 2c) + \sqrt{p\,(p + 4 - 4c)}\,\right] \ge 0 .
+  \label{eq:boundary}
+\end{equation}
+Consequently $\smax(M) \ge 1$ for all $b$, with equality if and only if $p = c^2$,
+if and only if $e \parallel k$, if and only if $b$ is a per-head scalar
+(the KDA/Gated-DeltaNet case).
+\end{theorem}
+
+\begin{proof}[Proof sketch (full proof in Appendix~\ref{app:proof})]
+Since $\|k\|^2 = 1$, $M^{\tr}M = I + N$ with $N = -k e^{\tr} - e k^{\tr} + e e^{\tr}$,
+whose range lies in $\mathrm{span}\{k,e\}$, so $M^{\tr}M$ has eigenvalue $1$ off this
+subspace. Decompose $e = c\,k + f$ with $f \perp k$ and $\|f\|^2 = p - c^2 =: q \ge
+0$ (Cauchy--Schwarz with weights $k_i^2$). In the orthonormal basis $\{k, f/\|f\|\}$,
+the restriction of $N$ has trace $p - 2c$ and determinant $-q \le 0$, giving
+eigenvalues $\lambda_\pm = \tfrac12[(p-2c) \pm \sqrt{(p-2c)^2 + 4q}]$ and
+$(p-2c)^2 + 4q = p(p+4-4c)$. The non-positive determinant forces
+$\lambda_+ \ge 0 \ge \lambda_-$, so $\smax(M)^2 = 1 + \lambda_+ \ge 1$, with equality
+iff $q = 0$, i.e.\ $e \parallel k$.
+\end{proof}
+
+\begin{corollary}[Who is safe]
+\label{cor:safe}
+DeltaNet, Gated DeltaNet, and KDA are step-wise non-expansive: their erase factor
+$I - \beta k k^{\tr}$ ($\|k\|=1$, $\beta\in[0,2]$) is symmetric with eigenvalues
+$\{1^{(d_k-1)}, 1-\beta\}$, so $\smax = 1$; KDA remains safe under $D_t$ as a product
+of two individually non-expansive factors. GDN-2's carry, by
+Theorem~\ref{thm:boundary}, has $\smax > 1$ whenever $b$ is genuinely channel-wise.
+\end{corollary}
+
+\paragraph{Why this matters where GDN-2 wins.} The decay $D_t$ can mask the extra
+gain only when $\alpha$ is small; but the long-memory regime $\alpha \to 1$ --- where
+GDN-2 reports its long-context RULER / MK-NIAH gains --- is exactly where masking
+vanishes. GDN-2's core innovation (channel-wise $b \Rightarrow e \not\parallel k$)
+\emph{necessarily} sacrifices step-wise non-expansiveness, and the model never
+constrains it.
+
+\subsection{Eq.~5 as the on-manifold anchor}
+The plain delta rule's carry $I - \beta k k^{\tr}$ traces a one-parameter path from
+the identity ($\beta=0$) through the orthogonal projector ($\beta=1$) to a
+Householder reflection ($\beta=2$) --- sitting inside the norm-controlled orthogonal
+family that mHC's orthostochastic/Newton--Schulz variant is built around. It is also
+a stable optimizer step: the delta rule is one gradient step on
+$\tfrac12\|S^{\tr}k - v\|^2$ (Hessian $k k^{\tr}$), so the carry is
+$I - \beta\cdot\text{Hessian}$, stable for $\beta \le 2/\lambda_{\max} = 2$ --- the
+same window. GDN-2 stepped off this manifold to gain expressiveness; the rest of the
+paper puts each residual carry back on the manifold correct for its axis
+(Table~\ref{tab:halves}).
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lcc@{}}
+\toprule
+ & Constrained carry ($\Hres$-like) & Separated read/write ($\Hpre \neq \Hpost$)\\
+\midrule
+DeltaNet/KDA & \checkmark\ non-expansive & $\times$\ tied to $k$\\
+GDN-2        & $\times$\ $\smax > 1$      & \checkmark\ decoupled\\
+\textbf{mHC / HyperDeltaNet} & \checkmark & \checkmark\\
+\bottomrule
+\end{tabular}
+\caption{Each prior model holds half of mHC's discipline. HyperDeltaNet restores
+both on the time axis.}
+\label{tab:halves}
+\end{table}
+
+
+% =============================================================================
+\section{Direction A: Constraining the Single Carry}
+\label{sec:dirA}
+
+\paragraph{The dichotomy.} Theorem~\ref{thm:boundary} says a rank-one erase is
+non-expansive \emph{iff} $e \parallel k$: one cannot have \emph{decoupled} \textbf{and}
+\emph{rank-one} \textbf{and} \emph{non-expansive} at once. Relaxing exactly one of
+the latter two yields the two families below. Which manifold is correct depends on
+the axis (Table~\ref{tab:manifolds}).
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+Axis & Operator & Correct manifold & Why \\
+\midrule
+Within a state (time) & transition $\Tcarry_t$ & non-expansive / orthogonal &
+forgetting must stay legal (contraction ok, not mass-preserving) \\
+Across states (streams) & mixing $H$ & doubly-stochastic / orthostochastic &
+forgetting handled per-stream; mixing should preserve mass \\
+\bottomrule
+\end{tabular}
+\caption{The right mHC manifold on each axis. Birkhoff (doubly stochastic) is
+\emph{wrong inside} one state (it forbids forgetting) but \emph{right across}
+states --- making A and B complementary, not redundant.}
+\label{tab:manifolds}
+\end{table}
+
+\subsection{A0 --- non-expansive projection (drop-in)}
+Per token, compute the two scalars $c = k_t^{\tr} e_t$ and $p = \|e_t\|^2$ ($O(d_k)$),
+form $\smax(M_t)$ in closed form via~\eqref{eq:boundary}, and rescale:
+\begin{equation}
+  \widetilde{\Tcarry}_t = \frac{M_t D_t}{\max\!\big(1,\, \smax(M_t)\big)},
+  \qquad M_t = I - k_t e_t^{\tr}.
+  \label{eq:a0}
+\end{equation}
+This guarantees $\|\widetilde{\Tcarry}_t\| \le 1$ every step, kills the non-normal
+blow-up, and keeps the erase/write decoupling. The cost is two dot products and a
+scalar divide, folded into the decay --- nothing else about GDN-2 changes. It is the
+faithful analog of Sinkhorn-projecting $\Hres$, adapted to the rank-one$+$diagonal
+structure and to the \emph{non-expansive} set. Variants: \textbf{A0-whole} (divide the
+whole transition, adding adaptive decay), \textbf{A0-corr} (damp only the correction
+$k e^{\tr}$, softer), \textbf{A0-soft} (a smooth auxiliary penalty
+$\lambda\,\mathrm{relu}(\smax-1)^2$ with no forward change), and \textbf{A0-cap-b}
+(rescale $b_t$ toward the aligned direction just enough to hit $\smax \le 1+\eps$).
+
+\subsection{A1 --- orthogonal by construction}
+Factor the transition into \emph{reorganize} then \emph{forget}:
+\begin{equation}
+  S_t = D_t\, R_t\, S_{t-1} + k_t z_t^{\tr}, \qquad R_t \text{ orthogonal}.
+  \label{eq:a1}
+\end{equation}
+The single Householder $R_t = I - 2 k_t k_t^{\tr}$ is exactly the delta rule at
+$\beta=2$. A \emph{product} of $p$ Householders
+$R_t = \prod_{j \le p}(I - 2 u_t^{(j)} u_t^{(j)\tr})$ gives a richer orthogonal
+transform, and the WY/UT-transform kernel machinery already represents products of
+rank-one reflectors, so it stays chunkable and linear-time ($p = 2\text{--}4$).
+Data-dependent \textbf{Givens} / block-diagonal $2\times2$ rotations are a cheaper
+$O(d_k)$ alternative and a bridge to Mamba-3's complex rotations. Here $D_t$ is the
+\emph{only} contraction: reorganization is norm-preserving, forgetting explicit and
+separate.
+
+\subsection{A2 --- hybrid}
+A0-capped small erase (associative overwrite) $+$ A1 orthogonal reorganization keeps
+the delta rule's ``remove old value at $k$ before writing'' while adding
+norm-preserving structure. \emph{Honest tension:} replacing erase-by-subtraction with
+rotation (A1) weakens associative overwrite; A2 mitigates, and A0 is the safe first
+experiment.
+
+
+% =============================================================================
+\section{Direction B: Multi-Stream Hyper-Memory}
+\label{sec:dirB}
+
+We replace the single state $S$ with $n$ streams $S^{(1)},\dots,S^{(n)}$ in a shared
+$d_k\times d_v$ space that exchange information via a doubly-stochastic mixing ---
+hyper-connected memory lanes. Per step, each stream runs its own
+(A-constrained) update, then streams mix:
+\begin{align}
+  \widetilde{S}_t^{(i)} &= \Tcarry_t^{(i)} S_{t-1}^{(i)} + k_t^{(i)} z_t^{(i)\tr},
+  \label{eq:b-stream}\\
+  S_t^{(i)} &= \textstyle\sum_j H[i,j]\, \widetilde{S}_t^{(j)},
+  \qquad H \text{ doubly stochastic}.
+  \label{eq:b-mix}
+\end{align}
+$H \in \R^{n\times n}$ is produced by Sinkhorn (Birkhoff) or Newton--Schulz
+(orthostochastic).
+
+\paragraph{Efficiency: mix at chunk boundaries.} Applying $H$ per token to full
+states would break the chunkwise WY structure. Instead we mix only at chunk
+boundaries: within a chunk the $n$ streams evolve independently in parallel (the
+existing per-head kernel is untouched), and at each boundary the $n$ carried states
+are mixed,
+$S_{[c+1]}^{(i)} = \sum_j H[i,j]\,(\text{chunk-update of stream }j\text{ from }
+S_{[c]}^{(j)})$. Boundaries number $O(L/C)$, so the $n\times n$ mix is negligible and
+linear time is preserved.
+
+\paragraph{Why doubly-stochastic here.} Forgetting is handled \emph{inside} each
+stream's $\Tcarry_t$; cross-stream mixing should only route information without
+amplifying any stream or letting one dominate --- i.e.\ mass-preserving, doubly
+stochastic. By Birkhoff--von Neumann, $H = \sum_p \lambda_p P_p$ is a convex
+combination of permutations, so $\|H\|_2 \le 1$. This is mHC's original justification,
+now placed on the memory axis.
+
+\paragraph{What differs across streams.} To make mixing meaningful, streams must
+differ. Our primary instantiation is \textbf{B-timescale}: shared projections but
+different decay ranges per stream (fast $\to$ slow), so mixing lets fast and slow
+memory trade content each chunk --- a multi-timescale associative memory aimed
+directly at long context. Alternatives: \textbf{B-heads} (per-stream Q/K/V/gate
+projections, needing a shared readout space) and \textbf{B-budget} (per-stream
+Householder budget $p$).
+
+\paragraph{Static vs.\ dynamic $H$, readout, cost.} We start with a static per-layer
+$H$ (cheapest, most stable), initialized near identity via
+$H = (1-\alpha)I + \alpha\,\mathrm{Sinkhorn}(\text{logits})$; a data-dependent $H_t$
+re-projected each chunk is an optional extension. Readout sums (or concatenates) the
+per-stream outputs $o_t = \sum_i (S_t^{(i)})^{\tr} q_t^{(i)}$. Cost is $n\times$ state
+memory (small $n\!=\!2\text{--}4$), $n^2$ logits per layer, a cheap Sinkhorn, and a
+negligible boundary mix. Relative to prior art --- multi-head linear attention (no
+state mixing), Mamba-3 MIMO (multi-rank, not doubly-stochastic cross-state mixing),
+and hyper-connections (depth) --- B is hyper-connections along the \emph{memory} axis
+of linear attention.
+
+
+% =============================================================================
+\section{Composition: Provably Non-Expansive Memory}
+\label{sec:compose}
+
+The two directions compose. If each per-stream carry $\Tcarry_t^{(i)}$ is
+non-expansive (Direction A) and $H$ is doubly stochastic
+($\|H\|_2 \le 1$, Direction B), the whole multi-stream memory operator is
+non-expansive, giving stable long-context memory \emph{by construction} while
+retaining GDN-2's decoupled expressiveness inside each stream:
+\begin{align}
+  \text{per stream:}\quad & \widetilde{S}^{(i)}
+    = D^{(i)} R^{(i)} S^{(i)}_{\text{prev}} + k z^{(i)\tr}
+    && \text{(A: non-expansive / orthogonal)}\\
+  \text{cross stream:}\quad & S^{(i)}
+    = \textstyle\sum_j H[i,j]\, \widetilde{S}^{(j)}
+    && \text{(B: mass-preserving mix)} .
+\end{align}
+\begin{proposition}[Non-expansive multi-stream memory]
+\label{prop:compose}
+Stack the streams as $\mathbf S = (S^{(1)},\dots,S^{(n)})$ and equip the product space
+with the norm $\|\mathbf S\|^2 = \sum_i \|S^{(i)}\|_F^2$. Suppose every per-stream carry
+is non-expansive, $\smax(\Tcarry^{(i)}) \le 1$, and $H$ is doubly stochastic. Then the
+homogeneous one-step propagation
+$\mathbf S \mapsto \mathcal{M}\,\mathbf S$, where
+$(\mathcal M \mathbf S)^{(i)} = \sum_j H[i,j]\,\Tcarry^{(j)} S^{(j)}$, is non-expansive:
+$\|\mathcal M \mathbf S\| \le \|\mathbf S\|$.
+\end{proposition}
+\begin{proof}
+Write $\mathcal M = \mathcal H \circ \mathcal T$, where
+$\mathcal T = \mathrm{blockdiag}(\Tcarry^{(1)},\dots,\Tcarry^{(n)})$ applies each carry
+within its stream and $\mathcal H$ applies the mixing $H$ across streams. For $\mathcal T$,
+$\|\mathcal T\mathbf S\|^2 = \sum_i \|\Tcarry^{(i)} S^{(i)}\|_F^2
+\le \sum_i \smax(\Tcarry^{(i)})^2 \|S^{(i)}\|_F^2 \le \sum_i \|S^{(i)}\|_F^2 = \|\mathbf S\|^2$,
+so $\mathcal T$ is non-expansive. Viewing each $S^{(i)}$ as a vector in $\R^{d_k d_v}$,
+$\mathcal H$ is the linear map $H \otimes I_{d_k d_v}$ on $\R^{\,n\, d_k d_v}$, whose
+spectral norm is $\|H\otimes I\|_2 = \|H\|_2\,\|I\|_2 = \|H\|_2$. By
+Birkhoff--von Neumann, a doubly-stochastic $H$ is a convex combination of permutation
+matrices, so $\|H\|_2 \le 1$ and $\mathcal H$ is non-expansive. A composition of
+non-expansive maps is non-expansive, hence
+$\|\mathcal M\mathbf S\| \le \|\mathcal T\mathbf S\| \le \|\mathbf S\|$.
+\end{proof}
+Consequently old memory can only stay or shrink as it is carried and re-mixed across
+chunks, no matter how many streams or how long the context --- stability by
+construction, with GDN-2's decoupled expressiveness preserved inside each stream.
+
+
+% =============================================================================
+\section{Experimental Program}
+\label{sec:exp}
+
+We deliberately validate the premise \emph{before} kernel work.
+
+\paragraph{1. Confirm the premise.} In a small trained GDN-2 (recurrent-only,
+$\alpha\to1$ regime), instrument the distribution of $\smax(\Tcarry_t)$ and the
+growth of $\|S_t\|$ and $\mathrm{cond}(S_t)$ against sequence position. \emph{Premise
+risk:} decay and step-to-step decorrelation of $k_t$ may absorb the per-step
+$\smax\approx1.1$; if so, the fix is unnecessary and the paper must say so. This
+measurement is the gate for everything downstream.
+
+\paragraph{2. Reference implementation first.} Implement A0/A1/B in a plain
+(non-Triton) recurrence for correctness and small-scale signal before touching
+kernels.
+
+\paragraph{3. Ablation matrix.} Baseline GDN-2 vs.\ $+$A0 vs.\ $+$A1 vs.\ $+$A2 vs.\
+$+$B vs.\ $+$A$+$B, evaluated on WikiText/LAMBADA perplexity, \textbf{MK-NIAH}
+(GDN-2's headline multi-key retrieval), and state-norm stability. Hypotheses: A
+reduces state-norm blow-up without hurting perplexity; B helps multi-key retrieval by
+giving competing associations separate lanes.
+
+\paragraph{4. Testbed.} This repository is the home for the clean reference and toy
+validation; scaled experiments target a GDN / linear-attention training branch, since
+softmax-attention GPT testbeds do not exercise the recurrent memory.
+
+
+% =============================================================================
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Hyper-connections and manifold constraints.} Hyper-connections
+\citep{zhu2024hyperconnections} and Frac-connections \citep{zhu2025fracconnections}
+generalize residual streams;
+mHC \citep{deepseek2025mhc} constrains the residual carry to the Birkhoff or
+orthostochastic manifold. We transfer this principle from the depth axis to the time
+axis of linear-attention memory.
+
+\paragraph{Delta-rule linear attention.} DeltaNet \citep{schlag2021linear} and its
+chunkwise parallelization \citep{yang2024parallelizing}, Gated DeltaNet
+\citep{yang2024gdn}, KDA, and GDN-2 \citep{hatamizadeh2026gdn2} form the ladder of
+Table~\ref{tab:ladder}. Our theorem characterizes precisely where step-wise
+non-expansiveness is lost along this ladder.
+
+\paragraph{Spectra and state-tracking.} Negative-eigenvalue delta rules unlock
+state-tracking in linear RNNs \citep{grazzi2025statetracking}; we note $b\in[0,2]$
+interacts with A0's damping and flag it for measurement. Mamba-3's data-dependent
+complex rotations and MIMO states are related to A1 and B respectively.
+
+
+% =============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+We showed that GDN-2's erase/write decoupling necessarily makes its per-step memory
+carry non-normal and expansive, gave a tight closed form for the spectral norm, and
+recast the memory recurrence as the time-axis analog of hyper-connections. This yields
+HyperDeltaNet: a damp-or-enrich dichotomy that returns the single carry to the
+non-expansive manifold, a multi-stream doubly-stochastic generalization, and a
+composition that is non-expansive by construction. Whether the predicted instability
+is consequential at scale is an empirical question we have framed precisely; answering
+it is the immediate next step.
+
+\appendix
+\section{Proof of Theorem~\ref{thm:boundary}}
+\label{app:proof}
+
+Recall $\|k\|=1$, $e = b\odot k$, $M = I - k e^{\tr}$, and set $c = k^{\tr}e$,
+$p = \|e\|^2$. We compute the eigenvalues of $M^{\tr}M$.
+
+\paragraph{Step 1: a rank-two perturbation of the identity.}
+Since $\|k\|^2 = 1$,
+\begin{equation*}
+  M^{\tr}M = (I - e k^{\tr})(I - k e^{\tr})
+           = I - e k^{\tr} - k e^{\tr} + e\,(k^{\tr}k)\,e^{\tr}
+           = I + N,
+  \qquad
+  N := -k e^{\tr} - e k^{\tr} + e e^{\tr}.
+\end{equation*}
+Every column of $N$ lies in $\mathrm{span}\{k,e\}$, so $N$ vanishes on the orthogonal
+complement of this (at most) two-dimensional subspace. Hence $M^{\tr}M$ has eigenvalue
+$1$ with multiplicity at least $d_k - 2$, and its remaining spectrum is that of $N$
+restricted to $\mathrm{span}\{k,e\}$.
+
+\paragraph{Step 2: an orthonormal basis of $\mathrm{span}\{k,e\}$.}
+Decompose $e = c\,k + f$ with $f \perp k$. Then
+$q := \|f\|^2 = \|e\|^2 - c^2 = p - c^2 \ge 0$, the inequality being Cauchy--Schwarz
+$c^2 = (k^{\tr}e)^2 \le \|k\|^2\|e\|^2 = p$. If $q = 0$ then $e \parallel k$ and $N$ has
+rank one (treated below); otherwise take the orthonormal basis $\{k,\ \hat f\}$ with
+$\hat f = f/\sqrt{q}$, so $e = c\,k + \sqrt{q}\,\hat f$.
+
+\paragraph{Step 3: the $2\times2$ block.}
+Using $k^{\tr}e = c$, $\hat f^{\tr}e = \sqrt q$, and $k^{\tr}\hat f = 0$,
+\begin{align*}
+  N k       &= -c\,k - e + c\,e = (c^2 - 2c)\,k + \sqrt q\,(c-1)\,\hat f, \\
+  N \hat f  &= -\sqrt q\,k + \sqrt q\,e = \sqrt q\,(c-1)\,k + q\,\hat f,
+\end{align*}
+so in the basis $\{k,\hat f\}$ the restriction of $N$ is the symmetric block
+\begin{equation*}
+  B = \begin{bmatrix} c^2 - 2c & \sqrt q\,(c-1)\\[2pt] \sqrt q\,(c-1) & q \end{bmatrix},
+  \qquad
+  \tr B = (c^2 - 2c) + q = p - 2c,
+  \qquad
+  \det B = (c^2-2c)q - q(c-1)^2 = -q .
+\end{equation*}
+
+\paragraph{Step 4: eigenvalues.}
+The eigenvalues of $B$ are
+$\lambda_\pm = \tfrac12\big[\tr B \pm \sqrt{(\tr B)^2 - 4\det B}\,\big]$, and
+\begin{equation*}
+  (\tr B)^2 - 4\det B = (p-2c)^2 + 4q = p^2 - 4pc + 4c^2 + 4(p - c^2) = p\,(p + 4 - 4c),
+\end{equation*}
+giving $\lambda_\pm = \tfrac12\big[(p-2c) \pm \sqrt{p\,(p+4-4c)}\,\big]$. Because
+$\det B = -q \le 0$, the two eigenvalues have opposite signs (or one is zero):
+$\lambda_+ \ge 0 \ge \lambda_-$. The largest eigenvalue of $M^{\tr}M = I + N$ is
+therefore $1 + \lambda_+$, i.e.
+\begin{equation*}
+  \smax(M)^2 = 1 + \lambda_+ = 1 + \tfrac12\big[(p-2c) + \sqrt{p\,(p+4-4c)}\,\big] \ge 1 .
+\end{equation*}
+Equality holds iff $\lambda_+ = 0$ iff $q = 0$ iff $f = 0$ iff $e \parallel k$; since
+$e = b\odot k$, this is iff $b$ is a per-head scalar (the KDA/Gated-DeltaNet case). When
+$q = 0$ the block $B$ collapses to $[\,c^2 - 2c\,]$ with $c^2 = p$, whose single
+eigenvalue $c^2 - 2c = p - 2c \le 0$ leaves $\smax(M) = 1$, consistent with the limit.
+\qed
+
+\paragraph{Worked example.}
+For $k = (\tfrac1{\sqrt2},\tfrac1{\sqrt2})$ and $b = (1,0)$, we have
+$e = (\tfrac1{\sqrt2}, 0)$, hence $c = \tfrac12$, $p = \tfrac12$, $q = p - c^2 = \tfrac14$.
+Then $\lambda_+ = \tfrac12\big[(\tfrac12 - 1) + \sqrt{\tfrac12(\tfrac12 + 4 - 2)}\big]
+= \tfrac12\big[-\tfrac12 + \sqrt{1.25}\big] \approx 0.309$, so
+$\smax(M) = \sqrt{1.309} \approx 1.144$, matching~\eqref{eq:nonnormal-ex}.
+
+\bibliography{main}
+\bibliographystyle{plainnat}
+
+
+\end{document}
