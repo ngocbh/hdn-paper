@@ -469,6 +469,7 @@ numerical precision (plus six CPU and one CUDA unit tests). Toys wrap the
 recurrence in a tiny embed $\to$ project $\to$ recurrence $\to$ readout module so
 that only the memory recurrence is under test; $n=1$ and $n=4$ share the same
 weight-init seed, so any difference is due to stream count, not initialization.
+Full task construction and hyperparameters are in Appendix~\ref{app:mqar}.
 
 \paragraph{(i) Graceful reduction (single-timescale MQAR).} On content-based
 associative recall where every binding is recalled at a comparable lag, one slow
@@ -587,6 +588,52 @@ $\gamma_i$ are equal; hence $v \not\propto \Onef$. Finally, the stream impulse
 responses are rows of $M^\tau$; since $M$ has distinct eigenvalues (generic under
 distinct $\gamma_i$), the family $\{M^\tau\}_\tau$ spans a space of dimension $n$,
 so the rows $[M^\tau]_{i,\cdot}\,q$ are linearly independent across $i$. \qed
+
+% -----------------------------------------------------------------------------
+\section{Experimental details}
+\label{app:mqar}
+
+Both experiments are multi-query associative recall (MQAR): content-based
+retrieval where a set of $(\text{key},\text{value})$ bindings is written into the
+memory, separated from the queries by an interference gap, and the model must
+emit the bound value when a key is later re-presented as a query. All sequences
+are generated \emph{online} (fresh random draws every step) and evaluated on a
+held-out generator seed, so accuracy reflects the learned recall algorithm, not
+memorization. Keys, values, and a single filler symbol share one vocabulary of
+size $n_k + n_v + 1$: keys are ids $0,\dots,n_k-1$ and values ids
+$n_k,\dots,n_k+n_v-1$. Loss and accuracy are computed only at query positions
+(all other targets masked).
+
+\paragraph{Model.} Each toy wraps the memory recurrence in an
+embed $\to$ (per-head $q,k,v,g,b,w$ projections) $\to$ recurrence $\to$ linear
+readout module, with $2$ heads, head dimension $16$, and model width $64$. The
+gates follow GDN-2: log-decay $g = -\mathrm{softplus}(\cdot)$, erase
+$b = 2\,\sigma(\cdot)$, write $w = \sigma(\cdot)$. Only the memory recurrence
+differs between conditions; $n{=}1$ and $n{=}4$ share the same weight-init seed,
+so any gap is attributable to stream count rather than initialization. We train
+with AdamW at learning rate $3\times10^{-3}$, batch size $32$.
+
+\paragraph{Single-timescale MQAR (graceful reduction).} A sequence is
+$n_p$ bindings $[k_1 v_1 \cdots k_{n_p} v_{n_p}]$, then a gap of random
+value-space tokens (genuine interference --- every gap token still writes to
+memory), then the $n_p$ keys re-presented in random order as queries; the target
+at each query is the bound value. Every binding is thus recalled at a comparable
+lag, so a single slow decay suffices and extra streams are pure overhead. We use
+$n_k = n_v = 16$, $n_p = 6$, gap $=16$ (sequence length $34$), $2000$ steps. The
+$H$-off ablations set the chunk size above the sequence length (no cross-stream
+mixing); the ``primary init'' control sets $p = (1,0,0,0)$ with primary
+$\gamma = 1$ so the model \emph{starts} exactly at the GDN-2 point, isolating
+whether any regression comes from initialization or from the forward map.
+
+\paragraph{Bimodal-lag MQAR (multi-timescale advantage).} A sequence places
+$n_{\text{slow}}$ bindings at the very start, then a long interference gap, then
+$n_{\text{fast}}$ bindings just before the queries; slow and fast key sets are
+disjoint, and the queries interleave both classes in random order. Slow keys are
+therefore recalled across the gap (long lag) and fast keys immediately (short
+lag), and accuracy is scored \emph{separately} per class. A single decay must
+compromise between the two, whereas a fast$+$slow spread can serve both. We use
+$n_k = 24$, $n_v = 16$, $n_{\text{slow}} = n_{\text{fast}} = 4$, gap $=48$
+(sequence length $68$), $4000$ steps, and report the mean over three seeds.
 
 
 \bibliography{main}
