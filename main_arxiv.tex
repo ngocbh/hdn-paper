@@ -635,6 +635,38 @@ compromise between the two, whereas a fast$+$slow spread can serve both. We use
 $n_k = 24$, $n_v = 16$, $n_{\text{slow}} = n_{\text{fast}} = 4$, gap $=48$
 (sequence length $68$), $4000$ steps, and report the mean over three seeds.
 
+\paragraph{Worked examples.} To make the layouts concrete, we show two small
+illustrative sequences (smaller $n_p$ and gap than the runs above). Keys are
+written \texttt{k*}, values \texttt{v*}; a query position emits the value bound to
+that key, and \texttt{.} marks a masked (non-query) position that contributes no
+loss. Single-timescale MQAR ($n_p{=}3$, gap${=}6$): the three bindings
+$\texttt{k5}{\to}\texttt{v2}$, $\texttt{k1}{\to}\texttt{v15}$,
+$\texttt{k14}{\to}\texttt{v12}$ are written first, then six value-space
+interference tokens, then the keys re-presented in random order as queries.
+\begin{center}\small\ttfamily\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}l *{15}{c}@{}}
+pos   & 0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 & 11 & 12 & 13 & 14\\
+token & k5 & v2 & k1 & v15 & k14 & v12 & v1 & v3 & v10 & v5 & v8 & v14 & k5 & k14 & k1\\
+tgt   & . & . & . & . & . & . & . & . & . & . & . & . & v2 & v12 & v15\\
+\end{tabular}
+\end{center}
+Bimodal-lag MQAR ($n_{\text{slow}}{=}n_{\text{fast}}{=}2$, gap${=}6$): the slow
+bindings ($\texttt{k13}{\to}\texttt{v4}$, $\texttt{k2}{\to}\texttt{v11}$) are
+written at the very start, then an interference gap, then the fast bindings
+($\texttt{k18}{\to}\texttt{v12}$, $\texttt{k20}{\to}\texttt{v10}$) just before the
+queries; the query block interleaves both classes. Slow keys are thus recalled
+across the gap (long lag), fast keys immediately (short lag).
+\begin{center}\footnotesize\ttfamily\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}l *{18}{c}@{}}
+pos   & 0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 & 11 & 12 & 13 & 14 & 15 & 16 & 17\\
+token & k13 & v4 & k2 & v11 & v12 & v13 & v14 & v2 & v4 & v7 & k18 & v12 & k20 & v10 & k20 & k18 & k13 & k2\\
+tgt   & . & . & . & . & . & . & . & . & . & . & . & . & . & . & v10 & v12 & v4 & v11\\
+kind  & . & . & . & . & . & . & . & . & . & . & . & . & . & . & F & F & S & S\\
+\end{tabular}
+\end{center}
+(\texttt{kind}: \texttt{S}~=~slow query, \texttt{F}~=~fast query, scored
+separately.)
+
 
 \bibliography{main}
 \bibliographystyle{plainnat}
