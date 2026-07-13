@@ -216,11 +216,21 @@ DeltaNet & $(I - \beta_t k_t k_t^{\tr})S_{t-1} + \beta_t k_t v_t^{\tr}$ & $I - \
 Gated DeltaNet & $\alpha_t(I - \beta_t k_t k_t^{\tr})S_{t-1} + \beta_t k_t v_t^{\tr}$ & $\alpha_t(I - \beta_t k_t k_t^{\tr})$ \\
 KDA & $(I - \beta_t k_t k_t^{\tr})D_t S_{t-1} + \beta_t k_t v_t^{\tr}$ & $(I - \beta_t k_t k_t^{\tr})D_t$ \\
 \textbf{GDN-2} & $(I - k_t e_t^{\tr})D_t S_{t-1} + k_t z_t^{\tr}$ & $(I - k_t e_t^{\tr})D_t$ (\textbf{non-sym.}) \\
+\midrule
+\textbf{HyperDeltaNet} & $S_t^{(i)} = \gamma_i D_t\, S_{t-1}^{(i)} + q_i\, G_t$ & $H\,\diag(\gamma_i D_t)$ (\textbf{multi-state}) \\
 \bottomrule
 \end{tabular}
 \caption{The delta-rule ladder. $D_t=\diag(\alpha_t)$; for GDN-2, $e_t = b_t \odot k_t$
 (channel-wise erase) and $z_t = w_t \odot v_t$ (channel-wise write). GDN-2 recovers KDA
-when $b_t = w_t = \beta_t \Onef$, and Gated DeltaNet when the decay is also scalar.}
+when $b_t = w_t = \beta_t \Onef$, and Gated DeltaNet when the decay is also scalar.
+\textbf{HyperDeltaNet} (this paper) lifts GDN-2 to $n$ streams $S^{(i)}$ that share
+\emph{one} delta block $G_t = k_t\big(z_t - \bar S_{t-1}^{\tr} D_t e_t\big)^{\tr}$
+through the read $\bar S_{t-1} = \sum_i p_i S_{t-1}^{(i)}$, differ by scalar decay
+$\gamma_i$ and read/write profiles $p_i,q_i$, and are mixed by a doubly-stochastic $H$ (as
+$\Sbb \leftarrow (H\otimes I)\,\Sbb$) at chunk boundaries; the erase enters through
+$\bar S_{t-1}$ (residual-block form), so the per-step carry is the decay
+$H\diag(\gamma_i D_t)$. Setting $n{=}1$, $p{=}\gamma{=}1$, $H{=}1$ recovers GDN-2
+exactly.}
 \label{tab:ladder}
 \end{table}
 
@@ -313,7 +323,10 @@ permutations), so the mix is \emph{mass-preserving} --- it routes and shares
 memory across streams without amplifying any of them or letting one dominate.
 Forgetting stays the exclusive job of the per-stream decays $D^{(i)}$; the mix
 only moves content sideways. This is exactly mHC's original justification for a
-doubly-stochastic $\Hres$, now placed on the correct axis.
+doubly-stochastic $\Hres$, now placed on the correct axis. Written as one per-step
+carry, $A$ reads as though both factors act every step; in the efficient
+realization the per-stream decay acts every token while $H$ is applied only at
+chunk boundaries (\S\ref{sec:design}), which is what keeps the streams chunkable.
 
 
 % =============================================================================
@@ -410,18 +423,37 @@ can always fall back to a single effective store when that is all a task require
 (A normalized $\sum_i p_i S_i / \sum_i p_i$ variant reintroduces the wake-up
 gradient through the denominator and is rejected.)
 
-\subsection{Efficiency and readout}
-Applying $H$ per token to full states would break the chunkwise WY structure of
-delta-rule kernels. Instead we mix only at chunk boundaries: within a chunk the $n$
-streams evolve independently in parallel (the existing per-head kernel is
-untouched), and at each boundary the $n$ carried states are mixed by $H$.
-Boundaries number $O(L/C)$, so the $n\times n$ mix is negligible and linear time is
-preserved. Cost is $n\times$ state memory (small $n = 2\text{--}4$), $n^2$ logits
-per layer, and a cheap Sinkhorn. A static per-layer $H$ is the cheapest and most
-stable default; a data-dependent $H_t$ re-projected each chunk (mean-pool the chunk
-hidden states $\to$ MLP $\to$ $n{\times}n$ logits $\to$ log-domain Sinkhorn $\to$
-near-identity blend $H=(1-\alpha)I+\alpha\,\mathrm{DS}$) is implemented and used
-below.
+\subsection{Efficiency}
+The carry $A = H\cdot\diag(D^{(i)})$ of~\eqref{eq:carry-factor} reads as a single
+per-step operator, but its two factors act at \emph{different frequencies}:
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,topsep=2pt]
+  \item \textbf{every token:} $\;S_t^{(i)} = \gamma_i D_t\, S_{t-1}^{(i)} + q_i\, G_t\;$
+  --- the per-stream decay carry, with the \emph{single} shared delta block
+  $G_t = k_t\big(z_t - \bar S_{t-1}^{\tr} D_t e_t\big)^{\tr}$ (one delta, not $n$;
+  the streams interact only through the shared read $\bar S_{t-1}$);
+  \item \textbf{every $C$ tokens:} $\;\Sbb \leftarrow (H \otimes I)\,\Sbb\;$
+  --- the cross-stream mix at chunk boundaries.
+\end{itemize}
+The per-token step is a cheap linear recurrence (scalar $\gamma_i$, channel-diagonal
+$D_t$ on each state); the $n\times n$ mix fires only $O(L/C)$ times.
+
+Deferring $H$ to boundaries is deliberate. Applying it every token would couple the
+$n$ carries through a dense $n\times n$ map at every step, destroying the
+per-stream linear-recurrence structure that lets the states be carried cheaply and
+chunked like linear attention; boundary-only mixing keeps that structure intact,
+makes a near-identity $H$ meaningful (a little routing every $C$ tokens rather than
+an imperceptible amount every step), and is a mild approximation of the strict
+per-step form. Boundaries number $O(L/C)$, so the $n\times n$ mix is negligible and
+linear time is preserved. Cost over stock GDN-2 is $n\times$ state memory (small
+$n = 2\text{--}4$), $n^2$ logits per layer, and a cheap Sinkhorn. A static
+per-layer $H$ is the cheapest and most stable default; a data-dependent $H_t$
+re-projected each chunk (mean-pool the chunk hidden states $\to$ MLP $\to$
+$n{\times}n$ logits $\to$ log-domain Sinkhorn $\to$ near-identity blend
+$H=(1-\alpha)I+\alpha\,\mathrm{DS}$) is implemented and used below. The reference
+implementation realizes this as an $O(T)$ token loop (\S\ref{sec:exp}); a chunkwise
+kernel that computes the shared delta once per chunk and folds the $n$ linear
+carries into the chunk math is the natural efficient form, and is left to future
+work.
 
 
 % =============================================================================
