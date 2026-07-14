@@ -451,6 +451,48 @@ kernel that computes the shared delta once per chunk and folds the $n$ linear
 carries into the chunk math is the natural efficient form, and is left to future
 work.
 
+\paragraph{FLOP cost.} The chunkwise form makes the multi-stream overhead
+explicit. Per layer, a forward pass of the sequence-mixing core costs
+(summed over the $B$ batch elements, $H$ heads, and $L/C$ chunks)
+\begin{equation}
+  \mathrm{FLOPs}_{\text{core}} \;\approx\; B\,H\,\tfrac{L}{C}\Big(
+    \underbrace{10\,C^2 d}_{\text{shared delta block}} \;+\;
+    \underbrace{8\,n\,C\,d^2}_{\text{per-stream carry}} \Big),
+  \label{eq:flops}
+\end{equation}
+with $d$ the head dimension. Only the per-stream carry scales with $n$; the shared
+intra-chunk block --- the $q\hat k^{\tr}$ scores, the $(I{+}M)^{-1}$ transform, and
+the value read --- is computed \emph{once} regardless of $n$, and the boundary
+$H$-mix adds a negligible $O\!\big(B\,(L/C)\,n^2 d\big)$. Setting $n{=}1$ reproduces
+the GDN-2 count exactly. Because the shared block and the token/channel projections
+dominate the layer, total model FLOPs grow only ${\approx}\,7\%$ per added stream
+(Table~\ref{tab:flops}): widening to several timescales is nearly free in
+arithmetic, and the true price is the $n\times$ state \emph{memory} (small
+$n=2\text{--}4$). Realizing this arithmetic at GDN-2's hardware utilization is the
+kernel-engineering task left to future work; the $O(T)$ reference used below trades
+that utilization for portability.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Model & forward & fwd+bwd & vs.\ GDN-2 \\
+\midrule
+GDN-2                       & 252 & 769 & $1.00\times$ \\
+HyperDeltaNet ($n{=}1$)     & 252 & 769 & $1.00\times$ (exact) \\
+HyperDeltaNet ($n{=}2$)     & 269 & 830 & $1.08\times$ \\
+HyperDeltaNet ($n{=}4$)     & 304 & 951 & $1.24\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Analytical FLOPs (GFLOP) for one layer at $B{=}2$, $H{=}8$, $d{=}128$,
+$C{=}64$, $L{=}8192$, from the model of~\eqref{eq:flops} plus the (stream-independent)
+projection cost. $n{=}1$ is bit-for-bit the GDN-2 count. The $n\times$ state carry is
+the only term that scales with $n$, so total FLOPs rise ${\sim}8\%$ per stream
+($+24\%$ at $n{=}4$); the ratio column is fwd+bwd.}
+\label{tab:flops}
+\end{table}
+
 
 % =============================================================================
 \section{Experiments}
