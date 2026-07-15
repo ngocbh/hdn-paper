@@ -1,0 +1,717 @@
+\RequirePackage[svgnames,table]{xcolor}
+
+\documentclass[11pt,letterpaper,logo]{yalearxiv}
+
+\input{preamble}
+\input{command}
+
+
+\newtcolorbox{simpleElegantQuote}{
+    colback=AliceBlue!50!White,
+    colframe=RoyalBlue!75!Black,
+    boxrule=0.5pt,
+    arc=2mm,
+    boxsep=4pt,
+    left=10pt, right=10pt,
+    top=8pt, bottom=8pt,
+    fontupper=\itshape,
+}
+
+\title{HyperDeltaNet: Multi-Stream Memory for Linear Attention}
+
+\runningtitle{HyperDeltaNet}
+
+\usepackage{fontawesome5}
+\definecolor{myorange}{RGB}{250,99,57}
+\newcommand{\orgfire}{\textcolor{myorange}{\faFire*}}
+
+\definecolor{yaleblue}{RGB}{0,58,112}
+\newcommand{\yale}{%
+  \textsuperscript{%
+    {\usefont{T1}{pbk}{m}{n}\textcolor{yaleblue}{\textbf{Y}}}%
+  }%
+}
+
+\author{Ngoc Bui\yale, Rex Ying\yale\\
+\yale Department of Computer Science, Yale University\\
+\faGithub~\textbf{Source Code:} \href{https://github.com/ngocbh/hyper-delta-net}{\texttt{https://github.com/ngocbh/hyper-delta-net}}
+}
+
+\hypersetup{colorlinks=true, linkcolor=blue!50!black, citecolor=blue!50!black,
+            urlcolor=blue!50!black}
+
+% --- draft-local notation ---
+\newcommand{\Tcarry}{T}                        % time-axis carry operator T_t
+\newcommand{\Hres}{H_{\mathrm{res}}}
+\newcommand{\Hpre}{H_{\mathrm{pre}}}
+\newcommand{\Hpost}{H_{\mathrm{post}}}
+\newcommand{\Sbb}{\boldsymbol{\mathcal{S}}}    % stacked multi-stream state
+\newcommand{\Fdelta}{\mathsf{F}}               % delta-rule residual block
+
+
+\begin{document}
+
+
+\begin{abstract}
+\vspace{-1mm}
+{\centering\section*{Abstract}}
+Linear-attention models compress an unbounded key--value cache into a fixed-size
+recurrent state, so the central design question is how to \emph{edit} that
+compressed memory as tokens stream in. We begin from a simple observation: the
+delta rule is a \emph{residual block along time}, $S_t = S_{t-1} +
+\Fdelta(S_{t-1})$, which makes linear-attention memory the time-axis analog of a
+hyper-connection --- the erase/read and the write play the roles of the pre- and
+post-connection maps, and the step-to-step carry plays the role of the residual
+mixing matrix. Hyper-connections generalize a single residual stream into $n$
+mixed streams along \emph{depth}; we do exactly this along \emph{time}, replacing
+the single memory state with $n$ streams that each run a gated delta-rule block
+and exchange information through a doubly-stochastic mix at chunk boundaries.
+When the $n$ streams carry \emph{different decay rates}, the combined memory reads
+past writes through a \emph{mixture of exponentials} --- a heavy-tailed retention
+kernel that keeps both far-past bindings and recent fidelity, which no single
+decay can do. We call the construction HyperDeltaNet, give it a taxonomy
+(shared-block, channel-gate, per-stream-block) that separates multi-timescale
+memory from multi-key retrieval, prove a non-degeneracy condition on the streams,
+and identify a $p$-weighted readout that makes reduction to Gated DeltaNet-2 a
+\emph{stable} fixed point (extra streams stay dormant when they are not needed).
+\end{abstract}
+
+
+\maketitle
+
+
+% =============================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Linear attention replaces the growing key--value cache of softmax attention with a
+fixed-size recurrent state $S_t \in \R^{d_k \times d_v}$, trading unbounded memory
+for constant-time, constant-memory inference \citep{katharopoulos2020transformers}.
+The price is that every token must be \emph{written into} a compressed store that
+cannot grow: the model must continually decide what to overwrite, what to
+preserve, and what to forget. The delta-rule family
+\citep{schlag2021linear,yang2024parallelizing} made this an explicit, associative
+edit --- remove the old value bound to a key before writing the new one --- and
+successive refinements (Gated DeltaNet \citep{yang2024gdn}, Kimi Delta Attention)
+added gating and channel-wise decay for finer control. Gated DeltaNet-2 (GDN-2)
+\citep{hatamizadeh2026gdn2} pushes this line furthest by \emph{decoupling} the
+erase and write decisions that all prior delta-rule models had tied to a single
+scalar gate: a channel-wise \emph{erase} gate $b_t$ selects which key-side
+coordinates to remove, and a channel-wise \emph{write} gate $w_t$ selects which
+value-side coordinates to commit.
+
+Across all of these models the recurrence keeps a \emph{single} state, and every
+timescale of memory --- what must survive thousands of tokens and what should
+decay within a few --- has to be served by that one store and its one decay
+profile. This is the pressure point we address.
+
+\paragraph{Memory is a residual highway along time.} Our starting point is that
+the delta rule is \emph{literally a residual block}, but with the block index
+running over time rather than depth:
+\begin{equation}
+  S_t \;=\; S_{t-1} \;+\; \Fdelta(S_{t-1}),
+  \qquad
+  \Fdelta(S) \;=\; \beta_t\, k_t\,(v_t - S^{\tr} k_t)^{\tr}.
+  \label{eq:delta-res}
+\end{equation}
+The skip connection is $S_{t-1}$; the ``layer'' $\Fdelta$ reads the state through
+$k_t$, computes the prediction error $v_t - S_{t-1}^{\tr}k_t$, and writes the
+correction back along $k_t$. This is exactly the structure of a hyper-connection
+\citep{zhu2024hyperconnections}, whose manifold-constrained variant mHC
+\citep{deepseek2025mhc} keeps the residual highway norm-controlled across
+\emph{depth}. Reading~\eqref{eq:delta-res} through this lens exposes a full
+correspondence (Table~\ref{tab:halves}): the read direction is the analog of the
+pre-connection $\Hpre$, the write direction of the post-connection $\Hpost$, and
+the step-to-step carry of the residual mixing $\Hres$.
+
+\paragraph{From one memory stream to many.} Hyper-connections do not stop at
+re-describing a residual block --- their actual contribution is to \emph{widen}
+it, replacing one residual stream with $n$ streams mixed each layer by a matrix
+$\Hres$. Carrying this across the correspondence gives the paper's proposal:
+replace the single memory state with $n$ memory \emph{streams} in a shared
+$d_k\times d_v$ space, let each run its own gated delta-rule block, and mix them
+with a matrix $H$. We instantiate $H$ on the same norm-controlled (doubly
+stochastic) manifold mHC uses, so the mix routes and shares memory without letting
+any one stream dominate or collapse.
+
+\paragraph{Why more streams help: multiple timescales.} A single state decays past
+writes by one exponential $\gamma^{\tau}$: large $\gamma$ retains the far past but
+lets recent interference accumulate; small $\gamma$ stays sharp but forgets. $n$
+streams with \emph{distinct} decays $\gamma_1,\dots,\gamma_n$, read through a
+profile $p$, weight a write at lag $\tau$ by $\sum_i p_i \gamma_i^{\tau}$ --- a
+mixture of exponentials, a heavy-tailed kernel that can retain far-past bindings
+\emph{and} keep recent fidelity simultaneously. Multi-timescale memory is
+precisely what one state cannot provide and $n$ mixed streams can.
+
+\paragraph{Contributions.}
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,topsep=2pt]
+  \item \textbf{Memory as a time-axis hyper-connection (\S\ref{sec:view}).} We
+  recast the delta-rule recurrence as a residual block and map the full
+  $\Hpre/\Hres/\Hpost$ triple onto read/carry/write, locating GDN-2's erase/write
+  decoupling precisely within it.
+  \item \textbf{HyperDeltaNet: multi-stream memory (\S\ref{sec:view}--\ref{sec:design}).}
+  A faithful time-axis widening of the memory highway into $n$ streams mixed by a
+  doubly-stochastic $H$ at chunk boundaries, with a taxonomy (shared-block,
+  channel-gate, per-stream-block) that cleanly separates multi-timescale memory
+  from multi-key retrieval.
+  \item \textbf{Multi-timescale mechanism and non-degeneracy (\S\ref{sec:design}).}
+  We show the multi-stream read is a mixture-of-exponentials retention kernel, and
+  prove the streams carry independent memory \emph{iff} they differ in decay or
+  read/write profile (a shared block otherwise collapses).
+  \item \textbf{Graceful reduction (\S\ref{sec:design}).} A $p$-weighted readout
+  makes reduction to GDN-2 a stable fixed point: streams that are not needed
+  receive zero readout gradient and stay dormant, so widening never hurts.
+  \item \textbf{A reference implementation and toy evidence (\S\ref{sec:exp}).} An
+  exact $n{=}1$ reduction to GDN-2, graceful reduction on single-timescale recall,
+  and a multi-timescale win on bimodal-lag recall driven by an emergent
+  fast$+$slow decay split.
+\end{itemize}
+
+
+% =============================================================================
+\section{Background}
+\label{sec:bg}
+
+\subsection{Two residuals}
+\label{sec:two-residuals}
+
+\paragraph{The depth axis: hyper-connections.} With $s$ residual streams, a
+hyper-connection layer updates
+\begin{equation}
+  x_{l+1} \;=\; \Hres\, x_l \;+\; \Hpost^{\tr}\, F\!\big(\Hpre\, x_l,\, W_l\big),
+  \label{eq:hc}
+\end{equation}
+where $\Hres \in \R^{s\times s}$ mixes streams and $\Hpre,\Hpost$ are
+\emph{separate} read/write maps \citep{zhu2024hyperconnections}. mHC
+\citep{deepseek2025mhc} constrains $\Hres$ to a norm-controlled manifold --- the
+Birkhoff polytope (doubly stochastic, via Sinkhorn) or the orthostochastic set
+(squared entries of an orthogonal matrix, via Newton--Schulz) --- so the deep
+residual highway neither explodes nor collapses across depth; Frac-connections
+\citep{zhu2025fracconnections} are a related fractional generalization. The
+essential idea we borrow is the widening itself: many streams, mixed by a
+mass-preserving matrix.
+
+\paragraph{The time axis: the delta-rule ladder.} Linear-attention memories share
+the recurrence $S_t = \Tcarry_t\, S_{t-1} + (\text{write})$, output
+$o_t = S_t^{\tr} q_t$. Table~\ref{tab:ladder} places the main variants on a ladder
+by their carry operator $\Tcarry_t$. Reading down, the carry grows from the
+identity to a scalar decay, to a symmetric rank-one projector (the delta rule), to
+gated and channel-wise-decayed versions, and finally to GDN-2's \emph{non-symmetric}
+carry.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Model & State update $S_t=\dots$ & Carry on $S_{t-1}$ \\
+\midrule
+Linear attn & $S_{t-1} + k_t v_t^{\tr}$ & $I$ \\
+Mamba-2 & $\alpha_t S_{t-1} + k_t v_t^{\tr}$ & $\alpha_t I$ \\
+DeltaNet & $(I - \beta_t k_t k_t^{\tr})S_{t-1} + \beta_t k_t v_t^{\tr}$ & $I - \beta_t k_t k_t^{\tr}$ (\textbf{sym.}) \\
+Gated DeltaNet & $\alpha_t(I - \beta_t k_t k_t^{\tr})S_{t-1} + \beta_t k_t v_t^{\tr}$ & $\alpha_t(I - \beta_t k_t k_t^{\tr})$ \\
+KDA & $(I - \beta_t k_t k_t^{\tr})D_t S_{t-1} + \beta_t k_t v_t^{\tr}$ & $(I - \beta_t k_t k_t^{\tr})D_t$ \\
+\textbf{GDN-2} & $(I - k_t e_t^{\tr})D_t S_{t-1} + k_t z_t^{\tr}$ & $(I - k_t e_t^{\tr})D_t$ (\textbf{non-sym.}) \\
+\midrule
+\textbf{HyperDeltaNet} & $S_t^{(i)} = \gamma_i D_t\, S_{t-1}^{(i)} + q_i\, G_t$ & $H\,\diag(\gamma_i D_t)$ (\textbf{multi-state}) \\
+\bottomrule
+\end{tabular}
+\caption{The delta-rule ladder. $D_t=\diag(\alpha_t)$; for GDN-2, $e_t = b_t \odot k_t$
+(channel-wise erase) and $z_t = w_t \odot v_t$ (channel-wise write). GDN-2 recovers KDA
+when $b_t = w_t = \beta_t \Onef$, and Gated DeltaNet when the decay is also scalar.
+\textbf{HyperDeltaNet} (this paper) lifts GDN-2 to $n$ streams $S^{(i)}$ that share
+\emph{one} delta block $G_t = k_t\big(z_t - \bar S_{t-1}^{\tr} D_t e_t\big)^{\tr}$
+through the read $\bar S_{t-1} = \sum_i p_i S_{t-1}^{(i)}$, differ by scalar decay
+$\gamma_i$ and read/write profiles $p_i,q_i$, and are mixed by a doubly-stochastic $H$ (as
+$\Sbb \leftarrow (H\otimes I)\,\Sbb$) at chunk boundaries; the erase enters through
+$\bar S_{t-1}$ (residual-block form), so the per-step carry is the decay
+$H\diag(\gamma_i D_t)$. Setting $n{=}1$, $p{=}\gamma{=}1$, $H{=}1$ recovers GDN-2
+exactly.}
+\label{tab:ladder}
+\end{table}
+
+\paragraph{GDN-2 in residual form.} Expanding~\eqref{eq:delta-res} gives
+$S_t = (I - \beta_t k_t k_t^{\tr})S_{t-1} + \beta_t k_t v_t^{\tr}$: the carry
+$I - \beta k k^{\tr}$ is the erase, hidden inside the block's dependence on
+$S_{t-1}$. The same rearrangement puts GDN-2 in residual form,
+\begin{equation}
+  S_t \;=\; D_t S_{t-1} \;+\; k_t\big(z_t - S_{t-1}^{\tr}(D_t e_t)\big)^{\tr},
+  \label{eq:gdn2-res}
+\end{equation}
+exposing the read direction $D_t e_t = D_t(b_t \odot k_t)$ and the write direction
+$z_t = w_t \odot v_t$ as \emph{distinct} --- the $\Hpre \neq \Hpost$ decoupling.
+
+\paragraph{A single store absorbs everything (motivation).} The decoupling makes
+GDN-2's carry $(I - k_t e_t^{\tr})D_t$ \emph{non-symmetric}: unlike the symmetric
+delta/KDA erase $I - \beta k k^{\tr}$, the left factor $k_t$ and right factor
+$e_t = b_t\odot k_t$ point in different directions, so a single step can reshape
+memory in a genuinely asymmetric way. All of that reshaping is absorbed by one
+state. We do not treat this as a defect to constrain --- rather, it is one more
+reason a single store is being asked to do a lot at once, and a motivation to
+spread memory across several streams that a mass-preserving mix can route between.
+
+
+% =============================================================================
+\section{Memory as a Time-Axis Hyper-Connection}
+\label{sec:view}
+
+\subsection{The correspondence}
+Define the time-axis carry $\Tcarry_t = (I - k_t e_t^{\tr}) D_t$; then
+$S_t = \Tcarry_t S_{t-1} + k_t z_t^{\tr}$ is structurally identical to the
+hyper-connection update~\eqref{eq:hc}. Combined with the residual
+form~\eqref{eq:gdn2-res}, this gives the correspondence that organizes the paper:
+\begin{center}
+\emph{$\Tcarry_t$ is the time-axis analog of $\Hres$; the read direction $D_t e_t$
+and the write direction $z_t$ are the analogs of $\Hpre$ and $\Hpost$.}
+\end{center}
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Hyper-connection (depth) & Delta-rule memory (time) & Role \\
+\midrule
+pre-connection $\Hpre$   & read direction $D_t e_t$        & what of the state the block sees \\
+block $F$                & delta block $\Fdelta$           & error-correcting update \\
+post-connection $\Hpost$ & write direction $z_t$           & where the correction is committed \\
+residual mixing $\Hres$  & step carry $\Tcarry_t$          & how the state is carried forward \\
+$s$ residual streams     & $n$ memory streams (this paper) & width of the highway \\
+\bottomrule
+\end{tabular}
+\caption{Memory is a hyper-connection along time. GDN-2 already realizes
+$\Hpre\neq\Hpost$ (its erase/write decoupling); the width axis --- multiple
+streams mixed by a matrix --- is unused on the time axis, and is what
+HyperDeltaNet adds.}
+\label{tab:halves}
+\end{table}
+
+\subsection{Widening the memory highway}
+We now take~\eqref{eq:delta-res} at face value and widen it the way
+hyper-connections widen residuals: from one stream to $n$. Let
+$\Sbb_{t} = (S_t^{(1)},\dots,S_t^{(n)})$ be $n$ states in a shared
+$d_k \times d_v$ space. Applying the hyper-connection template~\eqref{eq:hc}
+term-by-term,
+\begin{align}
+  \text{read } (\Hpre): \quad
+    & \bar S_{t-1} = \textstyle\sum_i p_i\, S_{t-1}^{(i)},
+    \label{eq:b-read}\\
+  \text{block } (\Fdelta): \quad
+    & G_t = \beta_t\, k_t\,(v_t - \bar S_{t-1}^{\tr} k_t)^{\tr},
+    \label{eq:b-block}\\
+  \text{carry}+\text{write } (\Hres,\Hpost): \quad
+    & S_t^{(i)} = \textstyle\sum_j A_{ij}\, S_{t-1}^{(j)} + q_i\, G_t ,
+    \label{eq:b-update}
+\end{align}
+with read/write stream profiles $p, q \in \R^n$ and cross-stream carry
+$A \in \R^{n\times n}$. Setting $n=1$, $A=1$, $p=q=1$ recovers the plain delta
+rule~\eqref{eq:delta-res}; setting $A = D_t$, $p = D_t e_t$, $q = z_t$ recovers
+GDN-2~\eqref{eq:gdn2-res}. To keep both forgetting (per stream) and
+non-degeneracy (across streams), we factor the carry as
+\begin{equation}
+  A \;=\; H \cdot \diag\!\big(D^{(1)},\dots,D^{(n)}\big),
+  \label{eq:carry-factor}
+\end{equation}
+a per-stream decay composed with a doubly-stochastic cross-stream mix $H$ produced
+by Sinkhorn (Birkhoff) or Newton--Schulz (orthostochastic). Because $H$ is doubly
+stochastic, $\|H\|_2 \le 1$ (Birkhoff--von Neumann: a convex combination of
+permutations), so the mix is \emph{mass-preserving} --- it routes and shares
+memory across streams without amplifying any of them or letting one dominate.
+Forgetting stays the exclusive job of the per-stream decays $D^{(i)}$; the mix
+only moves content sideways. This is exactly mHC's original justification for a
+doubly-stochastic $\Hres$, now placed on the correct axis. Written as one per-step
+carry, $A$ reads as though both factors act every step; in the efficient
+realization the per-stream decay acts every token while $H$ is applied only at
+chunk boundaries (\S\ref{sec:design}), which is what keeps the streams chunkable.
+
+
+% =============================================================================
+\section{HyperDeltaNet: Design}
+\label{sec:design}
+
+\subsection{A taxonomy of streams}
+How the streams are allowed to differ determines what the architecture can
+represent (Table~\ref{tab:streams}). A \emph{single} shared block $\Fdelta$ (one
+delta computation, scattered by $q$) is the faithful and cheapest reading of
+hyper-connections; richer variants recover separate associative lanes at the cost
+of $n$ blocks.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+Variant & Streams differ by & Semantics & Block cost \\
+\midrule
+\textbf{Shared-block (B-timescale)} & $(D^{(i)}, p_i, q_i)$ scalars & multi-\emph{timescale}, one store & $1$ delta \\
+Channel-gate & $(b^{(i)}, w^{(i)})$ channel masks & shared keys, different channels & $1$ delta, $n$ gates \\
+Per-stream-block (B-heads) & $(k^{(i)}, v^{(i)})$ projections & separate \emph{lanes} & $n$ deltas \\
+\bottomrule
+\end{tabular}
+\caption{The shared-block variant is the literal time-axis hyper-connection: $n$
+streams are scalar-filtered views of \emph{one} associative store, ideal for
+multi-timescale long-context memory. Per-stream-block gives competing keys their
+own lanes, targeting multi-key retrieval (MK-NIAH) --- complementary axes, not a
+strict ordering. This paper develops and tests the shared-block variant.}
+\label{tab:streams}
+\end{table}
+
+\subsection{The multi-timescale mechanism}
+Focus on the shared-block variant with scalar per-stream decays $\gamma_i$ and a
+static read profile $p \ge 0$. Unrolling~\eqref{eq:b-update} (ignoring the mix for
+the moment) writes stream $i$ as $S_t^{(i)} = \sum_{s\le t} \gamma_i^{t-s}\, q_i
+G_s$, so the read the block and the output both use is
+\begin{equation}
+  \bar S_t \;=\; \sum_i p_i S_t^{(i)}
+           \;=\; \sum_{s \le t} \Big(\underbrace{\textstyle\sum_i p_i q_i\, \gamma_i^{\,t-s}}_{\text{retention kernel } \kappa(t-s)}\Big) G_s .
+  \label{eq:mixexp}
+\end{equation}
+A single stream ($n=1$) can only realize a \emph{single} exponential kernel
+$\kappa(\tau) = \gamma^{\tau}$ and must therefore trade retention against
+recency. With distinct $\gamma_i$, $\kappa$ is a \emph{mixture of exponentials}, a
+heavy-tailed kernel that keeps far-past bindings alive (through the slow modes) and
+recent bindings sharp (through the fast modes) at once. The doubly-stochastic mix
+$H$ then lets fast and slow streams exchange content at each chunk boundary, so a
+binding can be laid down quickly and migrated into a slow stream for long-term
+retention.
+
+\subsection{Non-degeneracy of the streams}
+A shared block scatters the \emph{same} correction $G_t$ to every stream, so the
+streams must be distinguished by their carries and profiles or they collapse into
+copies.
+
+\begin{proposition}[Non-degeneracy]
+\label{prop:collapse}
+Scalarize the per-stream decays to $\gamma_i$ and let the homogeneous cross-stream
+map be $M = H\Gamma$, $\Gamma = \diag(\gamma_i)$. If all $\gamma_i$ are equal and
+$p,q$ are uniform, then $S_t^{(i)} = S_t^{(j)}$ for all $i,j,t$ (exact collapse).
+If the $\gamma_i$ are distinct, $M$ is a primitive nonnegative matrix whose Perron
+vector is not proportional to $\Onef$, and the per-stream impulse responses
+$[M^\tau]_{i,\cdot}\,q$ are linearly independent. Hence the streams carry
+independent memory iff they differ in decay or in $(p_i,q_i)$.
+\end{proposition}
+
+Distinct per-stream decay is therefore a \emph{necessary} design choice, which is
+exactly why the shared-block variant is instantiated as B-timescale (fast$\to$slow
+decays). We initialize $H = (1-\alpha)I + \alpha\,\mathrm{Sinkhorn}(\text{logits})$
+near the identity so $H$ does not average the streams together before the decays
+separate them.
+
+\subsection{Graceful reduction to GDN-2}
+Widening the highway should never hurt: on a task that needs only one timescale,
+the model must be able to leave the extra streams off. This is not automatic. The
+naive readout $o_t = \sum_i (S_t^{(i)})^{\tr} q_t$ gives even a \emph{dormant}
+stream ($p_i = 0$) a nonzero wake-up gradient $\partial \mathcal{L}/\partial p_i
+\propto (\partial \mathcal{L}/\partial o_t)\cdot G_t$, so the optimizer is driven
+to activate streams that are pure overhead --- and empirically this dragged $n>1$
+\emph{below} $n=1$ on single-timescale recall (\S\ref{sec:exp}).
+
+We instead read out through the \emph{same} $p$-weighted combined memory the block
+reads (post-update),
+\begin{equation}
+  o_t \;=\; \bar S_t^{\tr} q_t \;=\; \Big(\textstyle\sum_i p_i\, S_t^{(i)}\Big)^{\tr} q_t .
+  \label{eq:readout}
+\end{equation}
+Now a dormant stream ($p_i = 0$) receives \emph{exactly zero} readout gradient, so
+unneeded streams stay off instead of being woken. This makes the reduction to
+GDN-2 a \emph{stable} fixed point rather than merely an algebraic one: HyperDeltaNet
+can always fall back to a single effective store when that is all a task requires.
+(A normalized $\sum_i p_i S_i / \sum_i p_i$ variant reintroduces the wake-up
+gradient through the denominator and is rejected.)
+
+\subsection{Efficiency}
+The carry $A = H\cdot\diag(D^{(i)})$ of~\eqref{eq:carry-factor} reads as a single
+per-step operator, but its two factors act at \emph{different frequencies}:
+\begin{itemize}[leftmargin=1.5em,itemsep=1pt,topsep=2pt]
+  \item \textbf{every token:} $\;S_t^{(i)} = \gamma_i D_t\, S_{t-1}^{(i)} + q_i\, G_t\;$
+  --- the per-stream decay carry, with the \emph{single} shared delta block
+  $G_t = k_t\big(z_t - \bar S_{t-1}^{\tr} D_t e_t\big)^{\tr}$ (one delta, not $n$;
+  the streams interact only through the shared read $\bar S_{t-1}$);
+  \item \textbf{every $C$ tokens:} $\;\Sbb \leftarrow (H \otimes I)\,\Sbb\;$
+  --- the cross-stream mix at chunk boundaries.
+\end{itemize}
+The per-token step is a cheap linear recurrence (scalar $\gamma_i$, channel-diagonal
+$D_t$ on each state); the $n\times n$ mix fires only $O(L/C)$ times.
+
+Deferring $H$ to boundaries is deliberate. Applying it every token would couple the
+$n$ carries through a dense $n\times n$ map at every step, destroying the
+per-stream linear-recurrence structure that lets the states be carried cheaply and
+chunked like linear attention; boundary-only mixing keeps that structure intact,
+makes a near-identity $H$ meaningful (a little routing every $C$ tokens rather than
+an imperceptible amount every step), and is a mild approximation of the strict
+per-step form. Boundaries number $O(L/C)$, so the $n\times n$ mix is negligible and
+linear time is preserved. Cost over stock GDN-2 is $n\times$ state memory (small
+$n = 2\text{--}4$), $n^2$ logits per layer, and a cheap Sinkhorn. A static
+per-layer $H$ is the cheapest and most stable default; a data-dependent $H_t$
+re-projected each chunk (mean-pool the chunk hidden states $\to$ MLP $\to$
+$n{\times}n$ logits $\to$ log-domain Sinkhorn $\to$ near-identity blend
+$H=(1-\alpha)I+\alpha\,\mathrm{DS}$) is implemented and used below. The reference
+implementation realizes this as an $O(T)$ token loop (\S\ref{sec:exp}); a chunkwise
+kernel that computes the shared delta once per chunk and folds the $n$ linear
+carries into the chunk math is the natural efficient form, and is left to future
+work.
+
+\paragraph{FLOP cost.} The chunkwise form makes the multi-stream overhead
+explicit. Per layer, a forward pass of the sequence-mixing core costs
+(summed over the $B$ batch elements, $H$ heads, and $L/C$ chunks)
+\begin{equation}
+  \mathrm{FLOPs}_{\text{core}} \;\approx\; B\,H\,\tfrac{L}{C}\Big(
+    \underbrace{10\,C^2 d}_{\text{shared delta block}} \;+\;
+    \underbrace{8\,n\,C\,d^2}_{\text{per-stream carry}} \Big),
+  \label{eq:flops}
+\end{equation}
+with $d$ the head dimension. Only the per-stream carry scales with $n$; the shared
+intra-chunk block --- the $q\hat k^{\tr}$ scores, the $(I{+}M)^{-1}$ transform, and
+the value read --- is computed \emph{once} regardless of $n$, and the boundary
+$H$-mix adds a negligible $O\!\big(B\,(L/C)\,n^2 d\big)$. Setting $n{=}1$ reproduces
+the GDN-2 count exactly. Because the shared block and the token/channel projections
+dominate the layer, total model FLOPs grow only ${\approx}\,7\%$ per added stream
+(Table~\ref{tab:flops}): widening to several timescales is nearly free in
+arithmetic, and the true price is the $n\times$ state \emph{memory} (small
+$n=2\text{--}4$). Realizing this arithmetic at GDN-2's hardware utilization is the
+kernel-engineering task left to future work; the $O(T)$ reference used below trades
+that utilization for portability.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+Model & forward & fwd+bwd & vs.\ GDN-2 \\
+\midrule
+GDN-2                       & 252 & 769 & $1.00\times$ \\
+HyperDeltaNet ($n{=}1$)     & 252 & 769 & $1.00\times$ (exact) \\
+HyperDeltaNet ($n{=}2$)     & 269 & 830 & $1.08\times$ \\
+HyperDeltaNet ($n{=}4$)     & 304 & 951 & $1.24\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Analytical FLOPs (GFLOP) for one layer at $B{=}2$, $H{=}8$, $d{=}128$,
+$C{=}64$, $L{=}8192$, from the model of~\eqref{eq:flops} plus the (stream-independent)
+projection cost. $n{=}1$ is bit-for-bit the GDN-2 count. The $n\times$ state carry is
+the only term that scales with $n$, so total FLOPs rise ${\sim}8\%$ per stream
+($+24\%$ at $n{=}4$); the ratio column is fwd+bwd.}
+\label{tab:flops}
+\end{table}
+
+
+% =============================================================================
+\section{Experiments}
+\label{sec:exp}
+
+We validate two premises on a reference implementation before any kernel work:
+(i) widening reduces gracefully --- $n>1$ never underperforms $n=1$ when the extra
+timescales are useless; and (ii) widening \emph{wins} --- $n>1$ beats $n=1$ when
+the task genuinely spans multiple timescales.
+
+\paragraph{Reference implementation.} The shared-block HyperDeltaNet is
+implemented as a plain $O(T)$ recurrence (\texttt{lit\_gpt/hgdn2.py}) so it can be
+tested on CPU without the Triton kernel. Setting $n=1$, $p=\gamma=1$, $H=I$ recovers
+stock GDN-2, and a reduction test against an independent GDN-2 reference passes to
+numerical precision (plus six CPU and one CUDA unit tests). Toys wrap the
+recurrence in a tiny embed $\to$ project $\to$ recurrence $\to$ readout module so
+that only the memory recurrence is under test; $n=1$ and $n=4$ share the same
+weight-init seed, so any difference is due to stream count, not initialization.
+Full task construction and hyperparameters are in Appendix~\ref{app:mqar}.
+
+\paragraph{(i) Graceful reduction (single-timescale MQAR).} On content-based
+associative recall where every binding is recalled at a comparable lag, one slow
+decay suffices and extra streams are pure overhead. With the naive summed readout,
+$n{=}4$ collapsed to $0.32$ eval accuracy versus $n{=}1$'s $0.66$, and dormant
+streams were force-woken ($p_i\!:0\to0.38$) --- confirming the missing-fixed-point
+diagnosis. With the $p$-weighted readout~\eqref{eq:readout}, the harmful streams go
+dormant ($p_i \to 0$) and $n{=}4$ recovers $n{=}1$: across three seeds $n{=}4$
+averages $0.464$ versus $n{=}1$'s $0.385$ (Table~\ref{tab:results}, left).
+Starting exactly at the GDN-2 point, dormant streams receive zero gradient and
+\emph{stay} at $p=0$. The systematic penalty for widening is gone.
+
+\paragraph{(ii) Multi-timescale advantage (bimodal-lag MQAR).} We design a task
+that forces the trade-off: ``slow'' bindings are laid down first and recalled after
+a long ($48$-token) interference gap, while ``fast'' bindings are laid down just
+before the queries; slow and fast keys are disjoint, and accuracy is scored per
+class. A single decay must compromise --- $\gamma\!\approx\!1$ survives the gap but
+accumulates interference, small $\gamma$ resists interference but forgets the far
+past --- whereas a fast$+$slow spread should get both. Over three seeds
+$n{=}4$ beats $n{=}1$ on both classes at once: overall $0.407$ vs.\ $0.272$, slow
+$0.331$ vs.\ $0.230$, fast $0.484$ vs.\ $0.314$ (Table~\ref{tab:results}, right).
+Every $n{=}4$ seed converged to a fast$+$slow split (one stream at
+$\gamma\!\approx\!0.1\text{--}0.35$, the rest at $\gamma = 1.000$), while $n{=}1$
+is stuck at $\gamma = 1$; $n{=}1$ plateaus at loss $\approx 2.1$ and $n{=}4$ breaks
+through to $\approx 1.8$. This is the mixture-of-exponentials mechanism
+of~\eqref{eq:mixexp} made concrete.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lcc@{\hspace{2.5em}}lccc@{}}
+\toprule
+\multicolumn{3}{c}{Single-timescale MQAR (mean of 3 seeds)} & \multicolumn{4}{c}{Bimodal-lag MQAR (mean of 3 seeds)}\\
+\cmidrule(r){1-3}\cmidrule(l){4-7}
+ & $n{=}1$ & $n{=}4$ & & $n{=}1$ & $n{=}4$ & $\Delta$\\
+\midrule
+eval acc (summed readout) & $0.66^{\dagger}$ & $0.32$ & overall & $0.272$ & $\mathbf{0.407}$ & $+0.135$\\
+eval acc ($p$-weighted)   & $0.385$ & $\mathbf{0.464}$ & slow (long lag)  & $0.230$ & $\mathbf{0.331}$ & $+0.101$\\
+                          &         &         & fast (short lag) & $0.314$ & $\mathbf{0.484}$ & $+0.170$\\
+\bottomrule
+\end{tabular}
+\caption{Reference-implementation results. \emph{Left:} with the naive summed
+readout, widening to $n{=}4$ hurts; the $p$-weighted readout~\eqref{eq:readout}
+restores graceful reduction ($n{=}4 \ge n{=}1$). $^{\dagger}$single lucky seed;
+the $0.385$ multi-seed mean is the fair baseline. \emph{Right:} on a task that
+spans two timescales, $n{=}4$ beats $n{=}1$ on both classes simultaneously via an
+emergent fast$+$slow decay split.}
+\label{tab:results}
+\end{table}
+
+\paragraph{Honest caveats.} These are small-scale signals on a plain recurrence,
+not scaled results. Seed variance is high ($\pm 0.17$): the recall tasks sit at a
+capability threshold where some seeds break through in the training budget and some
+do not, and the mean --- not any single run --- is the evidence. A chunked /
+Triton kernel is required to test the design at the scale (long-context RULER /
+MK-NIAH) where multiple timescales should matter most; that is the immediate next
+step.
+
+
+% =============================================================================
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Hyper-connections.} Hyper-connections \citep{zhu2024hyperconnections}
+and Frac-connections \citep{zhu2025fracconnections} widen the residual stream along
+depth; mHC \citep{deepseek2025mhc} constrains the mixing matrix to the Birkhoff or
+orthostochastic manifold. We transfer the widening --- many streams mixed by a
+mass-preserving matrix --- from the depth axis to the time axis of
+linear-attention memory.
+
+\paragraph{Delta-rule linear attention.} DeltaNet \citep{schlag2021linear} and its
+chunkwise parallelization \citep{yang2024parallelizing}, Gated DeltaNet
+\citep{yang2024gdn}, KDA, and GDN-2 \citep{hatamizadeh2026gdn2} form the ladder of
+Table~\ref{tab:ladder}. HyperDeltaNet keeps each stream's block exactly a
+GDN-2 block and adds the orthogonal, previously-unused width axis.
+
+\paragraph{Multi-state and multi-timescale memory.} Multi-head linear attention
+runs parallel states but never mixes them; Mamba-3's MIMO states raise the update
+rank within a single store; classical multi-timescale RNNs and structured SSMs use
+fixed timescale banks. HyperDeltaNet differs in coupling several delta-rule stores
+through a \emph{learned doubly-stochastic mix} that routes content between
+timescales --- a hyper-connection along the memory axis. Negative-eigenvalue delta
+rules \citep{grazzi2025statetracking} extend the per-stream block orthogonally and
+compose with the multi-stream lift.
+
+
+% =============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+Reading the delta rule as a residual block along time makes linear-attention memory
+a hyper-connection, and hyper-connections are, at heart, a recipe for \emph{widening}
+a residual highway. HyperDeltaNet applies that recipe on the time axis: it replaces
+the single memory state with $n$ streams that each run a gated delta-rule block and
+exchange content through a mass-preserving doubly-stochastic mix. Distinct
+per-stream decays turn the combined read into a mixture-of-exponentials retention
+kernel --- multi-timescale memory a single state cannot provide --- while a
+$p$-weighted readout guarantees the construction reduces gracefully to GDN-2 when a
+task needs only one timescale. A reference implementation confirms both premises on
+toy recall; a chunkwise kernel and long-context evaluation are the next step.
+
+
+\appendix
+% -----------------------------------------------------------------------------
+\section{Proof of Proposition~\ref{prop:collapse}}
+\label{app:collapse}
+
+With equal decays $\gamma_i = \gamma$ and uniform $p = q = \Onef$, every stream
+receives the same carry row and the same scattered correction, so by induction
+$S_t^{(i)}$ is independent of $i$. For distinct $\gamma_i$, $M = H\Gamma$ is
+entrywise nonnegative and, for an irreducible aperiodic $H$, primitive;
+Perron--Frobenius gives a simple dominant eigenvalue with a positive right
+eigenvector $v$. Were $v \propto \Onef$, then $H\Gamma\Onef = \rho\,\Onef$ would
+force $H(\gamma_i)_i = \rho\,\Onef$, impossible for doubly-stochastic $H$ unless the
+$\gamma_i$ are equal; hence $v \not\propto \Onef$. Finally, the stream impulse
+responses are rows of $M^\tau$; since $M$ has distinct eigenvalues (generic under
+distinct $\gamma_i$), the family $\{M^\tau\}_\tau$ spans a space of dimension $n$,
+so the rows $[M^\tau]_{i,\cdot}\,q$ are linearly independent across $i$. \qed
+
+% -----------------------------------------------------------------------------
+\section{Experimental details}
+\label{app:mqar}
+
+Both experiments are multi-query associative recall (MQAR): content-based
+retrieval where a set of $(\text{key},\text{value})$ bindings is written into the
+memory, separated from the queries by an interference gap, and the model must
+emit the bound value when a key is later re-presented as a query. All sequences
+are generated \emph{online} (fresh random draws every step) and evaluated on a
+held-out generator seed, so accuracy reflects the learned recall algorithm, not
+memorization. Keys, values, and a single filler symbol share one vocabulary of
+size $n_k + n_v + 1$: keys are ids $0,\dots,n_k-1$ and values ids
+$n_k,\dots,n_k+n_v-1$. Loss and accuracy are computed only at query positions
+(all other targets masked).
+
+\paragraph{Model.} Each toy wraps the memory recurrence in an
+embed $\to$ (per-head $q,k,v,g,b,w$ projections) $\to$ recurrence $\to$ linear
+readout module, with $2$ heads, head dimension $16$, and model width $64$. The
+gates follow GDN-2: log-decay $g = -\mathrm{softplus}(\cdot)$, erase
+$b = 2\,\sigma(\cdot)$, write $w = \sigma(\cdot)$. Only the memory recurrence
+differs between conditions; $n{=}1$ and $n{=}4$ share the same weight-init seed,
+so any gap is attributable to stream count rather than initialization. We train
+with AdamW at learning rate $3\times10^{-3}$, batch size $32$.
+
+\paragraph{Single-timescale MQAR (graceful reduction).} A sequence is
+$n_p$ bindings $[k_1 v_1 \cdots k_{n_p} v_{n_p}]$, then a gap of random
+value-space tokens (genuine interference --- every gap token still writes to
+memory), then the $n_p$ keys re-presented in random order as queries; the target
+at each query is the bound value. Every binding is thus recalled at a comparable
+lag, so a single slow decay suffices and extra streams are pure overhead. We use
+$n_k = n_v = 16$, $n_p = 6$, gap $=16$ (sequence length $34$), $2000$ steps. The
+$H$-off ablations set the chunk size above the sequence length (no cross-stream
+mixing); the ``primary init'' control sets $p = (1,0,0,0)$ with primary
+$\gamma = 1$ so the model \emph{starts} exactly at the GDN-2 point, isolating
+whether any regression comes from initialization or from the forward map.
+
+\paragraph{Bimodal-lag MQAR (multi-timescale advantage).} A sequence places
+$n_{\text{slow}}$ bindings at the very start, then a long interference gap, then
+$n_{\text{fast}}$ bindings just before the queries; slow and fast key sets are
+disjoint, and the queries interleave both classes in random order. Slow keys are
+therefore recalled across the gap (long lag) and fast keys immediately (short
+lag), and accuracy is scored \emph{separately} per class. A single decay must
+compromise between the two, whereas a fast$+$slow spread can serve both. We use
+$n_k = 24$, $n_v = 16$, $n_{\text{slow}} = n_{\text{fast}} = 4$, gap $=48$
+(sequence length $68$), $4000$ steps, and report the mean over three seeds.
+
+\paragraph{Worked examples.} To make the layouts concrete, we show two small
+illustrative sequences (smaller $n_p$ and gap than the runs above). Keys are
+written \texttt{k*}, values \texttt{v*}; a query position emits the value bound to
+that key, and \texttt{.} marks a masked (non-query) position that contributes no
+loss. Single-timescale MQAR ($n_p{=}3$, gap${=}6$): the three bindings
+$\texttt{k5}{\to}\texttt{v2}$, $\texttt{k1}{\to}\texttt{v15}$,
+$\texttt{k14}{\to}\texttt{v12}$ are written first, then six value-space
+interference tokens, then the keys re-presented in random order as queries.
+\begin{center}\small\ttfamily\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}l *{15}{c}@{}}
+pos   & 0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 & 11 & 12 & 13 & 14\\
+token & k5 & v2 & k1 & v15 & k14 & v12 & v1 & v3 & v10 & v5 & v8 & v14 & k5 & k14 & k1\\
+tgt   & . & . & . & . & . & . & . & . & . & . & . & . & v2 & v12 & v15\\
+\end{tabular}
+\end{center}
+Bimodal-lag MQAR ($n_{\text{slow}}{=}n_{\text{fast}}{=}2$, gap${=}6$): the slow
+bindings ($\texttt{k13}{\to}\texttt{v4}$, $\texttt{k2}{\to}\texttt{v11}$) are
+written at the very start, then an interference gap, then the fast bindings
+($\texttt{k18}{\to}\texttt{v12}$, $\texttt{k20}{\to}\texttt{v10}$) just before the
+queries; the query block interleaves both classes. Slow keys are thus recalled
+across the gap (long lag), fast keys immediately (short lag).
+\begin{center}\footnotesize\ttfamily\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}l *{18}{c}@{}}
+pos   & 0 & 1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 & 11 & 12 & 13 & 14 & 15 & 16 & 17\\
+token & k13 & v4 & k2 & v11 & v12 & v13 & v14 & v2 & v4 & v7 & k18 & v12 & k20 & v10 & k20 & k18 & k13 & k2\\
+tgt   & . & . & . & . & . & . & . & . & . & . & . & . & . & . & v10 & v12 & v4 & v11\\
+kind  & . & . & . & . & . & . & . & . & . & . & . & . & . & . & F & F & S & S\\
+\end{tabular}
+\end{center}
+(\texttt{kind}: \texttt{S}~=~slow query, \texttt{F}~=~fast query, scored
+separately.)
+
+
+\bibliography{main}
+\bibliographystyle{plainnat}
+
+
+\end{document}

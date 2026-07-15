@@ -20,3 +20,6 @@
 *.ind
 *.brf
 *.dvi
+
+## Compiled output of this document (regenerable via latexmk)
+main_arxiv.pdf
