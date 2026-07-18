@@ -135,6 +135,50 @@ Normalizers, kernel maps, and output gates are omitted for readability.}
 \end{table}
 
 
+% =============================================================================
+\section{State-Dependent Forgetting}
+\label{sec:method}
+
+\begin{itemize}[leftmargin=1.4em,itemsep=5pt,topsep=2pt]
+
+  \item \textbf{One template.} Every row of Table~\ref{tab:fastweight} solves the same
+  per-step problem: stay close to a \emph{carried} state, then fix the recall error,
+  \begin{equation}
+    S_t = \argmin_S \;
+    \underbrace{\|S - D_t S_{t-1}\|_F^2}_{\text{forget: anchor}}
+    \;-\; 2\,\underbrace{\inner{S^{\tr}k_t}{\beta_t\big(v_t-(D_t S_{t-1})^{\tr}k_t\big)}}_{\text{recall: delta step}},
+    \label{eq:template}
+  \end{equation}
+  with closed form $S_t=(I-\beta_t k_t k_t^{\tr})\,D_t S_{t-1}+\beta_t k_t v_t^{\tr}$.
+  \textbf{Forgetting \emph{is} the anchor} $D_t$ --- it picks which past state to keep.
+
+  \item \textbf{The family is just choices of $D_t$.} Gated DeltaNet takes a scalar
+  $D_t=\alpha_t I$; KDA a channel-wise $D_t=\diag(\alpha_t)$. But in \emph{all} of them
+  $D_t=D_t(x_t)$: the anchor is set by the \emph{incoming token alone}.
+
+  \item \textbf{The gap: forgetting is memory-blind.} The anchor $\|S-D_t S_{t-1}\|_F^2$ is a
+  ridge pull whose strength the input schedules but that never looks at \emph{what is stored}.
+  It shrinks every channel alike --- so memory collapses to low rank and short horizons, and
+  most of its capacity sits unused.
+
+  \item \textbf{Our idea: let forgetting read the memory.}
+  \begin{equation}
+    D_t=\diag\big(\alpha(x_t,\,S_{t-1})\big)\qquad(\text{prior work: }\alpha(x_t)\text{ only}).
+    \label{eq:sdf}
+  \end{equation}
+  In words, \emph{forget what is redundant, keep what is not.} The per-step objective
+  \eqref{eq:template} stays convex with the same closed form ($D_t$ is fixed given
+  $S_{t-1}$); only the across-time recurrence becomes nonlinear.
+
+  \item \textbf{Why it is principled.} State-dependent decay is one object seen three ways:
+  (i) a \emph{non-quadratic regularizer} $\nabla R(S)$ in place of ridge; (ii) a
+  \emph{diagonal preconditioner} --- the step from SGD (fixed $D$) toward RLS/Kalman, whose
+  gain and forgetting depend on the state; (iii) an \emph{adaptive forgetting factor} that
+  rises with surprise. It recovers KDA when $\alpha$ drops its $S_{t-1}$ argument.
+
+\end{itemize}
+
+
 \bibliography{main}
 \bibliographystyle{plainnat}
 
