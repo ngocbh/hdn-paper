@@ -6,9 +6,9 @@
 \input{command}
 
 
-\title{HyperDeltaNet}
+\title{Kalman Linear Attention}
 
-\runningtitle{HyperDeltaNet}
+\runningtitle{Kalman Linear Attention}
 
 \usepackage{fontawesome5}
 
@@ -49,46 +49,107 @@
 
   \item \textbf{Fixed-size memory, edited online.} Linear attention replaces the
   growing key--value cache of softmax attention with a fixed-size recurrent state
-  $S_t \in \R^{d_k \times d_v}$, written as tokens stream in and read by the query,
-  $o_t = S_t^{\tr} q_t$ \citep{katharopoulos2020transformers}. The central design
-  question is how to \emph{edit} that compressed store online --- what to write,
-  what to erase, and what to forget.
-
-  \item \textbf{The delta rule is a residual connection along time.} The delta
-  update \citep{schlag2021linear,yang2024parallelizing} is
+  $S_t \in \R^{d_k \times d_v}$ that is \emph{written} as tokens stream in and
+  \emph{read} by the query \citep{katharopoulos2020transformers},
   \begin{equation}
-    S_t \;=\; S_{t-1} \;+\; \Fdelta_t(S_{t-1}),
-    \qquad
-    \Fdelta_t(S) \;=\; \beta_t\, k_t\,(v_t - S^{\tr} k_t)^{\tr}.
-    \label{eq:delta-res}
+    \text{(write)}\quad S_t = S_{t-1} + k_t v_t^{\tr},
+    \qquad\qquad
+    \text{(read)}\quad o_t = S_t^{\tr} q_t .
+    \label{eq:linattn}
   \end{equation}
-  This is exactly a residual block $x_{l+1} = x_l + F(x_l)$ --- but with the block
-  index running over \emph{time} rather than \emph{depth}. Memory is a residual
-  highway and each token is one block on it: the skip is $S_{t-1}$, and $\Fdelta_t$
-  reads the state through $k_t$, forms the prediction error $v_t - S_{t-1}^{\tr}
-  k_t$, and writes the correction back along $k_t$.
+  The design question is how to \emph{edit} this store online --- what to write and
+  what to forget. This plain additive write only ever \emph{adds} associations:
+  nothing is removed and non-orthogonal keys interfere, so the store saturates and
+  reads degrade.
 
-  \item \textbf{Which optimization problem it solves.} The block $\Fdelta_t$ is
-  \emph{one online gradient step}: it descends the local least-squares
-  (associative-recall) objective
+  \item \textbf{DeltaNet: error-correcting writes.} The delta rule
+  \citep{schlag2021linear,yang2024parallelizing} reads what is stored at $k_t$ and
+  writes back only the correction,
   \begin{equation}
-    \ell_t(S) \;=\; \tfrac12\,\big\| S^{\tr} k_t - v_t \big\|_2^2,
-    \qquad
-    S_t \;=\; S_{t-1} \;-\; \beta_t\, \nabla_{\!S}\, \ell_t(S_{t-1}).
-    \label{eq:opt}
+    S_t = (I-\beta_t k_t k_t^{\tr})\,S_{t-1} + \beta_t k_t v_t^{\tr},
+    \label{eq:deltanet}
   \end{equation}
-  So editing memory along time \emph{is} iterative optimization --- the time-axis
-  reading of ``a residual network is unrolled optimization.'' Equivalently, each
-  step is the exact minimizer $S_t = \arg\min_S L_t(S)$ of a local objective $L_t$
-  that keeps the new state close to the (decayed) previous state while correcting
-  the read/write residual \citep{hatamizadeh2026gdn2}.
+  so a repeated key is \emph{overwritten} rather than accumulated. It still never
+  forgets what \emph{other} keys hold.
 
-  \item \textbf{The delta-rule family is a set of choices for that objective.}
-  DeltaNet, Mamba-2, Gated DeltaNet, KDA, Mamba-3, and Gated DeltaNet-2 (GDN-2)
-  differ only in the local objective $L_t$ and the resulting per-step carry on
-  $S_{t-1}$ --- scalar versus channel-wise decay, and a tied versus a decoupled
-  erase/write. Table~\ref{tab:fastweight}, ported from GDN-2
-  \citep{hatamizadeh2026gdn2}, makes the correspondence explicit.
+  \item \textbf{Gated DeltaNet: forgetting by decay.} DeltaNet corrects the current key
+  but removes nothing else, so stale associations linger and the state drifts over long
+  contexts. To actually \emph{forget}, Gated DeltaNet shrinks the whole state by a
+  data-dependent decay $\alpha_t\in(0,1)$ before each write \citep{yang2024gdn},
+  \begin{equation}
+    S_t = \alpha_t\,(I-\beta_t k_t k_t^{\tr})\,S_{t-1} + \beta_t k_t v_t^{\tr},
+    \label{eq:gdn}
+  \end{equation}
+  so untouched memories fade geometrically: the state stays bounded and recent tokens
+  weigh more. But a single scalar $\alpha_t$ per head fades \emph{every} channel at the
+  same rate --- it cannot hold some memories long while dropping others fast.
+
+  \item \textbf{KDA: multi-timescale forgetting.} But a useful memory needs several
+  horizons at once --- a name or topic kept for thousands of tokens, a local cue dropped
+  immediately. KDA replaces the scalar with a diagonal $D_t=\diag(\alpha_t)$, giving each
+  channel its own decay rate \citep{kimiteam2025kimilinear},
+  \begin{equation}
+    S_t = (I-\beta_t k_t k_t^{\tr})\,D_t\,S_{t-1} + \beta_t k_t v_t^{\tr},
+    \label{eq:kda}
+  \end{equation}
+  so one head spans a \emph{mixture of timescales} --- the most expressive forgetting in
+  the family, and the baseline we build on.
+
+\end{itemize}
+
+
+% =============================================================================
+\subsection{A state-space view: memory as Kalman filtering}
+\label{sec:kalman}
+
+\begin{itemize}[leftmargin=1.4em,itemsep=5pt,topsep=2pt]
+
+  \item \textbf{Memory as a hidden state.} Treat the memory $S\in\R^{d_k\times d_v}$ as an
+  \emph{associative map} $S\colon k\mapsto v$ that must be estimated online: each token is a
+  noisy readout of it, and between tokens the memory itself drifts,
+  \begin{equation}
+  \begin{aligned}
+    S_t &= D_t\,S_{t-1} + w_t, & w_t &\sim \N(0,Q_t)\quad\text{(process: decay + drift)},\\[2pt]
+    v_t &= S_t^{\tr}k_t + e_t, & e_t &\sim \N(0,r I)\quad\text{(observation: noisy recall)}.
+  \end{aligned}
+  \label{eq:ssm}
+  \end{equation}
+  Estimating $S_t$ from the stream $\{(k_\tau,v_\tau)\}$ is \emph{Kalman filtering}; the
+  read $o_t=S_t^{\tr}q_t$ queries the estimate.
+
+  \item \textbf{Forget $=$ predict, write $=$ update.} The filter carries the estimate
+  $S_{t-1}$ and a key-space covariance $P_{t-1}\in\R^{d_k\times d_k}$ (uncertainty, shared
+  across value channels) and, per token, runs a \emph{predict} then an \emph{update}:
+  \begin{equation}
+  \begin{aligned}
+    \text{predict (forget):}\quad & S_t^- = D_t S_{t-1},\qquad P_t^- = D_t P_{t-1}D_t^{\tr}+Q_t,\\[3pt]
+    \text{update (write):}\quad & \kappa_t = \frac{P_t^- k_t}{r+k_t^{\tr}P_t^- k_t},\qquad
+      S_t = S_t^- + \kappa_t\,(v_t-S_t^{-\tr}k_t)^{\tr},
+  \end{aligned}
+  \label{eq:kf}
+  \end{equation}
+  closed by the covariance update $P_t=(I-\kappa_t k_t^{\tr})P_t^-$. \textbf{Forgetting is
+  the predict step} --- the transition $D_t$ (and drift $Q_t$) that discounts the past;
+  \textbf{writing is the measurement update} --- a delta correction $v_t-S_t^{-\tr}k_t$
+  scaled by the Kalman gain $\kappa_t$.
+
+  \item \textbf{The delta family is a fixed-gain filter.} Freeze the covariance
+  ($P_t\equiv cI$, $Q_t=0$): the gain collapses to $\kappa_t=\beta_t k_t$ (with
+  $\beta_t=c/(r+c)$ for the unit-norm keys used in practice) and \eqref{eq:kf} becomes
+  \begin{equation}
+    S_t = (I-\beta_t k_t k_t^{\tr})\,D_t\,S_{t-1} + \beta_t k_t v_t^{\tr},
+    \label{eq:family}
+  \end{equation}
+  the delta rule \eqref{eq:deltanet} with transition $D_t$: DeltaNet ($D_t=I$), Gated
+  DeltaNet ($D_t=\alpha_t I$), KDA ($D_t=\diag(\alpha_t)$). They are Kalman filters that
+  \emph{discard the covariance} and read the transition from the input alone
+  (Table~\ref{tab:fastweight}).
+
+  \item \textbf{Two things they throw away.} A frozen covariance means a fixed gain: the
+  write never adapts to how certain or saturated each direction already is. And an
+  input-only transition $D_t=D_t(x_t)$ decays every channel by a rule blind to \emph{what is
+  stored}. Together these drive the state to low rank with short horizons, leaving most of
+  its capacity unused.
 
 \end{itemize}
 
@@ -96,41 +157,46 @@
 \begin{table}[t]
 \centering
 \resizebox{\textwidth}{!}{%
-\begin{tabular}{@{}lll@{}}
+\begin{tabular}{@{}llll@{}}
 \toprule
-Method & Local objective $L_t(S)$ & State update $S_t$ \\
+Method & Transition $D_t$ (forget) & Kalman gain $\kappa_t$ (write) & State update $S_t$ \\
 \midrule
+Linear attention
+  & $I$
+  & $k_t$ \ (no correction)
+  & $S_{t-1} + k_t v_t^{\tr}$ \\[3pt]
 DeltaNet
-  & $\|S-S_{t-1}\|_F^2 - 2\inner{S^{\tr}k_t}{\beta_t(v_t - S_{t-1}^{\tr}k_t)}$
+  & $I$
+  & $\beta_t k_t$ \ (fixed)
   & $(I-\beta_t k_t k_t^{\tr})S_{t-1} + \beta_t k_t v_t^{\tr}$ \\[3pt]
-Mamba-2
-  & $\|S-\alpha_t S_{t-1}\|_F^2 - 2\inner{S^{\tr}k_t}{v_t}$
-  & $\alpha_t S_{t-1} + k_t v_t^{\tr}$ \\[3pt]
 Gated DeltaNet
-  & $\|S-\alpha_t S_{t-1}\|_F^2 - 2\inner{S^{\tr}k_t}{\beta_t\big(v_t - (\alpha_t S_{t-1})^{\tr}k_t\big)}$
+  & $\alpha_t I$
+  & $\beta_t k_t$ \ (fixed)
   & $\alpha_t(I-\beta_t k_t k_t^{\tr})S_{t-1} + \beta_t k_t v_t^{\tr}$ \\[3pt]
 KDA
-  & $\|S-D_t S_{t-1}\|_F^2 - 2\inner{S^{\tr}k_t}{\beta_t\big(v_t - (D_t S_{t-1})^{\tr}k_t\big)}$
+  & $\diag(\alpha_t)$
+  & $\beta_t k_t$ \ (fixed)
   & $(I-\beta_t k_t k_t^{\tr})D_t S_{t-1} + \beta_t k_t v_t^{\tr}$ \\[3pt]
-Mamba-3
-  & $\|S-\alpha_t S_{t-1}\|_F^2 - 2\inner{S^{\tr}\tilde{k}_{t-1}}{\eta_t v_{t-1}} - 2\inner{S^{\tr}\tilde{k}_t}{\zeta_t v_t}$
-  & $\alpha_t S_{t-1} + \eta_t \tilde{k}_{t-1} v_{t-1}^{\tr} + \zeta_t \tilde{k}_t v_t^{\tr}$ \\[3pt]
-\textbf{GDN-2}
-  & $\|S-D_t S_{t-1}\|_F^2 - 2\inner{S^{\tr}k_t}{z_t - (D_t S_{t-1})^{\tr}e_t}$
-  & $(I-k_t e_t^{\tr})D_t S_{t-1} + k_t z_t^{\tr}$ \\
+\textbf{Ours}
+  & $\diag(\alpha(x_t,S_{t-1}))$
+  & $\beta_t k_t$
+  & $(I-\beta_t k_t k_t^{\tr})\,D_t(S_{t-1})\,S_{t-1} + \beta_t k_t v_t^{\tr}$ \\[3pt]
+\emph{Kalman-optimal}
+  & $D_t$
+  & $\dfrac{P_t^- k_t}{r+k_t^{\tr}P_t^- k_t}$
+  & $D_t S_{t-1} + \kappa_t\,(v_t-(D_t S_{t-1})^{\tr}k_t)^{\tr}$ \\
 \bottomrule
 \end{tabular}%
 }
-\caption{\textbf{Fast-weight update view of the delta-rule family}, ported from
-Gated DeltaNet-2 (\citealp{hatamizadeh2026gdn2}, Table~1). Every state update is
-the minimizer of a local online objective $L_t(S)$: in the state orientation
-$o_t = S_t^{\tr}q_t$, each method keeps $S$ close to the (decayed) previous state
-and adds a delta residual --- the target value minus the value currently read
-from memory. Here $D_t = \diag(\alpha_t)$; for GDN-2 the two decisions are
-decoupled as $e_t = b_t \odot k_t$ (channel-wise erase, key side) and
-$z_t = w_t \odot v_t$ (channel-wise write, value side). GDN-2 recovers KDA when
-$b_t = w_t = \beta_t\Onef$, and Gated DeltaNet when the decay is also scalar.
-Normalizers, kernel maps, and output gates are omitted for readability.}
+\caption{\textbf{The delta-rule family as Kalman filters.} Each token runs a \emph{predict}
+step (forget: transition $D_t$) and a \emph{measurement update} (write: a delta correction
+scaled by the gain $\kappa_t$), cf.\ \eqref{eq:kf}. Prior methods \emph{freeze the
+covariance}, so the gain is the fixed $\beta_t k_t$ and the transition $D_t=D_t(x_t)$ is read
+from the input alone; they differ only in $D_t$ --- identity (DeltaNet), scalar $\alpha_t I$
+(Gated DeltaNet), diagonal $\diag(\alpha_t)$ (KDA). Linear attention drops even the
+correction. \textbf{Ours} makes the transition \emph{state-dependent}, $D_t=D_t(S_{t-1})$;
+the \emph{Kalman-optimal} filter further adapts the gain through the tracked covariance
+$P_t$. Normalizers, kernel maps, and output gates are omitted for readability.}
 \label{tab:fastweight}
 \end{table}
 
@@ -141,46 +207,274 @@ Normalizers, kernel maps, and output gates are omitted for readability.}
 
 \begin{itemize}[leftmargin=1.4em,itemsep=5pt,topsep=2pt]
 
-  \item \textbf{One template.} Every row of Table~\ref{tab:fastweight} solves the same
-  per-step problem: stay close to a \emph{carried} state, then fix the recall error,
+  \item \textbf{Let the process model read the memory.} We make the transition ---
+  equivalently the forgetting --- depend on the current state,
   \begin{equation}
-    S_t = \argmin_S \;
-    \underbrace{\|S - D_t S_{t-1}\|_F^2}_{\text{forget: anchor}}
-    \;-\; 2\,\underbrace{\inner{S^{\tr}k_t}{\beta_t\big(v_t-(D_t S_{t-1})^{\tr}k_t\big)}}_{\text{recall: delta step}},
-    \label{eq:template}
-  \end{equation}
-  with closed form $S_t=(I-\beta_t k_t k_t^{\tr})\,D_t S_{t-1}+\beta_t k_t v_t^{\tr}$.
-  \textbf{Forgetting \emph{is} the anchor} $D_t$ --- it picks which past state to keep.
-
-  \item \textbf{The family is just choices of $D_t$.} Gated DeltaNet takes a scalar
-  $D_t=\alpha_t I$; KDA a channel-wise $D_t=\diag(\alpha_t)$. But in \emph{all} of them
-  $D_t=D_t(x_t)$: the anchor is set by the \emph{incoming token alone}.
-
-  \item \textbf{The gap: forgetting is memory-blind.} The anchor $\|S-D_t S_{t-1}\|_F^2$ is a
-  ridge pull whose strength the input schedules but that never looks at \emph{what is stored}.
-  It shrinks every channel alike --- so memory collapses to low rank and short horizons, and
-  most of its capacity sits unused.
-
-  \item \textbf{Our idea: let forgetting read the memory.}
-  \begin{equation}
-    D_t=\diag\big(\alpha(x_t,\,S_{t-1})\big)\qquad(\text{prior work: }\alpha(x_t)\text{ only}).
+    D_t=\diag\big(\alpha(x_t,\,S_{t-1})\big),
+    \qquad\text{(prior work: }\alpha(x_t)\text{ alone)},
     \label{eq:sdf}
   \end{equation}
-  In words, \emph{forget what is redundant, keep what is not.} The per-step objective
-  \eqref{eq:template} stays convex with the same closed form ($D_t$ is fixed given
-  $S_{t-1}$); only the across-time recurrence becomes nonlinear.
-
-  \item \textbf{Why it is principled.} State-dependent decay is one object seen three ways:
-  (i) a \emph{non-quadratic regularizer} $\nabla R(S)$ in place of ridge; (ii) a
-  \emph{diagonal preconditioner} --- the step from SGD (fixed $D$) toward RLS/Kalman, whose
-  gain and forgetting depend on the state; (iii) an \emph{adaptive forgetting factor} that
-  rises with surprise. It recovers KDA when $\alpha$ drops its $S_{t-1}$ argument.
+  which recovers KDA when $\alpha$ ignores $S_{t-1}$, so it strictly generalizes the family.
+  This is not ad hoc: \eqref{eq:sdf} is the first step from the frozen-covariance filter
+  \eqref{eq:family} back toward the \emph{exact} Kalman filter that GDN and KDA approximate.
 
 \end{itemize}
+
+% =============================================================================
+\subsection{Toward the Kalman-optimal filter}
+\label{sec:kalman-opt}
+% TODO(ngoc): cite Kalman/RLS (e.g.\ Haykin), Longhorn, and Titans for positioning.
+
+\begin{itemize}[leftmargin=1.4em,itemsep=5pt,topsep=2pt]
+
+  \item \textbf{What the delta family froze.} The exact filter \eqref{eq:kf} tracks the
+  covariance $P_t$ and adapts both the gain $\kappa_t$ and the predicted uncertainty
+  $P_t^-=D_t P_{t-1}D_t^{\tr}+Q_t$ to it. GDN and KDA fix $P_t\equiv cI$ and $Q_t=0$: the
+  gain becomes the constant $\beta_t k_t$ and the transition $D_t(x_t)$ never sees the state
+  --- a \emph{first-order} filter that discards second-order (covariance) information.
+
+  \item \textbf{Cheap second order: a diagonal covariance.} The full $d_k\times d_k$
+  covariance is too costly to carry, but its \emph{diagonal} is cheap, per-channel, and
+  matches the shape of $\alpha_t$: with $P_t\approx\diag(p_t)$, $p_t$ tracks per-channel
+  accumulated key energy. A state-dependent transition $D_t=\diag(\alpha(x_t,S_{t-1}))$
+  \eqref{eq:sdf} that reads this energy from $S_{t-1}$ is exactly a diagonal Kalman/RLS
+  filter --- decaying saturated, redundant directions while preserving sparse, long-lived
+  ones.
+
+  \item \textbf{Adaptive drift.} Letting the process (the forgetting) track the innovation
+  $v_t-(D_t S_{t-1})^{\tr}k_t$ --- forget fast when surprised, retain when predictions hold
+  --- is the classic adaptive Kalman filter, provably better for a non-stationary memory.
+  It is retention that depends on what is stored \emph{versus} what arrives.
+
+\end{itemize}
+
+\noindent\textbf{Thesis.} GDN and KDA are Kalman filters with the covariance frozen and the
+transition read from the input alone --- a first-order approximation, empirically mismatched
+to the low-rank, capacity-under-utilized memory we measure. State-dependent forgetting
+\eqref{eq:sdf} restores a cheap diagonal second-order (Kalman/RLS) filter that adapts
+\emph{what it forgets} to what the memory holds: decaying redundant, saturated directions
+while preserving sparse, long-lived ones.
 
 
 \bibliography{main}
 \bibliographystyle{plainnat}
+
+
+\appendix
+
+% =============================================================================
+\section{Background: the Kalman filter}
+\label{app:kalman}
+
+The Kalman filter is the optimal recursive estimator for a linear--Gaussian
+state-space model; \S\ref{sec:kalman} casts the linear-attention memory as one
+instance. We recall the classical form and its specializations here.
+
+\paragraph{Linear--Gaussian state-space model.}
+A hidden state $x_t\in\R^n$ evolves and is observed through
+\begin{equation}
+\begin{aligned}
+  x_t &= F_t x_{t-1} + w_t, & w_t &\sim \N(0,Q_t)\quad\text{(process / dynamics)},\\[2pt]
+  y_t &= H_t x_t + e_t,      & e_t &\sim \N(0,R_t)\quad\text{(observation)},
+\end{aligned}
+\label{eq:kf-ssm}
+\end{equation}
+with transition $F_t$, observation map $H_t$, and independent zero-mean Gaussian
+process and measurement noise of covariance $Q_t$ and $R_t$. Given $y_{1:t}$ the
+posterior over the state is Gaussian, $p(x_t\mid y_{1:t})=\N(\hat x_t,P_t)$, and the
+filter propagates its mean $\hat x_t$ and covariance $P_t$.
+
+\paragraph{The filtering recursion.}
+Each step is a \emph{predict} (time update) then an \emph{update} (measurement update):
+\begin{equation}
+\begin{aligned}
+  \text{predict:}\quad & \hat x_t^- = F_t \hat x_{t-1}, & P_t^- &= F_t P_{t-1} F_t^{\tr} + Q_t,\\[2pt]
+  \text{update:}\quad  & \hat x_t = \hat x_t^- + K_t\,\nu_t, & P_t &= (I - K_t H_t)\,P_t^-,
+\end{aligned}
+\label{eq:kf-rec}
+\end{equation}
+driven by the \emph{innovation} (prediction error) and \emph{Kalman gain}
+\begin{equation}
+  \nu_t = y_t - H_t \hat x_t^-, \qquad
+  K_t = P_t^- H_t^{\tr}\,\Sigma_t^{-1}, \qquad
+  \Sigma_t = H_t P_t^- H_t^{\tr} + R_t ,
+  \label{eq:kf-gain}
+\end{equation}
+where $\Sigma_t$ is the innovation covariance. The gain weighs new evidence against
+the prior by relative uncertainty: $K_t$ is large when the prior is uncertain ($P_t^-$
+large) or the measurement reliable ($R_t$ small), and small otherwise.
+
+\paragraph{Optimality.}
+For a linear--Gaussian model \eqref{eq:kf-ssm} the filter is exact: $\hat x_t$ is the
+posterior mean, simultaneously the minimum-mean-square-error and maximum-a-posteriori
+estimate. Without Gaussianity it remains the best \emph{linear} unbiased estimator. It
+is thus the optimal way to fuse a drifting prior with streaming observations.
+
+\paragraph{Special case: recursive least squares.}
+Take a \emph{static} state ($F_t=I$, $Q_t=0$) observed through a regressor,
+$y_t=\phi_t^{\tr}\theta+e_t$ (so $H_t=\phi_t^{\tr}$, scalar $R_t=r$). Then
+\eqref{eq:kf-rec}--\eqref{eq:kf-gain} reduce to \emph{recursive least squares}, which
+minimizes $\sum_{\tau\le t}\|y_\tau-\phi_\tau^{\tr}\theta\|_2^2$ online; the covariance
+$P_t=\big(\sum_{\tau\le t}\phi_\tau\phi_\tau^{\tr}\big)^{-1}$ is the inverse data Gram
+matrix. An exponential \emph{forgetting factor} $\lambda\in(0,1]$ --- weighting old
+data by $\lambda^{t-\tau}$ --- is exactly the Kalman filter with process noise
+$Q_t=(\lambda^{-1}-1)P_{t-1}$ (equivalently covariance inflation $P_t^-=P_{t-1}/\lambda$),
+letting the estimate track slowly drifting parameters. RLS is therefore the
+static-state (or random-walk) special case of the Kalman filter.
+
+% =============================================================================
+\subsection{The associative-memory Kalman filter}
+\label{app:mem-kf}
+
+\paragraph{State-space model.}
+Write the memory itself as the hidden state: it drifts between tokens and is observed, one
+noisy key--value pair at a time, through the current key,
+\begin{equation}
+\begin{aligned}
+  S_t &= D_t S_{t-1} + W_t, & W_t &\sim\N(0,Q_t),\\[2pt]
+  v_t &= S_t^{\tr}k_t + e_t, & e_t &\sim\N(0,r),
+\end{aligned}
+\label{eq:mem-ssm}
+\end{equation}
+with transition/decay $D_t\in\R^{d_k\times d_k}$, drift covariance $Q_t$, and scalar
+observation noise $r$. The observation map $k_t^{\tr}$ and the dynamics $D_t$ are shared by
+all $d_v$ value channels, so the posterior factorizes across them: we track one estimate
+$S_t\in\R^{d_k\times d_v}$ and a single key-space covariance $P_t\in\R^{d_k\times d_k}$.
+
+\paragraph{Optimal solution.}
+The minimum-variance estimate is the Kalman recursion \eqref{eq:kf-rec}--\eqref{eq:kf-gain}
+specialized to \eqref{eq:mem-ssm}:
+\begin{equation}
+\begin{aligned}
+  \text{predict:}\quad & S_t^- = D_t S_{t-1}, & P_t^- &= D_t P_{t-1} D_t^{\tr} + Q_t,\\[2pt]
+  \text{update:}\quad  & S_t = S_t^- + \kappa_t\,(v_t - S_t^{-\tr}k_t)^{\tr}, & P_t &= (I - \kappa_t k_t^{\tr})P_t^-,
+\end{aligned}
+\label{eq:mem-kf}
+\end{equation}
+with gain $\kappa_t = P_t^- k_t/(r + k_t^{\tr}P_t^- k_t)$. In the static-state limit
+($D_t=I$, $Q_t=0$) the estimate has the closed weighted-least-squares form
+\begin{equation}
+  S_t = P_t \sum_{\tau\le t}\gamma_{t,\tau}\,k_\tau v_\tau^{\tr},
+  \qquad
+  P_t = \Big(\sum_{\tau\le t}\gamma_{t,\tau}\,k_\tau k_\tau^{\tr}+P_0^{-1}\Big)^{-1},
+  \label{eq:mem-wls}
+\end{equation}
+which \eqref{eq:mem-kf} computes online; the gain $\kappa_t$ is a data- and state-dependent
+write strength that replaces the delta rule's fixed $\beta_t k_t$.
+
+\paragraph{Why it resists parallelization.}
+The delta-rule family trains in parallel because its per-token update is an \emph{affine}
+map of the state, $S_t=A_t S_{t-1}+b_t$, whose coefficients
+$A_t=(I-\beta_t k_t k_t^{\tr})D_t$ and $b_t=\beta_t k_t v_t^{\tr}$ depend on the \emph{inputs
+alone}; a chunk of such maps composes into dense matmuls (the WY / chunked scan). The
+optimal filter \eqref{eq:mem-kf} breaks this on two counts. First, the covariance obeys a
+\emph{Riccati recursion} $P_t=(I-\kappa_t k_t^{\tr})(D_t P_{t-1}D_t^{\tr}+Q_t)$ that is
+nonlinear (rational) in $P_{t-1}$ and has no closed-form chunk composition --- it must be
+iterated token by token. Second, the gain $\kappa_t$ depends on $P_{t-1}$, so the state
+coefficient $A_t$ depends on the \emph{accumulated} covariance rather than the current
+input, and the recurrence is no longer a fixed linear scan. (Letting $D_t$ or $Q_t$ depend
+on $S_{t-1}$ compounds this, making even the predict step nonlinear.) On top of the
+sequential dependence, the covariance is $d_k\times d_k$: $O(d_k^2)$ state and work per
+step, versus the delta family's $O(d_k d_v)$ matmuls.
+
+\paragraph{Parallelizable relaxations.}
+Parallel training needs the per-token coefficients to be either input-only or computable by
+an \emph{associative scan} (a prefix operation). Several general relaxations recover this
+while keeping some of the second-order/state dependence the delta family discards:
+\begin{itemize}[leftmargin=1.4em,itemsep=3pt,topsep=2pt]
+  \item \textbf{Structured covariance.} Restrict $P_t$ to a cheap form. A diagonal
+  $P_t=\diag(p_t)$ decouples the Riccati into $d_k$ scalar recursions ($O(d_k)$ rather than
+  $O(d_k^2)$); a scalar $P_t=c_t I$ collapses it to one recursion and a per-step scalar gain
+  $\beta_t=c_t/(r+c_t)$; a diagonal-plus-low-rank $P_t$ interpolates.
+  \item \textbf{Gain from prefix statistics.} Replace the exact Riccati by a gain that is a
+  pointwise function of \emph{cumulative} quantities a scan can produce --- e.g.\ a running
+  key energy $\sum_{\tau\le t}\gamma_{t,\tau}k_\tau k_\tau^{\tr}$ (or its diagonal), or an
+  EMA of the innovation. The prefix-sum is parallel; the nonlinearity is applied pointwise.
+  \item \textbf{Chunk-wise freezing.} Hold the covariance/gain (and any state-dependent
+  transition) fixed within a chunk at its chunk-start value, updating it only across chunks.
+  Intra-chunk the update is the fixed-gain delta rule (parallel matmuls); inter-chunk a short
+  sequential pass carries $P$. This interpolates between the delta family (never update) and
+  the exact filter (chunk size one), mirroring mini-batch test-time training.
+  \item \textbf{Learned surrogate.} Replace the Riccati solution by a small learned map from
+  cheap, parallelizable features (the input, prefix statistics, the innovation) to the gain
+  and transition --- a parametric stand-in for the second-order recursion, trained end to
+  end. The state-dependent gates of \S\ref{sec:method} are one member of this class.
+\end{itemize}
+Each trades fidelity to the Kalman optimum for parallelism and cost; the delta family is the
+extreme that freezes the covariance entirely, and richer choices move back toward the optimum
+along one of these axes.
+
+
+% =============================================================================
+\subsection{Associative memory as recursive least squares}
+\label{app:mem-rls}
+
+\paragraph{Online least-squares objective.}
+Dropping the drift ($D_t=I$, $Q_t=0$) reduces the filter of \S\ref{app:mem-kf} to estimating
+a \emph{fixed} memory from streaming observations --- ridge-regularized, recency-weighted
+least squares,
+\begin{equation}
+  S_t = \argmin_{S}\ \tfrac12\sum_{\tau\le t}\lambda^{t-\tau}\big\|S^{\tr}k_\tau-v_\tau\big\|_2^2
+        + \tfrac12\lambda^{t}\mu\|S\|_F^2 ,
+  \label{eq:rls-obj}
+\end{equation}
+with forgetting factor $\lambda\in(0,1]$ and ridge $\mu>0$ (a decaying prior); this is the
+static-state case of \eqref{eq:mem-wls}.
+
+\paragraph{The RLS recursion.}
+Zeroing the gradient gives the normal equations $C_t S_t = B_t$ with the \emph{information
+matrix} and target
+\begin{equation}
+  C_t = \sum_{\tau\le t}\lambda^{t-\tau}k_\tau k_\tau^{\tr} + \lambda^{t}\mu I,
+  \qquad
+  B_t = \sum_{\tau\le t}\lambda^{t-\tau}k_\tau v_\tau^{\tr},
+  \label{eq:rls-info}
+\end{equation}
+both accumulating linearly, $C_t=\lambda C_{t-1}+k_t k_t^{\tr}$ and
+$B_t=\lambda B_{t-1}+k_t v_t^{\tr}$. With $P_t=C_t^{-1}$, the Sherman--Morrison identity gives
+the classical \emph{recursive least squares} update
+\begin{equation}
+\begin{aligned}
+  g_t &= \frac{P_{t-1}k_t}{\lambda+k_t^{\tr}P_{t-1}k_t}, \\[3pt]
+  S_t &= S_{t-1}+g_t\,(v_t-S_{t-1}^{\tr}k_t)^{\tr}, \\[3pt]
+  P_t &= \lambda^{-1}\big(P_{t-1}-g_t k_t^{\tr}P_{t-1}\big),
+\end{aligned}
+\label{eq:rls-rec}
+\end{equation}
+the exact minimizer of \eqref{eq:rls-obj} computed online.
+
+\paragraph{RLS is online Newton.}
+Since $g_t=P_t k_t$, the update \eqref{eq:rls-rec} is a \emph{preconditioned} gradient step on
+the per-token recall loss $\mc L_t(S)=\tfrac12\|S^{\tr}k_t-v_t\|_2^2$,
+\begin{equation}
+  S_t = S_{t-1} - P_t\,\nabla_{\!S}\mc L_t(S_{t-1}), \qquad P_t = C_t^{-1},
+  \label{eq:rls-newton}
+\end{equation}
+whose preconditioner $P_t$ is the inverse accumulated Hessian --- so RLS is \emph{online
+Newton} (a natural-gradient step). The delta-rule family replaces $P_t$ by a fixed
+$\beta_t I$: \emph{online SGD}, the first-order ($P=I$) approximation of this second-order
+($P=C^{-1}$) optimum, with GDN/KDA adding an $\ell_2$ shrinkage (the decay) on top.
+
+\paragraph{Information form: a linear accumulator.}
+The obstruction to parallel training is \emph{not} the accumulation: by \eqref{eq:rls-info}
+the information matrix $C_t$ (and $B_t$) is a decayed cumulative sum --- a prefix scan, hence
+parallelizable. The nonlinearity is confined to the per-step inverse $P_t=C_t^{-1}$ (or
+$S_t=C_t^{-1}B_t$). Carrying $C_t$ rather than $P_t$ --- the \emph{information} form --- is
+therefore the parallel-friendly representation: the state accumulates linearly, and only the
+read-out inverts.
+
+\paragraph{Diagonal RLS is parallelizable.}
+Restrict the information matrix to its diagonal, $C_t\approx\diag(c_t)$, with per-channel
+accumulated key energy $c_t=\lambda c_{t-1}+k_t\odot k_t$. Both $c_t$ and $B_t$ are decayed
+cumulative sums (scans) and the inverse becomes pointwise, so
+\begin{equation}
+  S_t = \diag(c_t)^{-1}B_t, \qquad\text{i.e.}\quad (S_t)_{i,:}=\frac{(B_t)_{i,:}}{c_{t,i}} .
+  \label{eq:diag-rls}
+\end{equation}
+This is two scans and a per-channel normalization --- fully parallelizable, $O(d_k)$ per step
+--- and realizes the gain-from-prefix-statistics option of \S\ref{app:mem-kf}: a per-channel
+Newton preconditioner (inverse key energy) that keeps the chunked scan intact, unlike the
+full $d_k\times d_k$ RLS whose dense inverse does not.
 
 
 \end{document}
