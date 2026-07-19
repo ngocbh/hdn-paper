@@ -178,7 +178,12 @@ precisely what one state cannot provide and $n$ mixed streams can.
 \paragraph{The depth axis: hyper-connections.} With $s$ residual streams, a
 hyper-connection layer updates
 \begin{equation}
-  x_{l+1} \;=\; \Hres\, x_l \;+\; \Hpost^{\tr}\, F\!\big(\Hpre\, x_l,\, W_l\big),
+  x^{(l+1)} \;=\; x^{(l)} \;+\; F\!\big(x^{(l)},\, W^{(l)}\big),
+  \label{eq:hc}
+\end{equation}
+
+\begin{equation}
+  x^{(l+1)} \;=\; \Hres\, x^{(l)} \;+\; \Hpost^{\tr}\, F\!\big(\Hpre\, x^{(l)},\, W^{(l)}\big),
   \label{eq:hc}
 \end{equation}
 where $\Hres \in \R^{s\times s}$ mixes streams and $\Hpre,\Hpost$ are
