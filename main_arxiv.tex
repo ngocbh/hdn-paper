@@ -66,7 +66,12 @@
   \citep{schlag2021linear,yang2024parallelizing} reads what is stored at $k_t$ and
   writes back only the correction,
   \begin{equation}
-    S_t = (I-\beta_t k_t k_t^{\tr})\,S_{t-1} + \beta_t k_t v_t^{\tr},
+  \begin{aligned}
+    S_t
+      &= S_{t-1} + \beta_t k_t\,(v_t-S_{t-1}^{\tr}k_t)^{\tr}
+        \qquad\text{(canonical residual form)}\\
+      &= (I-\beta_t k_t k_t^{\tr})\,S_{t-1} + \beta_t k_t v_t^{\tr},
+  \end{aligned}
     \label{eq:deltanet}
   \end{equation}
   so a repeated key is \emph{overwritten} rather than accumulated. It still never
@@ -77,7 +82,13 @@
   contexts. To actually \emph{forget}, Gated DeltaNet shrinks the whole state by a
   data-dependent decay $\alpha_t\in(0,1)$ before each write \citep{yang2024gdn},
   \begin{equation}
-    S_t = \alpha_t\,(I-\beta_t k_t k_t^{\tr})\,S_{t-1} + \beta_t k_t v_t^{\tr},
+  \begin{aligned}
+    S_t
+      &= \alpha_t S_{t-1}
+         + \beta_t k_t\,(v_t-(\alpha_t S_{t-1})^{\tr}k_t)^{\tr}
+        \qquad\text{(canonical residual form)}\\
+      &= \alpha_t\,(I-\beta_t k_t k_t^{\tr})\,S_{t-1} + \beta_t k_t v_t^{\tr},
+  \end{aligned}
     \label{eq:gdn}
   \end{equation}
   so untouched memories fade geometrically: the state stays bounded and recent tokens
@@ -89,7 +100,13 @@
   immediately. KDA replaces the scalar with a diagonal $D_t=\diag(\alpha_t)$, giving each
   channel its own decay rate \citep{kimiteam2025kimilinear},
   \begin{equation}
-    S_t = (I-\beta_t k_t k_t^{\tr})\,D_t\,S_{t-1} + \beta_t k_t v_t^{\tr},
+  \begin{aligned}
+    S_t
+      &= D_t S_{t-1}
+         + \beta_t k_t\,(v_t-(D_t S_{t-1})^{\tr}k_t)^{\tr}
+        \qquad\text{(canonical residual form)}\\
+      &= (I-\beta_t k_t k_t^{\tr})\,D_t\,S_{t-1} + \beta_t k_t v_t^{\tr},
+  \end{aligned}
     \label{eq:kda}
   \end{equation}
   so one head spans a \emph{mixture of timescales} --- the most expressive forgetting in
@@ -99,161 +116,347 @@
 
 
 % =============================================================================
-\subsection{A state-space view: memory as Kalman filtering}
-\label{sec:kalman}
+\section{Associative Memory as a State-Space Model}
+\label{sec:memory-kalman}
 
-\begin{itemize}[leftmargin=1.4em,itemsep=5pt,topsep=2pt]
+\subsection{Formulation}
+\label{sec:memory-formulation}
 
-  \item \textbf{Memory as a hidden state.} Treat the memory $S\in\R^{d_k\times d_v}$ as an
-  \emph{associative map} $S\colon k\mapsto v$ that must be estimated online: each token is a
-  noisy readout of it, and between tokens the memory itself drifts,
-  \begin{equation}
-  \begin{aligned}
-    S_t &= D_t\,S_{t-1} + w_t, & w_t &\sim \N(0,Q_t)\quad\text{(process: decay + drift)},\\[2pt]
-    v_t &= S_t^{\tr}k_t + e_t, & e_t &\sim \N(0,r I)\quad\text{(observation: noisy recall)}.
-  \end{aligned}
-  \label{eq:ssm}
-  \end{equation}
-  Estimating $S_t$ from the stream $\{(k_\tau,v_\tau)\}$ is \emph{Kalman filtering}; the
-  read $o_t=S_t^{\tr}q_t$ queries the estimate.
+The recurrent state in linear attention is not just a cache compression; it is an
+\emph{estimate} of an associative memory. At time $t$, the memory is a matrix
+$S_t\in\R^{d_k\times d_v}$ that defines the associative map
+\begin{equation}
+  \mc M_t\colon \R^{d_k}\to\R^{d_v},\qquad \mc M_t(k)=S_t^{\tr}k .
+  \label{eq:assoc-map}
+\end{equation}
+The query read is $o_t=\mc M_t(q_t)=S_t^{\tr}q_t$. The streaming token provides one
+supervised measurement of this map: under key $k_t$, the memory should return value $v_t$,
+i.e.\ $\mc M_t(k_t)\approx v_t$. This is exactly the shape of a state-space model: an
+unobserved state evolves over time, and each token reveals a noisy linear projection of it.
 
-  \item \textbf{Forget $=$ predict, write $=$ update.} The filter carries the estimate
-  $S_{t-1}$ and a key-space covariance $P_{t-1}\in\R^{d_k\times d_k}$ (uncertainty, shared
-  across value channels) and, per token, runs a \emph{predict} then an \emph{update}:
-  \begin{equation}
-  \begin{aligned}
-    \text{predict (forget):}\quad & S_t^- = D_t S_{t-1},\qquad P_t^- = D_t P_{t-1}D_t^{\tr}+Q_t,\\[3pt]
-    \text{update (write):}\quad & \kappa_t = \frac{P_t^- k_t}{r+k_t^{\tr}P_t^- k_t},\qquad
-      S_t = S_t^- + \kappa_t\,(v_t-S_t^{-\tr}k_t)^{\tr},
-  \end{aligned}
-  \label{eq:kf}
-  \end{equation}
-  closed by the covariance update $P_t=(I-\kappa_t k_t^{\tr})P_t^-$. \textbf{Forgetting is
-  the predict step} --- the transition $D_t$ (and drift $Q_t$) that discounts the past;
-  \textbf{writing is the measurement update} --- a delta correction $v_t-S_t^{-\tr}k_t$
-  scaled by the Kalman gain $\kappa_t$.
+\paragraph{Latent state.}
+Let $S_t^\star$ be the latent associative map the recurrent state is trying to track. The
+transition describes how stored associations persist, decay, or drift before the next
+measurement arrives:
+\begin{equation}
+  S_t^\star = D_t S_{t-1}^\star + W_t,\qquad W_t\sim\N(0,Q_t).
+  \label{eq:mem-update-dynamics}
+\end{equation}
+The operator $D_t$ is the process model: it is the formal object corresponding to forgetting
+under information drift, topic drift, and other non-stationarity in the stream. For DeltaNet
+$D_t=I$; for Gated DeltaNet $D_t=\alpha_t I$; for KDA $D_t=\diag(\alpha_t)$. The process
+noise $W_t$ represents memory drift not explained by deterministic decay, while $Q_t$ is
+its covariance.
 
-  \item \textbf{The delta family is a fixed-gain filter.} Freeze the covariance
-  ($P_t\equiv cI$, $Q_t=0$): the gain collapses to $\kappa_t=\beta_t k_t$ (with
-  $\beta_t=c/(r+c)$ for the unit-norm keys used in practice) and \eqref{eq:kf} becomes
-  \begin{equation}
-    S_t = (I-\beta_t k_t k_t^{\tr})\,D_t\,S_{t-1} + \beta_t k_t v_t^{\tr},
-    \label{eq:family}
-  \end{equation}
-  the delta rule \eqref{eq:deltanet} with transition $D_t$: DeltaNet ($D_t=I$), Gated
-  DeltaNet ($D_t=\alpha_t I$), KDA ($D_t=\diag(\alpha_t)$). They are Kalman filters that
-  \emph{discard the covariance} and read the transition from the input alone
-  (Table~\ref{tab:fastweight}).
+\paragraph{Observation.}
+The current key reads one direction of the latent map. The observed value is
+\begin{equation}
+  v_t = S_t^{\star\tr}k_t + e_t,\qquad e_t\sim\N(0,r I).
+  \label{eq:mem-update-observation}
+\end{equation}
+Thus $k_t^{\tr}$ is the observation map and $v_t$ is the measurement. The noise term $e_t$
+captures the part of the token value that should \emph{not} be treated as a clean memory
+target. In an LLM, $v_t$ is a contextual feature produced from a noisy token embedding,
+local syntax, position, layer mixing, and finite model capacity; not all of it is a stable
+fact that can be stored under key $k_t$. The covariance $rI$ sets how reliable this value
+observation is: small $r$ means trust the token and write strongly, while large $r$ means
+treat much of $v_t$ as context-specific noise.
 
-  \item \textbf{Two things they throw away.} A frozen covariance means a fixed gain: the
-  write never adapts to how certain or saturated each direction already is. And an
-  input-only transition $D_t=D_t(x_t)$ decays every channel by a rule blind to \emph{what is
-  stored}. Together these drive the state to low rank with short horizons, leaving most of
-  its capacity unused.
-
-\end{itemize}
-
-
-\begin{table}[t]
-\centering
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{@{}llll@{}}
-\toprule
-Method & Transition $D_t$ (forget) & Kalman gain $\kappa_t$ (write) & State update $S_t$ \\
-\midrule
-Linear attention
-  & $I$
-  & $k_t$ \ (no correction)
-  & $S_{t-1} + k_t v_t^{\tr}$ \\[3pt]
-DeltaNet
-  & $I$
-  & $\beta_t k_t$ \ (fixed)
-  & $(I-\beta_t k_t k_t^{\tr})S_{t-1} + \beta_t k_t v_t^{\tr}$ \\[3pt]
-Gated DeltaNet
-  & $\alpha_t I$
-  & $\beta_t k_t$ \ (fixed)
-  & $\alpha_t(I-\beta_t k_t k_t^{\tr})S_{t-1} + \beta_t k_t v_t^{\tr}$ \\[3pt]
-KDA
-  & $\diag(\alpha_t)$
-  & $\beta_t k_t$ \ (fixed)
-  & $(I-\beta_t k_t k_t^{\tr})D_t S_{t-1} + \beta_t k_t v_t^{\tr}$ \\[3pt]
-\textbf{Ours}
-  & $\diag(\alpha(x_t,S_{t-1}))$
-  & $\beta_t k_t$
-  & $(I-\beta_t k_t k_t^{\tr})\,D_t(S_{t-1})\,S_{t-1} + \beta_t k_t v_t^{\tr}$ \\[3pt]
-\emph{Kalman-optimal}
-  & $D_t$
-  & $\dfrac{P_t^- k_t}{r+k_t^{\tr}P_t^- k_t}$
-  & $D_t S_{t-1} + \kappa_t\,(v_t-(D_t S_{t-1})^{\tr}k_t)^{\tr}$ \\
-\bottomrule
-\end{tabular}%
-}
-\caption{\textbf{The delta-rule family as Kalman filters.} Each token runs a \emph{predict}
-step (forget: transition $D_t$) and a \emph{measurement update} (write: a delta correction
-scaled by the gain $\kappa_t$), cf.\ \eqref{eq:kf}. Prior methods \emph{freeze the
-covariance}, so the gain is the fixed $\beta_t k_t$ and the transition $D_t=D_t(x_t)$ is read
-from the input alone; they differ only in $D_t$ --- identity (DeltaNet), scalar $\alpha_t I$
-(Gated DeltaNet), diagonal $\diag(\alpha_t)$ (KDA). Linear attention drops even the
-correction. \textbf{Ours} makes the transition \emph{state-dependent}, $D_t=D_t(S_{t-1})$;
-the \emph{Kalman-optimal} filter further adapts the gain through the tracked covariance
-$P_t$. Normalizers, kernel maps, and output gates are omitted for readability.}
-\label{tab:fastweight}
-\end{table}
+\paragraph{Filtering problem.}
+The state-space model asks for an online filter: given the previous memory estimate and the
+new noisy measurement $(k_t,v_t)$, update the associative memory so it tracks the
+non-stationary stream. Forgetting is not an auxiliary gate added to attention; it is part of
+the state dynamics that predict how memory changes before the next measurement arrives.
 
 
 % =============================================================================
-\section{State-Dependent Forgetting}
-\label{sec:method}
+\subsection{Kalter Filtering}
+\label{sec:kalter-filtering}
 
-\begin{itemize}[leftmargin=1.4em,itemsep=5pt,topsep=2pt]
+The state-space model in \S\ref{sec:memory-formulation} gives a principled solution to the
+filtering problem: combine the prior memory estimate with each new measurement so that the
+current state estimate has minimal uncertainty. Under the linear--Gaussian assumptions in
+\eqref{eq:mem-update-dynamics} and \eqref{eq:mem-update-observation}, this becomes the
+Kalman filtering update. The filter carries $S_t$ as the current memory estimate, and a
+covariance $P_t\in\R^{d_k\times d_k}$ tracks uncertainty over key directions in that
+estimate.
 
-  \item \textbf{Let the process model read the memory.} We make the transition ---
-  equivalently the forgetting --- depend on the current state,
-  \begin{equation}
-    D_t=\diag\big(\alpha(x_t,\,S_{t-1})\big),
-    \qquad\text{(prior work: }\alpha(x_t)\text{ alone)},
-    \label{eq:sdf}
-  \end{equation}
-  which recovers KDA when $\alpha$ ignores $S_{t-1}$, so it strictly generalizes the family.
-  This is not ad hoc: \eqref{eq:sdf} is the first step from the frozen-covariance filter
-  \eqref{eq:family} back toward the \emph{exact} Kalman filter that GDN and KDA approximate.
+Tracking $P_t$ is necessary because each token observes the associative map only at one key
+direction $k_t$, and the value $v_t$ is noisy. After many tokens, some key directions are
+well supported by past measurements, while others remain uncertain or have become stale
+because of drift. High uncertainty means the current token should be allowed to edit the
+memory strongly; low uncertainty means the prior memory should resist a noisy measurement.
 
-\end{itemize}
+\paragraph{Predict: forgetting before writing.}
+Before observing $(k_t,v_t)$, the filter predicts how the state evolves from step $t-1$ to
+step $t$:
+\begin{equation}
+  \widehat{S}_t = D_t S_{t-1},
+  \qquad
+  \widehat{P}_t = D_tP_{t-1}D_t^{\tr}+Q_t .
+  \label{eq:kalter-predict}
+\end{equation}
+This is the formal role of forgetting. The transition $D_t$ moves the associative memory
+forward in time, while $Q_t$ increases uncertainty for drift that the transition cannot
+explain.
+
+\paragraph{Read: compare the prediction to the token.}
+The predicted value under the current key is
+\begin{equation}
+  \hat v_t = \widehat{S}_t^{\tr}k_t,
+  \qquad
+  \delta_t = v_t-\hat v_t .
+  \label{eq:kalter-innovation}
+\end{equation}
+The vector $\delta_t$ is the innovation: the part of the observed value that the predicted
+memory does not explain.
+
+\paragraph{Objective: minimize posterior uncertainty.}
+After observing $(k_t,v_t)$, we update the predicted memory state by writing the innovation
+back into memory. The only remaining choice is the write direction $\kappa_t$: it controls
+which key-space direction receives the residual. For a candidate $\kappa_t$, the memory
+update has the form
+\begin{equation}
+  S_t=\widehat{S}_t+\kappa_t\big(v_t-\widehat{S}_t^{\tr}k_t\big)^{\tr}.
+  \label{eq:kalman-residual-write}
+\end{equation}
+The Kalman objective chooses the write direction that leaves the updated memory estimate as
+certain as possible, i.e.\ the one that minimizes posterior uncertainty after the
+measurement:
+\begin{equation}
+  \kappa_t^\star
+  =
+  \arg\min_{\kappa_t}
+  \Trace\!\left(P_t(\kappa_t)\right),
+  \qquad
+  P_t(\kappa_t)
+  =
+  (I-\kappa_t k_t^{\tr})\widehat{P}_t(I-\kappa_t k_t^{\tr})^{\tr}
+  + r\,\kappa_t\kappa_t^{\tr}.
+  \label{eq:kalman-tracking-objective}
+\end{equation}
+
+\paragraph{Update: write the uncertainty-weighted residual.}
+Solving the objective in \eqref{eq:kalman-tracking-objective} gives the Kalman gain, which
+decides how much to trust the token relative to the current memory:
+\begin{equation}
+  \kappa_t = \frac{\widehat{P}_t k_t}{r+k_t^{\tr}\widehat{P}_t k_t}.
+  \label{eq:kalter-gain}
+\end{equation}
+The optimal filtering update writes only the innovation, along this uncertainty-weighted key
+direction:
+\begin{equation}
+  S_t = \widehat{S}_t+\kappa_t\delta_t^{\tr},
+  \qquad
+  P_t=(I-\kappa_tk_t^{\tr})\widehat{P}_t .
+  \label{eq:kalter-update}
+\end{equation}
+Finally, the layer reads from the filtered memory,
+\begin{equation}
+  o_t = S_t^{\tr}q_t .
+  \label{eq:kalter-read}
+\end{equation}
+This filtering update decomposes memory editing into the three operations the model needs:
+predict the drifting memory, measure the prediction error at the current key, and write back
+the residual in proportion to uncertainty.
+
+\begin{tcolorbox}[
+  title={Kalman Optimal Update},
+  colback=blue!7,
+  colbacktitle=blue!22,
+  colframe=blue!45!black,
+  coltitle=black,
+  fonttitle=\bfseries,
+  boxrule=0.4pt,
+  arc=1pt,
+  left=5pt,
+  right=5pt,
+  top=5pt,
+  bottom=5pt
+]
+Given the memory estimate $S_{t-1}$ and uncertainty $P_{t-1}$ before token $t$, the
+Kalman filter first predicts how the memory drifts under the process model $D_t$ and
+process noise $Q_t$. After observing the key--value pair $(k_t,v_t)$, it writes only the
+value residual $v_t-\widehat{S}_t^{\tr}k_t$ along the uncertainty-weighted direction
+$\kappa_t$.
+\begin{equation}
+\begin{aligned}
+  \text{predict:}\quad
+  \widehat{S}_t &= D_t S_{t-1},
+  &
+  \widehat{P}_t &= D_t P_{t-1}D_t^{\tr}+Q_t,
+  \\[3pt]
+  \text{update:}\quad
+  S_t &= \widehat{S}_t+\kappa_t\big(v_t-\widehat{S}_t^{\tr}k_t\big)^{\tr},
+  &
+  P_t &= (I-\kappa_t k_t^{\tr})\widehat{P}_t .
+  \\[3pt]
+  \text{where}\quad
+  \kappa_t &= \frac{\widehat{P}_t k_t}{r+k_t^{\tr}\widehat{P}_t k_t}.
+\end{aligned}
+\label{eq:kalman-optimal-update-box}
+\end{equation}
+\end{tcolorbox}
+
+\subsection{Delta-rule models as fixed-gain Kalman filters}
+\label{sec:delta-family-kalman}
+
+The update above separates two modeling choices: the transition $D_t$, which predicts how
+the memory changes before the token is written, and the gain $\kappa_t$, which decides the
+key-space direction and strength of the residual write. Delta-rule linear attention is the
+fixed-gain special case of this filter. If we discard the covariance recursion and use an
+isotropic surrogate $\widehat{P}_t\approx c_t I$ for the predicted uncertainty, then
+\begin{equation}
+  \kappa_t
+  =
+  \frac{\widehat{P}_t k_t}{r+k_t^{\tr}\widehat{P}_t k_t}
+  \approx
+  \frac{c_t}{r+c_t\|k_t\|_2^2}\,k_t
+  \equiv
+  \beta_t k_t .
+  \label{eq:fixed-gain-approx}
+\end{equation}
+For normalized keys, the exact Kalman gain therefore collapses to the scalar write strength
+$\beta_t$ used by the delta-rule family. Substituting $\kappa_t=\beta_t k_t$ into the
+Kalman update gives the shared fixed-gain residual form
+\begin{equation}
+\begin{aligned}
+  S_t
+  &= D_t S_{t-1}
+     + \beta_t k_t\big(v_t-(D_tS_{t-1})^{\tr}k_t\big)^{\tr} \\
+  &= (I-\beta_t k_t k_t^{\tr})D_tS_{t-1}+\beta_t k_t v_t^{\tr}.
+\end{aligned}
+\label{eq:fixed-gain-delta-family}
+\end{equation}
+DeltaNet, Gated DeltaNet, and KDA are obtained by choosing different process models:
+\begin{equation}
+  \text{DeltaNet: }D_t=I,\qquad
+  \text{GDN: }D_t=\alpha_t I,\qquad
+  \text{KDA: }D_t=\diag(\alpha_t).
+  \label{eq:delta-family-transitions}
+\end{equation}
+Thus the three models share the same measurement model and residual write; they differ only
+in how the memory is predicted before the write. Relative to the Kalman optimal update, they
+freeze the uncertainty dynamics and replace the adaptive gain with the fixed first-order
+direction $\beta_t k_t$. This does not require assuming $Q_t=0$; rather, the delta-rule
+approximation ignores the covariance prediction
+$\widehat{P}_t=D_tP_{t-1}D_t^{\tr}+Q_t$ altogether, so the gain no longer depends on the
+process model $D_t$ or the drift uncertainty $Q_t$.
+
 
 % =============================================================================
-\subsection{Toward the Kalman-optimal filter}
-\label{sec:kalman-opt}
-% TODO(ngoc): cite Kalman/RLS (e.g.\ Haykin), Longhorn, and Titans for positioning.
+\section{Kalman Linear Attention}
+\label{sec:kla}
 
-\begin{itemize}[leftmargin=1.4em,itemsep=5pt,topsep=2pt]
+The Kalman optimal update in \eqref{eq:kalman-optimal-update-box} is the target, but the
+exact recursion is not directly compatible with fully parallel linear attention. Parallel
+training relies on a scan form
+\begin{equation}
+  S_t=A_tS_{t-1}+b_t,
+  \label{eq:parallel-affine-scan}
+\end{equation}
+where the per-token coefficients $A_t$ and $b_t$ are input-only, or are computable from
+associative prefix statistics. Exact Kalman filtering breaks this structure because
+$P_t$ follows a Riccati recursion and the gain $\kappa_t$ depends on the accumulated
+posterior uncertainty. Kalman Linear Attention therefore asks which parts of the optimal
+update can be relaxed while preserving the scan.
 
-  \item \textbf{What the delta family froze.} The exact filter \eqref{eq:kf} tracks the
-  covariance $P_t$ and adapts both the gain $\kappa_t$ and the predicted uncertainty
-  $P_t^-=D_t P_{t-1}D_t^{\tr}+Q_t$ to it. GDN and KDA fix $P_t\equiv cI$ and $Q_t=0$: the
-  gain becomes the constant $\beta_t k_t$ and the transition $D_t(x_t)$ never sees the state
-  --- a \emph{first-order} filter that discards second-order (covariance) information.
+\paragraph{Direction A: richer process models.}
+One route is to keep the residual write fixed or cheap, but improve the prediction
+$\widehat{S}_t=D_tS_{t-1}$. This treats the main modeling problem as learning how memory
+should drift before the next token is written.
+\begin{enumerate}[leftmargin=1.8em,itemsep=3pt,topsep=2pt,label=\textbf{A\arabic*.}]
+  \item \textbf{Diagonal transitions.} Use $D_t=\diag(\alpha_t)$, as in KDA. This is the
+  simplest fully parallel multi-timescale process model: every channel has its own decay,
+  while the update remains an affine scan.
 
-  \item \textbf{Cheap second order: a diagonal covariance.} The full $d_k\times d_k$
-  covariance is too costly to carry, but its \emph{diagonal} is cheap, per-channel, and
-  matches the shape of $\alpha_t$: with $P_t\approx\diag(p_t)$, $p_t$ tracks per-channel
-  accumulated key energy. A state-dependent transition $D_t=\diag(\alpha(x_t,S_{t-1}))$
-  \eqref{eq:sdf} that reads this energy from $S_{t-1}$ is exactly a diagonal Kalman/RLS
-  filter --- decaying saturated, redundant directions while preserving sparse, long-lived
-  ones.
+  \item \textbf{Block-diagonal transitions.} Use
+  $D_t=\operatorname{blockdiag}(D_t^{(1)},\ldots,D_t^{(m)})$. Small blocks allow local mixing among
+  related memory channels while keeping the transition structured enough for parallel
+  composition.
 
-  \item \textbf{Adaptive drift.} Letting the process (the forgetting) track the innovation
-  $v_t-(D_t S_{t-1})^{\tr}k_t$ --- forget fast when surprised, retain when predictions hold
-  --- is the classic adaptive Kalman filter, provably better for a non-stationary memory.
-  It is retention that depends on what is stored \emph{versus} what arrives.
+  \item \textbf{Basis-rotated diagonal transitions.} Use
+  $D_t=R\diag(\alpha_t)R^{\tr}$ with a fixed or slowly changing basis $R$. Forgetting then
+  acts in learned memory directions rather than raw coordinates, but the per-token decay
+  remains diagonal in that basis.
 
-\end{itemize}
+  \item \textbf{Prefix-conditioned transitions.} Let $D_t$ depend on scan-computable
+  statistics $z_t$, such as decayed key energy or an innovation proxy, instead of depending
+  directly on the sequential state $S_{t-1}$. Then $D_t=D(x_t,z_t)$ can react to drift while
+  keeping $A_t$ available before the scan.
+\end{enumerate}
 
-\noindent\textbf{Thesis.} GDN and KDA are Kalman filters with the covariance frozen and the
-transition read from the input alone --- a first-order approximation, empirically mismatched
-to the low-rank, capacity-under-utilized memory we measure. State-dependent forgetting
-\eqref{eq:sdf} restores a cheap diagonal second-order (Kalman/RLS) filter that adapts
-\emph{what it forgets} to what the memory holds: decaying redundant, saturated directions
-while preserving sparse, long-lived ones.
+\paragraph{Direction B: parallel covariance and gain families.}
+A second route is to approximate the uncertainty $P_t$ with a family whose sufficient
+statistics are themselves parallel scans. This keeps the gain adaptive while avoiding the
+full Riccati recursion. A key constraint is that the gain should be computed from the
+predicted uncertainty, not from a transition-independent rule:
+\begin{equation}
+  \widehat{P}_t \approx \Pi\!\left(D_tP_{t-1}D_t^{\tr}+Q_t\right),
+  \qquad
+  \kappa_t =
+  \frac{\widehat{P}_t k_t}{r+k_t^{\tr}\widehat{P}_t k_t},
+  \label{eq:transition-aware-gain-family}
+\end{equation}
+where $\Pi$ projects the exact covariance prediction back into a tractable family. Without
+this prediction step, the write strength is independent of the forgetting model $D_t$. This
+is exactly the coupling ignored by fixed-gain delta-rule models: they let $D_t$ affect the
+predicted memory $\widehat{S}_t$, but not the uncertainty that determines the write gain.
+\begin{enumerate}[leftmargin=1.8em,itemsep=3pt,topsep=2pt,label=\textbf{B\arabic*.}]
+  \item \textbf{Transition-aware scalar covariance.} Set $P_t=c_tI$, but predict the scalar
+  uncertainty through $D_t$ before forming the gain. For example,
+  $\widehat{c}_t=\rho_t c_{t-1}+q_t$, where $\rho_t$ summarizes the contraction in
+  $D_tD_t^{\tr}$, e.g.\ $\rho_t=\alpha_t^2$ for GDN or an average of $\alpha_{t,i}^2$ for
+  KDA. The gain becomes
+  \begin{equation}
+    \kappa_t
+    =
+    \frac{\widehat{c}_t k_t}{r+\widehat{c}_t\|k_t\|_2^2}
+    \equiv \beta_t k_t .
+    \label{eq:scalar-transition-aware-gain}
+  \end{equation}
+  This still recovers the delta-rule direction, but the scalar write strength now knows
+  whether the memory has just been strongly forgotten.
+
+  \item \textbf{Diagonal covariance or information form.} Track a diagonal approximation
+  $P_t\approx\diag(p_t)$. With diagonal $D_t=\diag(\alpha_t)$, the prediction is
+  pointwise:
+  \begin{equation}
+    \widehat{p}_t = \alpha_t^2\odot p_{t-1}+q_t .
+    \label{eq:diag-covariance-prediction}
+  \end{equation}
+  The resulting per-channel gain is
+  \begin{equation}
+    \kappa_t
+    =
+    \frac{\widehat{p}_t\odot k_t}
+    {r+\sum_i \widehat{p}_{t,i}k_{t,i}^2},
+    \label{eq:diag-kalman-gain}
+  \end{equation}
+  which is cheap and makes the write direction process-aware. An information-form
+  implementation can track $C_t=P_t^{-1}\approx\diag(c_t)$ and recover the same prediction
+  by applying the pointwise inverse after the transition step.
+
+  \item \textbf{Block-diagonal covariance.} Track $P_t$ or $C_t=P_t^{-1}$ in small blocks.
+  This captures correlations among nearby key channels while replacing one large inverse by
+  many small inverses. The prediction remains local:
+  $\widehat{P}_t^{(j)}=D_t^{(j)}P_{t-1}^{(j)}D_t^{(j)\tr}+Q_t^{(j)}$.
+
+  \item \textbf{Diagonal-plus-low-rank covariance.} Use
+  $P_t=\diag(p_t)+U_tU_t^{\tr}$, with $p_t$ and $U_t$ produced from prefix statistics.
+  Woodbury-style reads can keep the gain tractable, while the low-rank term captures global
+  uncertainty directions missed by a diagonal approximation.
+
+  \item \textbf{Chunk-boundary covariance updates.} Update $P_t$ only at chunk boundaries,
+  while freezing the gain inside each chunk. This gives a TTT-like approximation: the
+  expensive uncertainty update is carried by a short sequential pass across chunks, but all
+  token updates within a chunk remain fixed-gain affine scans.
+\end{enumerate}
+
+The conservative path is to combine these two directions: use a scan-compatible process
+model $D_t$ together with a diagonal or block-diagonal information form for uncertainty. The
+result is not the exact Kalman filter, but it preserves the two central ingredients of the
+optimal update: a predictive memory transition and an uncertainty-weighted residual write.
 
 
 \bibliography{main}
@@ -267,7 +470,7 @@ while preserving sparse, long-lived ones.
 \label{app:kalman}
 
 The Kalman filter is the optimal recursive estimator for a linear--Gaussian
-state-space model; \S\ref{sec:kalman} casts the linear-attention memory as one
+state-space model; \S\ref{sec:memory-kalman} casts the linear-attention memory as one
 instance. We recall the classical form and its specializations here.
 
 \paragraph{Linear--Gaussian state-space model.}
@@ -346,12 +549,12 @@ The minimum-variance estimate is the Kalman recursion \eqref{eq:kf-rec}--\eqref{
 specialized to \eqref{eq:mem-ssm}:
 \begin{equation}
 \begin{aligned}
-  \text{predict:}\quad & S_t^- = D_t S_{t-1}, & P_t^- &= D_t P_{t-1} D_t^{\tr} + Q_t,\\[2pt]
-  \text{update:}\quad  & S_t = S_t^- + \kappa_t\,(v_t - S_t^{-\tr}k_t)^{\tr}, & P_t &= (I - \kappa_t k_t^{\tr})P_t^-,
+  \text{predict:}\quad & \widehat{S}_t = D_t S_{t-1}, & \widehat{P}_t &= D_t P_{t-1} D_t^{\tr} + Q_t,\\[2pt]
+  \text{update:}\quad  & S_t = \widehat{S}_t + \kappa_t\,(v_t - \widehat{S}_t^{\tr}k_t)^{\tr}, & P_t &= (I - \kappa_t k_t^{\tr})\widehat{P}_t,
 \end{aligned}
 \label{eq:mem-kf}
 \end{equation}
-with gain $\kappa_t = P_t^- k_t/(r + k_t^{\tr}P_t^- k_t)$. In the static-state limit
+with gain $\kappa_t = \widehat{P}_t k_t/(r + k_t^{\tr}\widehat{P}_t k_t)$. In the static-state limit
 ($D_t=I$, $Q_t=0$) the estimate has the closed weighted-least-squares form
 \begin{equation}
   S_t = P_t \sum_{\tau\le t}\gamma_{t,\tau}\,k_\tau v_\tau^{\tr},
@@ -398,7 +601,7 @@ while keeping some of the second-order/state dependence the delta family discard
   \item \textbf{Learned surrogate.} Replace the Riccati solution by a small learned map from
   cheap, parallelizable features (the input, prefix statistics, the innovation) to the gain
   and transition --- a parametric stand-in for the second-order recursion, trained end to
-  end. The state-dependent gates of \S\ref{sec:method} are one member of this class.
+  end. State-dependent gates are one member of this class.
 \end{itemize}
 Each trades fidelity to the Kalman optimum for parallelism and cost; the delta family is the
 extreme that freezes the covariance entirely, and richer choices move back toward the optimum
