@@ -459,6 +459,26 @@ where $\epsilon>0$ is a ridge floor. Other parameterizations can replace
 \eqref{eq:prefix-diag-uncertainty}; the requirement is that $\widehat{\ve{p}}_t$ be available
 before the memory scan.
 
+\paragraph{Parameterization.}
+The learnable per-token quantities should be the memory transition and the information
+decay. Let $\ve{x}_t$ denote the current token representation at this layer. A simple
+parameterization is to produce both gates from $\ve{x}_t$ by learned projections and map
+them into the valid ranges
+\begin{equation}
+  \ve{\alpha}_t=\sigma(\ve{W}_{\alpha}\ve{x}_t+\ve{b}_{\alpha}),
+  \qquad
+  \ve{\lambda}_t=\sigma(\ve{W}_{\lambda}\ve{x}_t+\ve{b}_{\lambda}),
+  \label{eq:kla-parameterization}
+\end{equation}
+possibly with small lower bounds for numerical stability. The vector $\ve{\alpha}_t$
+parameterizes the deterministic memory transition $\ve{D}_t=\diag(\ve{\alpha}_t)$, while
+$\ve{\lambda}_t$ parameterizes process drift through the information update
+\eqref{eq:diag-info-scan}. In this sense, $\ve{\lambda}_t$ takes over the learnable role
+of ``how strongly should this token edit memory?'' from the scalar write gate $\beta_t$
+used in GDN and KDA, but indirectly: it changes uncertainty, and then the gain
+$\ve{\kappa}_t$ becomes the actual adaptive write direction and strength. The observation
+noise $r$ can be a fixed positive scalar or a learned positive scalar per head.
+
 \paragraph{Affine memory scan.}
 Once $\ve{\kappa}_t$ is computed from prefix statistics, the memory update is again an affine
 scan:
@@ -472,6 +492,73 @@ scan:
 \end{aligned}
 \label{eq:kla-diag-affine-scan}
 \end{equation}
+
+\refstepcounter{definition}\label{prop:kalman-linear-attention}
+\begin{tcolorbox}[
+  title={Proposition~\thedefinition: Kalman Linear Attention},
+  colback=blue!7,
+  colbacktitle=blue!22,
+  colframe=blue!45!black,
+  coltitle=black,
+  fonttitle=\bfseries,
+  boxrule=0.4pt,
+  arc=1pt,
+  left=5pt,
+  right=5pt,
+  top=5pt,
+  bottom=5pt
+]
+Kalman Linear Attention is a scan-compatible diagonal-information approximation to the
+Kalman optimal update. Given token representation $\ve{x}_t$, key--value pair
+$(\ve{k}_t,\ve{v}_t)$, and previous memory $\ve{S}_{t-1}$, the layer parameterizes a
+diagonal memory transition and an information decay,
+\begin{equation}
+\begin{aligned}
+  \ve{\alpha}_t &= \sigma(\ve{W}_{\alpha}\ve{x}_t+\ve{b}_{\alpha}),
+  &
+  \ve{\lambda}_t &= \sigma(\ve{W}_{\lambda}\ve{x}_t+\ve{b}_{\lambda}),
+  &
+  \ve{D}_t &= \diag(\ve{\alpha}_t).
+\end{aligned}
+\label{eq:kla-box-parameterization}
+\end{equation}
+It then computes the adaptive gain from prefix information statistics, rather than from a
+full Riccati recursion:
+\begin{equation}
+\begin{aligned}
+  \widehat{\ve{c}}_t
+  &= \ve{\lambda}_t\odot\ve{c}_{t-1},
+  &
+  \widehat{\ve{p}}_t
+  &= \ve{\alpha}_t^2\odot\frac{1}{\epsilon+\widehat{\ve{c}}_t}+\ve{q}_t,
+  \\[3pt]
+  \ve{\kappa}_t
+  &=
+  \frac{\widehat{\ve{p}}_t\odot\ve{k}_t}
+  {r+\sum_i \widehat{\ve{p}}_{t,i}\ve{k}_{t,i}^2},
+  &
+  \ve{c}_t
+  &= \widehat{\ve{c}}_t+\frac{1}{r}\,\ve{k}_t\odot\ve{k}_t .
+\end{aligned}
+\label{eq:kla-box-gain}
+\end{equation}
+With $\ve{\kappa}_t$ available before the memory scan, the memory update is an affine scan:
+\begin{equation}
+\begin{aligned}
+  \ve{S}_t
+  &=
+  (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\ve{D}_t\ve{S}_{t-1}
+  +\ve{\kappa}_t\ve{v}_t^{\tr},
+  &
+  \ve{o}_t &= \ve{S}_t^{\tr}\ve{q}_t .
+\end{aligned}
+\label{eq:kla-box-memory}
+\end{equation}
+Thus KLA preserves the Kalman structure of predicting memory through $\ve{D}_t$ and writing
+an uncertainty-weighted residual, while replacing the dense covariance recursion by
+parallel prefix statistics.
+\end{tcolorbox}
+
 Thus the diagonal approximation preserves the two ingredients missing from fixed-gain
 delta-rule models while keeping the training primitive unchanged: the memory is predicted
 through $\ve{D}_t$, and the residual write is weighted by a transition-aware uncertainty

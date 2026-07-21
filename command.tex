@@ -17,6 +17,13 @@
 \newtheorem{axiom}{Axiom}
 \newtheorem{property}[axiom]{Property}
 \newtheorem{conjecture}[definition]{Conjecture}
+\makeatletter
+\@ifundefined{theHdefinition}{%
+  \newcommand{\theHdefinition}{\thesection.\arabic{definition}}%
+}{%
+  \renewcommand{\theHdefinition}{\thesection.\arabic{definition}}%
+}
+\makeatother
 
 \AddToHook{cmd/appendix/before}{%
   \setcounter{axiom}{0}%
