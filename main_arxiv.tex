@@ -174,8 +174,8 @@ the state dynamics that predict how memory changes before the next measurement a
 
 
 % =============================================================================
-\subsection{Kalter Filtering}
-\label{sec:kalter-filtering}
+\subsection{Kalman Filtering}
+\label{sec:kalman-filtering}
 
 The state-space model in \S\ref{sec:memory-formulation} gives a principled solution to the
 filtering problem: combine the prior memory estimate with each new measurement so that the
@@ -198,7 +198,7 @@ step $t$:
   \widehat{\ve{S}}_t = \ve{D}_t \ve{S}_{t-1},
   \qquad
   \widehat{\ve{P}}_t = \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{Q}_t .
-  \label{eq:kalter-predict}
+  \label{eq:kalman-predict}
 \end{equation}
 This is the formal role of forgetting. The transition $\ve{D}_t$ moves the associative memory
 forward in time, while $\ve{Q}_t$ increases uncertainty for drift that the transition cannot
@@ -210,7 +210,7 @@ The predicted value under the current key is
   \widehat{\ve{v}}_t = \widehat{\ve{S}}_t^{\tr}\ve{k}_t,
   \qquad
   \ve{\delta}_t = \ve{v}_t-\widehat{\ve{v}}_t .
-  \label{eq:kalter-innovation}
+  \label{eq:kalman-innovation}
 \end{equation}
 The vector $\ve{\delta}_t$ is the innovation: the part of the observed value that the predicted
 memory does not explain.
@@ -258,7 +258,7 @@ decides how much to trust the token relative to the current memory:
 \begin{equation}
   \ve{\kappa}_t = \frac{\widehat{\ve{P}}_t \ve{k}_t}
   {r+\ve{k}_t^{\tr}\widehat{\ve{P}}_t \ve{k}_t}.
-  \label{eq:kalter-gain}
+  \label{eq:kalman-gain}
 \end{equation}
 The optimal filtering update writes only the innovation, along this uncertainty-weighted key
 direction:
@@ -266,12 +266,12 @@ direction:
   \ve{S}_t = \widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr},
   \qquad
   \ve{P}_t=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t .
-  \label{eq:kalter-update}
+  \label{eq:kalman-update}
 \end{equation}
 Finally, the layer reads from the filtered memory,
 \begin{equation}
   \ve{o}_t = \ve{S}_t^{\tr}\ve{q}_t .
-  \label{eq:kalter-read}
+  \label{eq:kalman-read}
 \end{equation}
 This filtering update decomposes memory editing into the three operations the model needs:
 predict the drifting memory, measure the prediction error at the current key, and write back
