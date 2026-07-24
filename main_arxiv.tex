@@ -119,10 +119,10 @@
 
 
 % =============================================================================
-\section{Associative Memory as a State-Space Model}
+\section{Kalman Associative Memory}
 \label{sec:memory-kalman}
 
-\subsection{Formulation}
+\subsection{Associative Memory as a State-Space Model}
 \label{sec:memory-formulation}
 
 The recurrent state in linear attention is not just a cache compression; it is an
@@ -155,15 +155,15 @@ its covariance.
 \paragraph{Observation.}
 The current key reads one direction of the latent map. The observed value is
 \begin{equation}
-  \ve{v}_t = \ve{S}_t^{\star\tr}\ve{k}_t + \ve{e}_t,\qquad \ve{e}_t\sim\N(0,r \ve{I}).
+  \ve{v}_t = \ve{S}_t^{\star\tr}\ve{k}_t + \ve{e}_t,\qquad \ve{e}_t\sim\N(0,r_t \ve{I}).
   \label{eq:mem-update-observation}
 \end{equation}
 Thus $\ve{k}_t^{\tr}$ is the observation map and $\ve{v}_t$ is the measurement. The noise term $\ve{e}_t$
 captures the part of the token value that should \emph{not} be treated as a clean memory
 target. In an LLM, $\ve{v}_t$ is a contextual feature produced from a noisy token embedding,
 local syntax, position, layer mixing, and finite model capacity; not all of it is a stable
-fact that can be stored under key $\ve{k}_t$. The covariance $r\ve{I}$ sets how reliable this value
-observation is: small $r$ means trust the token and write strongly, while large $r$ means
+fact that can be stored under key $\ve{k}_t$. The covariance $r_t\ve{I}$ sets how reliable this value
+observation is: small $r_t$ means trust the token and write strongly, while large $r_t$ means
 treat much of $\ve{v}_t$ as context-specific noise.
 
 \paragraph{Filtering problem.}
@@ -238,7 +238,7 @@ measurement:
   =
   (\ve{I}-\ve{\kappa}_t \ve{k}_t^{\tr})\widehat{\ve{P}}_t
   (\ve{I}-\ve{\kappa}_t \ve{k}_t^{\tr})^{\tr}
-  + r\,\ve{\kappa}_t\ve{\kappa}_t^{\tr}.
+  + r_t\,\ve{\kappa}_t\ve{\kappa}_t^{\tr}.
   \label{eq:kalman-tracking-objective}
 \end{equation}
 Here $\ve{P}_t(\ve{\kappa}_t)$ is the posterior covariance that would result if we used the
@@ -247,7 +247,7 @@ key-space directions, so minimizing it chooses the residual write that makes the
 memory estimate maximally certain after the token is used. The first term in
 $\ve{P}_t(\ve{\kappa}_t)$ propagates the predicted uncertainty $\widehat{\ve{P}}_t$ through the correction
 operator $\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr}$: observing key $\ve{k}_t$ should reduce uncertainty in the
-directions corrected by the write. The second term, $r\ve{\kappa}_t\ve{\kappa}_t^{\tr}$, is the
+directions corrected by the write. The second term, $r_t\ve{\kappa}_t\ve{\kappa}_t^{\tr}$, is the
 uncertainty injected by trusting a noisy value measurement. Thus the objective balances two
 effects: write strongly where the memory is uncertain, but avoid injecting too much
 measurement noise when the token value is unreliable.
@@ -257,7 +257,7 @@ Solving the objective in \eqref{eq:kalman-tracking-objective} gives the Kalman g
 decides how much to trust the token relative to the current memory:
 \begin{equation}
   \ve{\kappa}_t = \frac{\widehat{\ve{P}}_t \ve{k}_t}
-  {r+\ve{k}_t^{\tr}\widehat{\ve{P}}_t \ve{k}_t}.
+  {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t \ve{k}_t}.
   \label{eq:kalman-gain}
 \end{equation}
 The optimal filtering update writes only the innovation, along this uncertainty-weighted key
@@ -316,7 +316,7 @@ direction $\ve{\kappa}_t$.
   \\[3pt]
   \text{where}\quad
   \ve{\kappa}_t &= \frac{\widehat{\ve{P}}_t \ve{k}_t}
-  {r+\ve{k}_t^{\tr}\widehat{\ve{P}}_t \ve{k}_t}.
+  {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t \ve{k}_t}.
 \end{aligned}
 \label{eq:kalman-optimal-update-box}
 \end{equation}
@@ -329,13 +329,13 @@ The update above separates two modeling choices: the transition $\ve{D}_t$, whic
 the memory changes before the token is written, and the gain $\ve{\kappa}_t$, which decides the
 key-space direction and strength of the residual write. Delta-rule linear attention is the
 fixed-gain special case of this filter. If we discard the covariance recursion and use an
-isotropic surrogate $\widehat{\ve{P}}_t\approx c_t \ve{I}$ for the predicted uncertainty, then
+isotropic surrogate $\widehat{\ve{P}}_t\approx b_t \ve{I}$ for the predicted uncertainty, then
 \begin{equation}
   \ve{\kappa}_t
   =
-  \frac{\widehat{\ve{P}}_t \ve{k}_t}{r+\ve{k}_t^{\tr}\widehat{\ve{P}}_t \ve{k}_t}
+  \frac{\widehat{\ve{P}}_t \ve{k}_t}{r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t \ve{k}_t}
   \approx
-  \frac{c_t}{r+c_t\|\ve{k}_t\|_2^2}\,\ve{k}_t
+  \frac{b_t}{r_t+b_t\|\ve{k}_t\|_2^2}\,\ve{k}_t
   \equiv
   \beta_t \ve{k}_t .
   \label{eq:fixed-gain-approx}
@@ -414,70 +414,110 @@ The gain is then the diagonal approximation of the Kalman gain,
 \begin{equation}
   \ve{\kappa}_t =
   \frac{\widehat{\ve{p}}_t\odot \ve{k}_t}
-  {r+\sum_i \widehat{\ve{p}}_{t,i}\ve{k}_{t,i}^2}.
+  {r_t+\sum_i \widehat{\ve{p}}_{t,i}\ve{k}_{t,i}^2}.
   \label{eq:diag-kalman-gain}
 \end{equation}
-Unlike the fixed-gain delta rule, $\ve{\kappa}_t$ now depends on the same process model that
-predicts the memory: if a channel is forgotten or assigned high process noise, its
-uncertainty changes before the write is formed.
+Unlike the fixed-gain delta rule, in the exact prediction~\eqref{eq:diag-covariance-prediction}
+the gain $\ve{\kappa}_t$ depends on the same process model that predicts the memory: if a channel
+is forgotten or assigned high process noise, its uncertainty changes before the write is formed.
+How much of this coupling survives once the recursion is made scan-computable depends on the
+parameterization, discussed below.
 
-\paragraph{Parallel gain from prefix statistics.}
-The exact diagonal Riccati recursion is still sequential if $\ve{p}_t$ is updated from the
-posterior covariance at every token. Kalman Linear Attention therefore keeps the
-information-form sufficient statistics scan-computable, as in diagonal RLS. A simple
-exclusive-prefix statistic is
+\paragraph{Parallel gain from M\"obius prefix statistics.}
+A direct recurrent implementation would update $\ve{p}_t$ from the posterior covariance at
+every token. Kalman Linear Attention instead keeps the information-form sufficient statistics
+scan-computable, as in diagonal RLS, while allowing the process noise $\ve{q}_t$ to be
+parameterized independently. In information variables,
+\eqref{eq:diag-covariance-prediction} becomes
 \begin{equation}
-  \widehat{\ve{c}}_t = \ve{\lambda}_t\odot \ve{c}_{t-1},
-  \qquad
-  \ve{c}_t = \widehat{\ve{c}}_t + \frac{1}{r}\,\ve{k}_t\odot \ve{k}_t,
-  \label{eq:diag-info-scan}
-\end{equation}
-with elementwise information decay $\ve{\lambda}_t\in(0,1]^{d_k}$. All products and inverses in
-this paragraph are coordinatewise. In the ideal diagonal covariance recursion, $\ve{\lambda}_t$
-plays the role of a restricted process-noise model through the connection
-\begin{equation}
-  \ve{\lambda}_t^{-1}\odot \ve{p}_{t-1}
+  \widehat{\ve{c}}_t
   =
-  \ve{\alpha}_t^2\odot \ve{p}_{t-1}+\ve{q}_t,
+  \frac{\ve{c}_{t-1}}
+  {\ve{\alpha}_t^2+\ve{q}_t\odot\ve{c}_{t-1}},
   \qquad
-  \ve{q}_t=(\ve{\lambda}_t^{-1}-\ve{\alpha}_t^2)\odot \ve{p}_{t-1}.
-  \label{eq:lambda-process-noise}
-\end{equation}
-Rather than parameterizing an arbitrary diagonal process noise $\ve{q}_t$, we parameterize
-$\ve{\lambda}_t$ directly. This makes drift a multiplicative inflation of the previous
-uncertainty.
-The recurrence in \eqref{eq:diag-info-scan} is an affine scan in each channel, so all
-prefix information states can be computed in parallel. The predicted diagonal uncertainty
-can then be formed from prefix information and the current transition, for example
-\begin{equation}
-  \widehat{\ve{p}}_t
-  =
-  \ve{\alpha}_t^2\odot\frac{1}{\epsilon+\widehat{\ve{c}}_t} + \ve{q}_t,
+  \widehat{\ve{p}}_t=\frac{1}{\widehat{\ve{c}}_t},
   \label{eq:prefix-diag-uncertainty}
 \end{equation}
-where $\epsilon>0$ is a ridge floor. Other parameterizations can replace
-\eqref{eq:prefix-diag-uncertainty}; the requirement is that $\widehat{\ve{p}}_t$ be available
-before the memory scan.
+where products, ratios, and inverses are coordinatewise. The diagonal information update adds
+the observation's Fisher information,
+\begin{equation}
+  \ve{u}_t=\frac{1}{r_t}\,\ve{k}_t\odot\ve{k}_t,
+  \qquad
+  \ve{c}_t=\widehat{\ve{c}}_t+\ve{u}_t,
+  \qquad
+  \ve{c}_0=\mu\ve{1}.
+  \label{eq:diag-info-update}
+\end{equation}
+Combining prediction and update gives, for each channel $i$, a linear-fractional recurrence:
+\begin{equation}
+  c_{t,i}
+  =
+  \frac{c_{t-1,i}}
+  {\alpha_{t,i}^2+q_{t,i}c_{t-1,i}}
+  +u_{t,i}
+  =
+  \frac{(1+u_{t,i}q_{t,i})c_{t-1,i}
+        +u_{t,i}\alpha_{t,i}^2}
+       {q_{t,i}c_{t-1,i}+\alpha_{t,i}^2}.
+  \label{eq:diag-info-mobius}
+\end{equation}
+Thus each token defines a M\"obius map per channel,
+\begin{equation}
+  c_{t,i}=f_{t,i}(c_{t-1,i}),
+  \qquad
+  f_{t,i}(c)=\frac{A_{t,i}c+B_{t,i}}{C_{t,i}c+D_{t,i}},
+  \qquad
+  \ve{M}_{t,i}
+  =
+  \begin{bmatrix}
+    1+u_{t,i}q_{t,i} & u_{t,i}\alpha_{t,i}^2\\
+    q_{t,i} & \alpha_{t,i}^2
+  \end{bmatrix}.
+  \label{eq:diag-info-mobius-matrix}
+\end{equation}
+M\"obius maps compose by matrix multiplication, so all prefix information states can be computed
+by an associative scan over these $2\times2$ matrices:
+\begin{equation}
+  \begin{bmatrix}n_{t,i}\\ d_{t,i}\end{bmatrix}
+  =
+  \ve{M}_{t,i}
+  \begin{bmatrix}n_{t-1,i}\\ d_{t-1,i}\end{bmatrix},
+  \qquad
+  c_{t,i}=\frac{n_{t,i}}{d_{t,i}},
+  \qquad
+  \begin{bmatrix}n_{0,i}\\ d_{0,i}\end{bmatrix}
+  =
+  \begin{bmatrix}\mu\\ 1\end{bmatrix}.
+  \label{eq:diag-info-scan}
+\end{equation}
+This keeps the gain transition-aware without imposing the state-proportional restriction
+$q_t\propto p_{t-1}$ required by the scalar affine scan.
 
 \paragraph{Parameterization.}
-The learnable per-token quantities should be the memory transition and the information
-decay. Let $\ve{x}_t$ denote the current token representation at this layer. A simple
-parameterization is to produce both gates from $\ve{x}_t$ by learned projections and map
-them into the valid ranges
+The learnable per-token quantities should be the memory transition and the additive process
+noise. Let $\ve{x}_t$ denote the current token representation at this layer. A simple
+parameterization is
 \begin{equation}
-  \ve{\alpha}_t=\sigma(\ve{W}_{\alpha}\ve{x}_t+\ve{b}_{\alpha}),
-  \qquad
-  \ve{\lambda}_t=\sigma(\ve{W}_{\lambda}\ve{x}_t+\ve{b}_{\lambda}),
+  \begin{aligned}
+    \ve{\alpha}_t&=\sigma(\ve{W}_{\alpha}\ve{x}_t+\ve{b}_{\alpha}),
+    &
+    \ve{q}_t&=q_{\min}+\operatorname{softplus}(\ve{W}_{q}\ve{x}_t+\ve{b}_{q}),
+    \\[2pt]
+    r_t&=r_{\min}+\operatorname{softplus}(\ve{w}_{r}^{\tr}\ve{x}_t+b_r),
+    &
+    \ve{D}_t&=\diag(\ve{\alpha}_t).
+  \end{aligned}
   \label{eq:kla-parameterization}
 \end{equation}
-possibly with small lower bounds for numerical stability. The vector $\ve{\alpha}_t$
-parameterizes the deterministic memory transition $\ve{D}_t=\diag(\ve{\alpha}_t)$, while
-$\ve{\lambda}_t$ parameterizes process drift through the information update
-\eqref{eq:diag-info-scan}. In this sense, $\ve{\lambda}_t$ takes over the learnable role
-of ``how strongly should this token edit memory?'' from the scalar write gate $\beta_t$
-used in GDN and KDA, but indirectly: it changes uncertainty, and then the gain
-$\ve{\kappa}_t$ becomes the actual adaptive write direction and strength. The observation
-noise $r$ can be a fixed positive scalar or a learned positive scalar per head.
+The vector $\ve{\alpha}_t$ parameterizes the deterministic memory transition, while
+$\ve{q}_t$ parameterizes absolute process drift in covariance units. In this sense,
+$\ve{q}_t$ takes over the learnable role of ``how strongly should this token edit memory?''
+from the scalar write gate $\beta_t$ used in GDN and KDA, but indirectly: it changes predicted
+uncertainty, and then the gain $\ve{\kappa}_t$ becomes the actual adaptive write direction and
+strength. The scalar $r_t$ is the token-dependent observation noise: it controls how reliable
+the current value $\ve{v}_t$ is as a memory target. The floors $q_{\min}$, $r_{\min}$, and
+$\mu$ can be fixed positive scalars or learned positive scalars per head; $\mu$ is used only to
+initialize $\ve{c}_0$, not as a per-token information injection.
 
 \paragraph{Affine memory scan.}
 Once $\ve{\kappa}_t$ is computed from prefix statistics, the memory update is again an affine
@@ -511,34 +551,56 @@ scan:
 Kalman Linear Attention is a scan-compatible diagonal-information approximation to the
 Kalman optimal update. Given token representation $\ve{x}_t$, key--value pair
 $(\ve{k}_t,\ve{v}_t)$, and previous memory $\ve{S}_{t-1}$, the layer parameterizes a
-diagonal memory transition and an information decay,
+diagonal memory transition, additive process noise, and token-dependent observation noise,
 \begin{equation}
 \begin{aligned}
   \ve{\alpha}_t &= \sigma(\ve{W}_{\alpha}\ve{x}_t+\ve{b}_{\alpha}),
   &
-  \ve{\lambda}_t &= \sigma(\ve{W}_{\lambda}\ve{x}_t+\ve{b}_{\lambda}),
+  \ve{q}_t &= q_{\min}+\operatorname{softplus}(\ve{W}_{q}\ve{x}_t+\ve{b}_{q}),
   &
+  r_t &= r_{\min}+\operatorname{softplus}(\ve{w}_{r}^{\tr}\ve{x}_t+b_r),
+  \\[2pt]
   \ve{D}_t &= \diag(\ve{\alpha}_t).
 \end{aligned}
 \label{eq:kla-box-parameterization}
 \end{equation}
-It then computes the adaptive gain from prefix information statistics, rather than from a
-full Riccati recursion:
+It then computes transition-aware prefix information statistics by a per-channel M\"obius scan.
+With $\ve{u}_t=(\ve{k}_t\odot\ve{k}_t)/r_t$, define for each channel $i$
+\begin{equation}
+  \ve{M}_{t,i}
+  =
+  \begin{bmatrix}
+    1+u_{t,i}q_{t,i} & u_{t,i}\alpha_{t,i}^2\\
+    q_{t,i} & \alpha_{t,i}^2
+  \end{bmatrix},
+  \qquad
+  \begin{bmatrix}n_{t,i}\\ d_{t,i}\end{bmatrix}
+  =
+  \ve{M}_{t,i}
+  \begin{bmatrix}n_{t-1,i}\\ d_{t-1,i}\end{bmatrix},
+  \qquad
+  c_{t,i}=\frac{n_{t,i}}{d_{t,i}},
+  \qquad
+  \begin{bmatrix}n_{0,i}\\ d_{0,i}\end{bmatrix}
+  =
+  \begin{bmatrix}\mu\\ 1\end{bmatrix}.
+  \label{eq:kla-box-mobius}
+\end{equation}
+The adaptive gain at token $t$ uses the exclusive prefix state $\ve{c}_{t-1}$:
 \begin{equation}
 \begin{aligned}
   \widehat{\ve{c}}_t
-  &= \ve{\lambda}_t\odot\ve{c}_{t-1},
+  &=
+  \frac{\ve{c}_{t-1}}
+  {\ve{\alpha}_t^2+\ve{q}_t\odot\ve{c}_{t-1}},
   &
   \widehat{\ve{p}}_t
-  &= \ve{\alpha}_t^2\odot\frac{1}{\epsilon+\widehat{\ve{c}}_t}+\ve{q}_t,
+  &= \frac{1}{\widehat{\ve{c}}_t},
   \\[3pt]
   \ve{\kappa}_t
   &=
   \frac{\widehat{\ve{p}}_t\odot\ve{k}_t}
-  {r+\sum_i \widehat{\ve{p}}_{t,i}\ve{k}_{t,i}^2},
-  &
-  \ve{c}_t
-  &= \widehat{\ve{c}}_t+\frac{1}{r}\,\ve{k}_t\odot\ve{k}_t .
+  {r_t+\sum_i \widehat{\ve{p}}_{t,i}\ve{k}_{t,i}^2}.
 \end{aligned}
 \label{eq:kla-box-gain}
 \end{equation}
@@ -563,6 +625,78 @@ Thus the diagonal approximation preserves the two ingredients missing from fixed
 delta-rule models while keeping the training primitive unchanged: the memory is predicted
 through $\ve{D}_t$, and the residual write is weighted by a transition-aware uncertainty
 estimate.
+
+\paragraph{Reduction to fixed-gain delta rules.}
+The gain \eqref{eq:diag-kalman-gain} collapses to a fixed-direction delta-rule write exactly when
+the predicted uncertainty is isotropic, $\widehat{\ve{P}}_t\approx b_t\ve{I}$, equivalently
+$\widehat{\ve{p}}_t=b_t\ve{1}$: then
+$\ve{\kappa}_t=\frac{b_t}{r_t+b_t\|\ve{k}_t\|_2^2}\ve{k}_t\equiv\beta_t\ve{k}_t$ and
+\eqref{eq:kla-diag-affine-scan} becomes
+$\ve{S}_t=(\ve{I}-\beta_t\ve{k}_t\ve{k}_t^{\tr})\ve{D}_t\ve{S}_{t-1}+\beta_t\ve{k}_t\ve{v}_t^{\tr}$,
+the vanilla delta-rule residual update with per-token write gate $\beta_t$ and transition
+$\ve{D}_t=\diag(\ve{\alpha}_t)$. The transition alone then selects the baseline, with the
+\emph{same} isotropic gain in every case: $\ve{\alpha}_t=\ve{1}$ gives DeltaNet, a uniform
+$\ve{\alpha}_t$ gives GatedDeltaNet, and a \emph{per-channel} $\ve{\alpha}_t$ gives KDA. For KDA,
+this means choosing $\ve{q}_t$ so that
+$\widehat{\ve{p}}_{t,i}=\alpha_{t,i}^2 p_{t-1,i}+q_{t,i}=b_t$ for every channel, equivalently
+$q_{t,i}=b_t-\alpha_{t,i}^2 p_{t-1,i}$ when this is nonnegative. KLA strictly generalizes these
+fixed-gain rules by allowing $\widehat{\ve{p}}_t$ to be anisotropic, so the write strength can
+vary across key channels with the accumulated evidence.
+
+
+% =============================================================================
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Synthetic Experiments}
+\label{sec:synthetic-experiments}
+
+We evaluate Kalman Linear Attention on the synthetic long-context tests used by
+Kimi Linear~\citep{kimiteam2025kimilinear}. These tasks isolate the finite-memory
+behaviors that motivate KLA: exact copying, associative recall, and state tracking under
+many interleaved updates. Following their setup, all synthetic runs use a small language
+model with $2$ layers, $2$ attention heads, and head dimension $128$. For each task, we train
+for at most $20{,}000$ steps and select the best training curve over the learning-rate grid
+$\{5\times 10^{-5}, 10^{-4}, 5\times 10^{-4}, 10^{-3}\}$. We report two views of the same
+protocol: peak accuracy as the sequence length increases from $256$ to $2048$ tokens, and
+convergence speed at a fixed context length of $1024$ tokens.
+
+\paragraph{Palindrome.}
+The palindrome task tests exact copying from a compressed recurrent memory. The model is
+given a random token sequence followed by a separator and must emit the sequence in reverse
+order. For example, after observing
+\[
+  \texttt{O G R S U N E <sep>},
+\]
+the target continuation is
+\[
+  \texttt{E N U S R G O}.
+\]
+This task stresses whether the attention mechanism can preserve token-level information
+across the whole prefix rather than only maintaining coarse statistics.
+
+\paragraph{Multi-query associative recall.}
+Multi-query associative recall (MQAR) tests whether the model can bind multiple keys to
+their values and retrieve several queried values at the end of the context. A typical input
+contains interleaved key--value pairs, then a separator, then query keys; for example,
+\[
+  \texttt{A 1 C 3 B 0 M 8 G 5 E 4 <sep> B G},
+\]
+with target outputs
+\[
+  \texttt{0 5}
+\]
+at the query positions. This task directly probes interference in fixed-size associative
+memory: the model must retain the relevant bindings while ignoring unrelated pairs.
+
+\paragraph{Stack state tracking.}
+The state-tracking task follows the stack benchmark used in Kimi Linear. The stream contains
+operations over $64$ independent last-in-first-out stacks, each identified by an ID. A push
+operation such as \texttt{<push> 1 G} adds token \texttt{G} to stack $1$, while a pop query for
+stack $0$ asks the model to predict the most recently pushed token on that stack. The model
+must therefore maintain many evolving latent states and update only the addressed stack at
+each operation. This setting tests whether KLA can selectively overwrite stale information
+without erasing unrelated memory channels.
 
 
 % =============================================================================
@@ -695,12 +829,12 @@ noisy key--value pair at a time, through the current key,
 \begin{equation}
 \begin{aligned}
   \ve{S}_t &= \ve{D}_t \ve{S}_{t-1} + \ve{W}_t, & \ve{W}_t &\sim\N(0,\ve{Q}_t),\\[2pt]
-  \ve{v}_t &= \ve{S}_t^{\tr}\ve{k}_t + \ve{e}_t, & \ve{e}_t &\sim\N(0,r),
+  \ve{v}_t &= \ve{S}_t^{\tr}\ve{k}_t + \ve{e}_t, & \ve{e}_t &\sim\N(0,r_t),
 \end{aligned}
 \label{eq:mem-ssm}
 \end{equation}
 with transition/decay $\ve{D}_t\in\R^{d_k\times d_k}$, drift covariance $\ve{Q}_t$, and scalar
-observation noise $r$. The observation map $\ve{k}_t^{\tr}$ and the dynamics $\ve{D}_t$ are shared by
+observation noise $r_t$. The observation map $\ve{k}_t^{\tr}$ and the dynamics $\ve{D}_t$ are shared by
 all $d_v$ value channels, so the posterior factorizes across them: we track one estimate
 $\ve{S}_t\in\R^{d_k\times d_v}$ and a single key-space covariance $\ve{P}_t\in\R^{d_k\times d_k}$.
 
@@ -717,12 +851,13 @@ specialized to \eqref{eq:mem-ssm}:
 \end{aligned}
 \label{eq:mem-kf}
 \end{equation}
-with gain $\ve{\kappa}_t = \widehat{\ve{P}}_t \ve{k}_t/(r + \ve{k}_t^{\tr}\widehat{\ve{P}}_t \ve{k}_t)$. In the static-state limit
+with gain $\ve{\kappa}_t = \widehat{\ve{P}}_t \ve{k}_t/(r_t + \ve{k}_t^{\tr}\widehat{\ve{P}}_t \ve{k}_t)$. In the static-state limit
 ($\ve{D}_t=\ve{I}$, $\ve{Q}_t=0$) the estimate has the closed weighted-least-squares form
 \begin{equation}
-  \ve{S}_t = \ve{P}_t \sum_{\tau\le t}\gamma_{t,\tau}\,\ve{k}_\tau \ve{v}_\tau^{\tr},
+  \ve{S}_t = \ve{P}_t \sum_{\tau\le t}\gamma_{t,\tau}\,\frac{1}{r_\tau}\ve{k}_\tau \ve{v}_\tau^{\tr},
   \qquad
-  \ve{P}_t = \Big(\sum_{\tau\le t}\gamma_{t,\tau}\,\ve{k}_\tau \ve{k}_\tau^{\tr}+\ve{P}_0^{-1}\Big)^{-1},
+  \ve{P}_t = \Big(\sum_{\tau\le t}\gamma_{t,\tau}\,\frac{1}{r_\tau}
+  \ve{k}_\tau \ve{k}_\tau^{\tr}+\ve{P}_0^{-1}\Big)^{-1},
   \label{eq:mem-wls}
 \end{equation}
 which \eqref{eq:mem-kf} computes online; the gain $\ve{\kappa}_t$ is a data- and state-dependent
@@ -752,8 +887,8 @@ while keeping some of the second-order/state dependence the delta family discard
 \begin{itemize}[leftmargin=1.4em,itemsep=3pt,topsep=2pt]
   \item \textbf{Structured covariance.} Restrict $\ve{P}_t$ to a cheap form. A diagonal
   $\ve{P}_t=\diag(\ve{p}_t)$ decouples the Riccati into $d_k$ scalar recursions ($O(d_k)$ rather than
-  $O(d_k^2)$); a scalar $\ve{P}_t=c_t \ve{I}$ collapses it to one recursion and a per-step scalar gain
-  $\beta_t=c_t/(r+c_t)$; a diagonal-plus-low-rank $\ve{P}_t$ interpolates.
+  $O(d_k^2)$); a scalar $\ve{P}_t=b_t \ve{I}$ collapses it to one recursion and a per-step scalar gain
+  $\beta_t=b_t/(r_t+b_t)$ for normalized keys; a diagonal-plus-low-rank $\ve{P}_t$ interpolates.
   \item \textbf{Gain from prefix statistics.} Replace the exact Riccati by a gain that is a
   pointwise function of \emph{cumulative} quantities a scan can produce --- e.g.\ a running
   key energy $\sum_{\tau\le t}\gamma_{t,\tau}\ve{k}_\tau \ve{k}_\tau^{\tr}$ (or its diagonal), or an
@@ -776,6 +911,9 @@ along one of these axes.
 % =============================================================================
 \subsection{Associative memory as recursive least squares}
 \label{app:mem-rls}
+
+\subsubsection{Static memory: recursive least squares}
+\label{app:mem-rls-static}
 
 \paragraph{Online least-squares objective.}
 Dropping the drift ($\ve{D}_t=\ve{I}$, $\ve{Q}_t=0$) reduces the filter of \S\ref{app:mem-kf} to estimating
@@ -836,20 +974,435 @@ $\ve{S}_t=\ve{C}_t^{-1}\ve{B}_t$). Carrying $\ve{C}_t$ rather than $\ve{P}_t$ --
 therefore the parallel-friendly representation: the state accumulates linearly, and only the
 read-out inverts.
 
-\paragraph{Diagonal RLS is parallelizable.}
-Restrict the information matrix to its diagonal, $\ve{C}_t\approx\diag(\ve{c}_t)$, with per-channel
-accumulated key energy $\ve{c}_t=\lambda \ve{c}_{t-1}+\ve{k}_t\odot \ve{k}_t$. Both $\ve{c}_t$ and $\ve{B}_t$ are decayed
-cumulative sums (scans) and the inverse becomes pointwise, so
+\subsubsection{Drifting memory: dynamic least squares}
+\label{app:mem-rls-drift}
+
+Adding the drift $\ve{D}_t$ changes the optimization problem qualitatively: the unknown is no
+longer one fixed memory $\ve{S}$, but a trajectory of latent memories
+$\ve{S}_{0:t}=(\ve{S}_0,\ldots,\ve{S}_t)$ coupled by the process model. The batch MAP problem
+corresponding to \eqref{eq:mem-ssm} is
 \begin{equation}
-  \ve{S}_t = \diag(\ve{c}_t)^{-1}\ve{B}_t,
-  \qquad\text{i.e.}\quad
-  (\ve{S}_t)_{i,:}=\frac{(\ve{B}_t)_{i,:}}{\ve{c}_{t,i}} .
-  \label{eq:diag-rls}
+  \{\ve{S}_\tau^\star\}_{\tau=0}^t
+  =
+  \argmin_{\ve{S}_0,\ldots,\ve{S}_t}
+  \frac12\|\ve{S}_0\|_{\ve{P}_0^{-1}}^2
+  +\frac12\sum_{\tau=1}^t
+  \|\ve{S}_\tau-\ve{D}_\tau\ve{S}_{\tau-1}\|_{\ve{Q}_\tau^{-1}}^2
+  +\frac12\sum_{\tau=1}^t
+  \frac{1}{r_\tau}
+  \|\ve{S}_\tau^{\tr}\ve{k}_\tau-\ve{v}_\tau\|_2^2 ,
+  \label{eq:drift-map-obj}
 \end{equation}
-This is two scans and a per-channel normalization --- fully parallelizable, $O(d_k)$ per step
---- and realizes the gain-from-prefix-statistics option of \S\ref{app:mem-kf}: a per-channel
-Newton preconditioner (inverse key energy) that keeps the chunked scan intact, unlike the
-full $d_k\times d_k$ RLS whose dense inverse does not.
+where $\|\ve{A}\|_{\ve{M}}^2:=\Trace(\ve{A}^{\tr}\ve{M}\ve{A})$. The first term is the prior,
+the second penalizes deviations from the deterministic drift
+$\ve{S}_\tau\approx\ve{D}_\tau\ve{S}_{\tau-1}$, and the third is the observation loss at the
+current key. Thus $\ve{Q}_\tau$ controls how much the memory is allowed to deviate from the
+drifted previous memory: small $\ve{Q}_\tau$ enforces nearly deterministic transport, while
+large $\ve{Q}_\tau$ allows abrupt changes.
+
+The online filter is the one-step version of this dynamic least-squares problem. Given the
+posterior at $t-1$, first predict
+\begin{equation}
+  \widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1},
+  \qquad
+  \widehat{\ve{P}}_t=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{Q}_t .
+  \label{eq:drift-filter-predict}
+\end{equation}
+Then the filtered memory is the minimizer
+\begin{equation}
+  \ve{S}_t
+  =
+  \argmin_{\ve{S}}
+  \frac12\|\ve{S}-\widehat{\ve{S}}_t\|_{\widehat{\ve{P}}_t^{-1}}^2
+  +\frac{1}{2r_t}
+  \|\ve{S}^{\tr}\ve{k}_t-\ve{v}_t\|_2^2 .
+  \label{eq:drift-filter-obj}
+\end{equation}
+Solving \eqref{eq:drift-filter-obj} gives the Kalman residual write in
+\eqref{eq:mem-kf}. Compared with static RLS, the normal equations no longer accumulate around a
+single $\ve{S}$; the batch objective is block-tridiagonal in the trajectory
+$\ve{S}_{0:t}$, and the online solution carries the predicted covariance
+$\widehat{\ve{P}}_t$ forward through the drift.
+
+% =============================================================================
+\subsection{Isotropic Kalman Linear Attention}
+\label{app:iso-kla}
+
+Consider the most restrictive covariance family, the isotropic family
+\begin{equation}
+  \ve{P}_t\in\{b\ve{I}: b\in\R_+\},
+  \qquad
+  \ve{P}_t=b_t\ve{I},
+  \qquad
+  \ve{C}_t=\ve{P}_t^{-1}=c_t\ve{I},
+  \quad c_t=b_t^{-1},
+  \label{eq:iso-cov-family}
+\end{equation}
+which keeps a single scalar uncertainty $b_t$ (equivalently a scalar information $c_t=b_t^{-1}$)
+for the entire key space. We derive the resulting update by specializing the diagonal KLA
+recursion to this family with an independently parameterized additive process noise: predict
+the scalar uncertainty through the transition, apply the scalar measurement update, and read
+off the induced gain. The price of using an independent $q_t$ is that the information recursion
+is no longer affine in $c_t$; it is a M\"obius map, which is still associative through a
+$2\times2$ matrix scan.
+
+\paragraph{Prediction.}
+With a diagonal transition $\ve{D}_t=\diag(\ve{\alpha}_t)$ and additive process covariance
+$q_t\ve{I}$, the covariance prediction is
+$\widehat{\ve{P}}_t=b_{t-1}\ve{D}_t^2+q_t\ve{I}$. Projecting this diagonal matrix back to the
+isotropic family by matching average variance gives
+\begin{equation}
+  \widehat{b}_t
+  =
+  a_t b_{t-1}+q_t,
+  \qquad
+  a_t=\frac{1}{d_k}\sum_{i=1}^{d_k}\ve{\alpha}_{t,i}^2,
+  \qquad
+  \widehat{c}_t=\frac{c_{t-1}}{a_t+q_t c_{t-1}}.
+  \label{eq:iso-kla-predict}
+\end{equation}
+If $\ve{\alpha}_t$ is uniform across channels, this projection is exact. If it is channel-wise,
+the memory transition can still be KDA's $\ve{D}_t=\diag(\ve{\alpha}_t)$, but the uncertainty
+used by the scalar gain sees only the average contraction $a_t$. A diagonal process covariance
+could be used instead by replacing $q_t$ with its average diagonal value.
+
+\paragraph{Information update and associative scan.}
+In the diagonal information form the Kalman measurement update is additive: the posterior
+information is the predicted information plus the diagonal of the observation's Fisher
+information $\ve{k}_t\ve{k}_t^{\tr}/r_t$, i.e.\ componentwise
+\begin{equation}
+  \ve{c}_{t,i}
+  =
+  \widehat{\ve{c}}_{t,i}+\frac{\ve{k}_{t,i}^2}{r_t},
+  \qquad i=1,\dots,d_k .
+  \label{eq:iso-kla-diag-info-update}
+\end{equation}
+We collapse this posterior information vector to the isotropic family using the trace, i.e.\
+the total Fisher information in the observed key direction. The predicted covariance is already
+isotropic, so its scalar information is $\widehat{c}_t$; adding the trace of the measurement
+information and using $\sum_i\ve{k}_{t,i}^2=\|\ve{k}_t\|_2^2$ gives
+\begin{equation}
+  c_t
+  =
+  \widehat{c}_t+\sum_{i=1}^{d_k}\frac{\ve{k}_{t,i}^2}{r_t}
+  =
+  \widehat{c}_t+\frac{\|\ve{k}_t\|_2^2}{r_t},
+  \qquad
+  c_0=\mu,
+  \label{eq:iso-kla-info-update}
+\end{equation}
+which is the scalar measurement update. This trace-scaled isotropic projection avoids the extra
+per-coordinate factor $1/d_k$: for normalized keys, each token contributes information $1/r_t$
+to the scalar uncertainty tracker.
+
+Combining the prediction and update gives a linear-fractional recurrence in the previous
+information state. With
+\begin{equation}
+  u_t=\frac{\|\ve{k}_t\|_2^2}{r_t},
+  \label{eq:iso-kla-u}
+\end{equation}
+we have
+\begin{equation}
+  c_t
+  =
+  \frac{c_{t-1}}{a_t+q_t c_{t-1}}+u_t
+  =
+  \frac{(1+u_t q_t)c_{t-1}+u_t a_t}{q_t c_{t-1}+a_t}.
+  \label{eq:iso-kla-mobius}
+\end{equation}
+Thus each token defines a M\"obius map
+\begin{equation}
+  c_t=f_t(c_{t-1}),
+  \qquad
+  f_t(c)=\frac{A_t c+B_t}{C_t c+D_t},
+  \qquad
+  \ve{M}_t=
+  \begin{bmatrix}
+    A_t & B_t\\
+    C_t & D_t
+  \end{bmatrix}
+  =
+  \begin{bmatrix}
+    1+u_t q_t & u_t a_t\\
+    q_t & a_t
+  \end{bmatrix}.
+  \label{eq:iso-kla-mobius-matrix}
+\end{equation}
+M\"obius maps compose by matrix multiplication:
+\begin{equation}
+  f_t\circ f_{t-1}\circ\cdots\circ f_1
+  \quad\Longleftrightarrow\quad
+  \ve{M}_t\ve{M}_{t-1}\cdots\ve{M}_1 .
+  \label{eq:iso-kla-mobius-compose}
+\end{equation}
+Equivalently, in homogeneous coordinates $c_t=n_t/d_t$ and
+$[n_t,d_t]^{\tr}=\ve{M}_t[n_{t-1},d_{t-1}]^{\tr}$. Therefore all prefix information states can
+be computed by an associative scan over $2\times2$ matrices, with $c_0=\mu$.
+
+\paragraph{Gain.}
+The predicted uncertainty is now isotropic, $\widehat{\ve{P}}_t=\widehat{b}_t\ve{I}$ with
+$\widehat{b}_t=1/\widehat{c}_t$ from \eqref{eq:iso-kla-predict}. Substituting into the Kalman gain
+$\ve{\kappa}_t=\widehat{\ve{P}}_t\ve{k}_t/(r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t)$, the
+covariance acts as a scalar and the gain collapses to the fixed delta-rule direction:
+\begin{equation}
+  \ve{\kappa}_t
+  =
+  \frac{\widehat{b}_t}{r_t+\widehat{b}_t\|\ve{k}_t\|_2^2}\,\ve{k}_t
+  \equiv
+  \beta_t\ve{k}_t .
+  \label{eq:iso-kla-gain}
+\end{equation}
+
+\paragraph{Memory update.}
+With $\beta_t$ from \eqref{eq:iso-kla-gain}, the memory update is exactly the
+fixed-gain residual form
+\begin{equation}
+  \ve{S}_t
+  =
+  (\ve{I}-\beta_t\ve{k}_t\ve{k}_t^{\tr})\ve{D}_t\ve{S}_{t-1}
+  +\beta_t\ve{k}_t\ve{v}_t^{\tr}.
+  \label{eq:iso-kla-memory}
+\end{equation}
+Thus isotropic KLA can adapt the scalar write strength $\beta_t$ through the Kalman uncertainty
+scan, but --- keeping only one scalar for the entire key space --- it cannot assign different
+write strengths to different key channels; an anisotropic gain is recovered only by relaxing to
+the diagonal family.
+
+\refstepcounter{definition}\label{prop:isotropic-kalman-linear-attention}
+\begin{tcolorbox}[
+  title={Proposition~\thedefinition: Isotropic Kalman Linear Attention},
+  colback=blue!7,
+  colbacktitle=blue!22,
+  colframe=blue!45!black,
+  coltitle=black,
+  fonttitle=\bfseries,
+  boxrule=0.4pt,
+  arc=1pt,
+  left=5pt,
+  right=5pt,
+  top=5pt,
+  bottom=5pt
+]
+Isotropic Kalman Linear Attention is the scalar-uncertainty specialization of KLA. Given
+token representation $\ve{x}_t$, key--value pair $(\ve{k}_t,\ve{v}_t)$, and previous memory
+$\ve{S}_{t-1}$, the layer parameterizes a diagonal memory transition, an additive process noise,
+and a token-dependent observation noise,
+\begin{equation}
+\begin{aligned}
+  \ve{\alpha}_t &= \sigma(\ve{W}_{\alpha}\ve{x}_t+\ve{b}_{\alpha}),
+  &
+  q_t &= q_{\min}+\operatorname{softplus}(\ve{w}_{q}^{\tr}\ve{x}_t+b_q),
+  &
+  r_t &= r_{\min}+\operatorname{softplus}(\ve{w}_{r}^{\tr}\ve{x}_t+b_r),
+  \\[2pt]
+  a_t &= \frac{1}{d_k}\sum_i\ve{\alpha}_{t,i}^2,
+  &
+  \ve{D}_t &= \diag(\ve{\alpha}_t).
+\end{aligned}
+\label{eq:iso-kla-box-parameterization}
+\end{equation}
+It then computes scalar prefix information statistics by a M\"obius scan:
+\begin{equation}
+  u_t=\frac{\|\ve{k}_t\|_2^2}{r_t},
+  \qquad
+  \ve{M}_t=
+  \begin{bmatrix}
+    1+u_t q_t & u_t a_t\\
+    q_t & a_t
+  \end{bmatrix},
+  \qquad
+  \begin{bmatrix}n_t\\ d_t\end{bmatrix}
+  =
+  \ve{M}_t
+  \begin{bmatrix}n_{t-1}\\ d_{t-1}\end{bmatrix},
+  \qquad
+  c_t=\frac{n_t}{d_t},
+  \qquad
+  \begin{bmatrix}n_0\\ d_0\end{bmatrix}
+  =
+  \begin{bmatrix}\mu\\ 1\end{bmatrix}.
+  \label{eq:iso-kla-box-mobius}
+\end{equation}
+The gain at token $t$ uses the exclusive prefix state $c_{t-1}$:
+\begin{equation}
+\begin{aligned}
+  \widehat{c}_t
+  &= \frac{c_{t-1}}{a_t+q_t c_{t-1}},
+  &
+  \widehat{b}_t
+  &= \frac{1}{\widehat{c}_t},
+  &
+  \beta_t
+  &= \frac{\widehat{b}_t}{r_t+\widehat{b}_t\|\ve{k}_t\|_2^2}.
+\end{aligned}
+\label{eq:iso-kla-box-gain}
+\end{equation}
+With $\beta_t$ available before the memory scan, the memory update is the fixed-direction
+affine scan
+\begin{equation}
+  \ve{S}_t
+  =
+  (\ve{I}-\beta_t\ve{k}_t\ve{k}_t^{\tr})\ve{D}_t\ve{S}_{t-1}
+  +\beta_t\ve{k}_t\ve{v}_t^{\tr}.
+  \label{eq:iso-kla-box-memory}
+\end{equation}
+Thus ISO-KLA preserves the Kalman idea of adapting write strength from uncertainty, but the
+isotropic covariance restriction forces the gain direction to be $\ve{k}_t$.
+\end{tcolorbox}
+
+Therefore ISO-KLA sits between fixed-gain delta rules and diagonal KLA: it keeps a
+Kalman-style scalar uncertainty and token-dependent observation noise, but because
+$\ve{P}_t$ is isotropic, it always writes along $\ve{k}_t$ with one scalar strength. Diagonal
+KLA strictly generalizes this by replacing the scalar $b_t$ with a vector
+$\ve{p}_t$, allowing the gain to be anisotropic.
+
+% =============================================================================
+\subsection{Diagonal information: from the covariance recursion to the M\"obius scan}
+\label{app:diag-info}
+
+This section derives, step by step, the predicted uncertainty $\widehat{\ve{p}}_t$ of
+\S\ref{sec:kla} from the diagonal covariance recursion. With an independently parameterized
+process noise, the information update is a M\"obius map; this remains parallelizable because
+M\"obius maps compose by $2\times2$ matrix multiplication. All products, inverses, and ratios
+are coordinatewise; we write a single channel and drop the index.
+
+\paragraph{Diagonal state.}
+Restrict the key-space covariance of the associative-memory filter \eqref{eq:mem-kf} to
+diagonal, $\ve{P}_t=\diag(\ve{p}_t)$, with transition $\ve{D}_t=\diag(\ve{\alpha}_t)$ and process
+noise $\ve{Q}_t=\diag(\ve{q}_t)$. Per channel, track the variance $p_t$ and its reciprocal, the
+information $c_t=1/p_t$.
+
+\paragraph{Step 1 --- predict (the master recursion).}
+The covariance predict $\widehat{\ve{P}}_t=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{Q}_t$ preserves
+diagonality, and per channel is
+\begin{equation}
+  \boxed{\;\widehat{p}_t=\alpha_t^2\,p_{t-1}+q_t\;}
+  \label{eq:app-predict}
+\end{equation}
+(the diagonal form of \eqref{eq:diag-covariance-prediction}). This is the \emph{only} exact
+predicted variance; every expression below is \eqref{eq:app-predict} written in different
+variables.
+
+\paragraph{Step 2 --- update, in information form.}
+The measurement step of the information filter adds the observation's information,
+$\ve{C}_t=\widehat{\ve{C}}_t+\ve{k}_t\ve{k}_t^{\tr}/r_t$; keeping the diagonal (the diagonal
+restriction) gives, per channel,
+\begin{equation}
+  c_t=\widehat{c}_t+\frac{k_t^2}{r_t},
+  \qquad
+  \widehat{c}_t:=\frac{1}{\widehat{p}_t}.
+  \label{eq:app-update}
+\end{equation}
+So $\widehat{c}_t$ is \emph{defined} as $1/\widehat{p}_t$; it is not a separate quantity.
+
+\paragraph{Step 3 --- the recursion.}
+Insert \eqref{eq:app-predict} into $\widehat{c}_t=1/\widehat{p}_t$ and use $p_{t-1}=1/c_{t-1}$:
+\begin{equation}
+  \widehat{c}_t
+  =\frac{1}{\alpha_t^2\,p_{t-1}+q_t}
+  =\frac{1}{\alpha_t^2/c_{t-1}+q_t}
+  =\frac{c_{t-1}}{\alpha_t^2+q_t\,c_{t-1}},
+  \label{eq:app-chat}
+\end{equation}
+so the full posterior recursion is
+\begin{equation}
+  c_t=\frac{c_{t-1}}{\alpha_t^2+q_t\,c_{t-1}}+\frac{k_t^2}{r_t}.
+  \label{eq:app-cfull}
+\end{equation}
+For a general $q_t$ this is a \emph{M\"obius} (linear-fractional) map of $c_{t-1}$,
+$c_t=(A_tc_{t-1}+B_t)/(C_tc_{t-1}+D_t)$, with
+\begin{equation}
+  \begin{bmatrix}A_t&B_t\\[2pt] C_t&D_t\end{bmatrix}
+  =\begin{bmatrix}1+\tfrac{k_t^2}{r_t}\,q_t & \tfrac{k_t^2}{r_t}\,\alpha_t^2\\[3pt] q_t & \alpha_t^2\end{bmatrix}.
+  \label{eq:app-mobius}
+\end{equation}
+M\"obius maps compose by matrix multiplication, so $c_T$ is the action of the product
+$\ve{M}_T\cdots\ve{M}_1$ on $c_0$. When $q_t$ is input-only the matrices are input-only, the
+product is associative, and it parallelizes as the scan in \eqref{eq:diag-info-scan} (at higher
+constant cost than an affine scan, and needing per-chunk renormalization since the entries can
+span a wide range). This is the diagonal-information recursion used by KLA with freely
+parameterized additive process noise.
+
+\paragraph{Step 4 --- the special choice that linearizes the scan.}
+Equation~\eqref{eq:app-cfull} is affine in $c_{t-1}$ iff the product $q_t\,c_{t-1}$ is
+state-independent, i.e.\ iff $q_t\propto p_{t-1}$. Writing this as
+\begin{equation}
+  q_t=(\lambda_t^{-1}-\alpha_t^2)\,p_{t-1}
+  \qquad\Longleftrightarrow\qquad
+  \lambda_t=\frac{1}{\alpha_t^2+q_t/p_{t-1}}
+  \label{eq:app-lambda}
+\end{equation}
+(the identity \eqref{eq:app-lambda}) makes $\alpha_t^2+q_t\,c_{t-1}=\lambda_t^{-1}$, so
+\eqref{eq:app-chat}--\eqref{eq:app-cfull} collapse to the affine scan
+\begin{equation}
+  \widehat{c}_t=\lambda_t\,c_{t-1},
+  \qquad
+  c_t=\lambda_t\,c_{t-1}+\frac{k_t^2}{r_t},
+  \label{eq:app-affine}
+\end{equation}
+which is the cheaper affine-scan restriction. Substituting the \emph{same} $q_t$ back into the master
+recursion \eqref{eq:app-predict},
+\begin{equation}
+  \widehat{p}_t=\alpha_t^2\,p_{t-1}+q_t=\lambda_t^{-1}\,p_{t-1}=\frac{1}{\widehat{c}_t},
+  \label{eq:app-phat}
+\end{equation}
+i.e.\ \eqref{eq:prefix-diag-uncertainty}. The transition term $\alpha_t^2$ is not dropped; it is
+exactly cancelled by this $q_t$. The small prior $\mu$ enters only through the initialization
+$c_0=\mu$, which keeps the information state positive at the start of the scan.
+
+\paragraph{Recovering KDA.}
+KLA reduces to KDA when the transition remains KDA's diagonal transition and the predicted
+uncertainty becomes isotropic. In the diagonal information form, this means
+\begin{equation}
+  \ve{D}_t=\diag(\ve{\alpha}_t),
+  \qquad
+  \widehat{\ve{p}}_t=b_t\ve{1}
+  \quad\Longleftrightarrow\quad
+  \widehat{\ve{c}}_t=b_t^{-1}\ve{1}
+  \label{eq:app-kda-isotropic-condition}
+\end{equation}
+for some scalar $b_t>0$. Since KLA parameterizes an additive process noise and uses
+$\widehat{p}_{t,i}=\alpha_{t,i}^2p_{t-1,i}+q_{t,i}$, the isotropic condition is
+\begin{equation}
+  \alpha_{t,i}^2p_{t-1,i}+q_{t,i}
+  =
+  b_t,
+  \qquad\text{equivalently}\qquad
+  q_{t,i}=b_t-\alpha_{t,i}^2p_{t-1,i},
+  \label{eq:app-kda-q-condition}
+\end{equation}
+for every channel $i$, with the validity condition $q_{t,i}\ge 0$. Under
+\eqref{eq:app-kda-isotropic-condition}, the KLA gain collapses to
+\begin{equation}
+  \ve{\kappa}_t
+  =
+  \frac{b_t}{r_t+b_t\|\ve{k}_t\|_2^2}\,\ve{k}_t
+  \equiv \beta_t\ve{k}_t,
+  \label{eq:app-kda-gain-collapse}
+\end{equation}
+and the memory update becomes the vanilla KDA residual update
+\begin{equation}
+  \ve{S}_t
+  =
+  (\ve{I}-\beta_t\ve{k}_t\ve{k}_t^{\tr})\diag(\ve{\alpha}_t)\ve{S}_{t-1}
+  +\beta_t\ve{k}_t\ve{v}_t^{\tr}.
+  \label{eq:app-kda-recovered}
+\end{equation}
+For normalized keys, $\beta_t=b_t/(r_t+b_t)$.
+
+\paragraph{Consequences.}
+\begin{itemize}[leftmargin=1.4em,itemsep=3pt,topsep=2pt]
+  \item Equation~\eqref{eq:app-predict}, $\widehat{p}_t=\alpha_t^2 p_{t-1}+q_t$, is the master
+  recursion; \eqref{eq:app-chat} is the same recursion written in information variables.
+  \item $\widehat{p}_t=1/\widehat{c}_t$ is not an additional modeling term. Since
+  $\widehat{c}_t=c_{t-1}/(\alpha_t^2+q_t c_{t-1})$, its inverse is exactly
+  $\alpha_t^2p_{t-1}+q_t$. Adding $q_t$ again would double-count the process noise.
+  \item Free, input-only, $p$-independent $q_t$ gives the M\"obius scan
+  \eqref{eq:app-mobius}; the older $\lambda$-form $q_t\propto p_{t-1}$ is the special case that
+  collapses this to the affine scan \eqref{eq:app-affine}.
+\end{itemize}
+
+
 
 
 \end{document}
