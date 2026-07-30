@@ -6,9 +6,9 @@
 \input{command}
 
 
-\title{Kalman Linear Attention}
+\title{Kalman Delta Networks: Uncertainty-Aware Associative Memory}
 
-\runningtitle{Kalman Linear Attention}
+\runningtitle{Kalman Delta Networks}
 
 \usepackage{fontawesome5}
 
@@ -122,7 +122,7 @@
 \section{Kalman Associative Memory}
 \label{sec:memory-kalman}
 
-\subsection{Associative Memory as a State-Space Model}
+\subsection{Associative Memory as a Linear-Gaussian State-Space Model}
 \label{sec:memory-formulation}
 
 The recurrent state in linear attention is not just a cache compression; it is an
@@ -142,14 +142,14 @@ Let $\ve{S}_t^\star$ be the latent associative map the recurrent state is trying
 transition describes how stored associations persist, decay, or drift before the next
 measurement arrives:
 \begin{equation}
-  \ve{S}_t^\star = \ve{D}_t \ve{S}_{t-1}^\star + \ve{W}_t,\qquad \ve{W}_t\sim\N(0,\ve{Q}_t).
+  \ve{S}_t^\star = \ve{D}_t \ve{S}_{t-1}^\star + \ve{W}_t,\qquad \ve{W}_t\sim\N(0,\ve{\Omega}_t).
   \label{eq:mem-update-dynamics}
 \end{equation}
 The operator $\ve{D}_t$ is the process model: it is the formal object corresponding to forgetting
 under information drift, topic drift, and other non-stationarity in the stream. For DeltaNet
 $\ve{D}_t=\ve{I}$; for Gated DeltaNet $\ve{D}_t=\alpha_t \ve{I}$; for KDA
 $\ve{D}_t=\diag(\ve{\alpha}_t)$. The process
-noise $\ve{W}_t$ represents memory drift not explained by deterministic decay, while $\ve{Q}_t$ is
+noise $\ve{W}_t$ represents memory drift not explained by deterministic decay, while $\ve{\Omega}_t$ is
 its covariance.
 
 \paragraph{Observation.}
@@ -197,11 +197,11 @@ step $t$:
 \begin{equation}
   \widehat{\ve{S}}_t = \ve{D}_t \ve{S}_{t-1},
   \qquad
-  \widehat{\ve{P}}_t = \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{Q}_t .
+  \widehat{\ve{P}}_t = \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t .
   \label{eq:kalman-predict}
 \end{equation}
 This is the formal role of forgetting. The transition $\ve{D}_t$ moves the associative memory
-forward in time, while $\ve{Q}_t$ increases uncertainty for drift that the transition cannot
+forward in time, while $\ve{\Omega}_t$ increases uncertainty for drift that the transition cannot
 explain.
 
 \paragraph{Read: compare the prediction to the token.}
@@ -297,7 +297,7 @@ Under the linear--Gaussian state-space model in
 minimizes the posterior uncertainty in \eqref{eq:kalman-tracking-objective} is the Kalman
 filtering update below. Given the memory estimate $\ve{S}_{t-1}$ and uncertainty $\ve{P}_{t-1}$
 before token $t$, the filter first predicts how the memory drifts under the process model
-$\ve{D}_t$ and process noise $\ve{Q}_t$. After observing the key--value pair
+$\ve{D}_t$ and process noise $\ve{\Omega}_t$. After observing the key--value pair
 $(\ve{k}_t,\ve{v}_t)$, it writes only the value residual
 $\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t$ along the uncertainty-weighted
 direction $\ve{\kappa}_t$.
@@ -306,7 +306,7 @@ direction $\ve{\kappa}_t$.
   \text{predict:}\quad
   \widehat{\ve{S}}_t &= \ve{D}_t \ve{S}_{t-1},
   &
-  \widehat{\ve{P}}_t &= \ve{D}_t \ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{Q}_t,
+  \widehat{\ve{P}}_t &= \ve{D}_t \ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t,
   \\[3pt]
   \text{update:}\quad
   \ve{S}_t &= \widehat{\ve{S}}_t+\ve{\kappa}_t
@@ -321,6 +321,8 @@ direction $\ve{\kappa}_t$.
 \label{eq:kalman-optimal-update-box}
 \end{equation}
 \end{tcolorbox}
+
+\noindent\textit{Proof.} See Appendix~\ref{app:proofs}.
 
 \subsection{Delta-rule models as fixed-gain Kalman filters}
 \label{sec:delta-family-kalman}
@@ -364,14 +366,14 @@ DeltaNet, Gated DeltaNet, and KDA are obtained by choosing different process mod
 Thus the three models share the same measurement model and residual write; they differ only
 in how the memory is predicted before the write. Relative to the Kalman optimal update, they
 freeze the uncertainty dynamics and replace the adaptive gain with the fixed first-order
-direction $\beta_t \ve{k}_t$. This does not require assuming $\ve{Q}_t=0$; rather, the delta-rule
+direction $\beta_t \ve{k}_t$. This does not require assuming $\ve{\Omega}_t=0$; rather, the delta-rule
 approximation ignores the covariance prediction
-$\widehat{\ve{P}}_t=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{Q}_t$ altogether, so the gain no longer depends on the
-process model $\ve{D}_t$ or the drift uncertainty $\ve{Q}_t$.
+$\widehat{\ve{P}}_t=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t$ altogether, so the gain no longer depends on the
+process model $\ve{D}_t$ or the drift uncertainty $\ve{\Omega}_t$.
 
 
 % =============================================================================
-\section{Kalman Linear Attention}
+\section{Kalman Delta Networks}
 \label{sec:kla}
 
 The Kalman optimal update in \eqref{eq:kalman-optimal-update-box} is the target, but the
@@ -384,7 +386,7 @@ training relies on a scan form
 where the per-token coefficients $\ve{A}_t$ and $\ve{b}_t$ are input-only, or are computable from
 associative prefix statistics. Exact Kalman filtering breaks this structure because
 $\ve{P}_t$ follows a Riccati recursion and the gain $\ve{\kappa}_t$ depends on the accumulated
-posterior uncertainty. Kalman Linear Attention therefore asks which parts of the optimal
+posterior uncertainty. A Kalman Delta Network therefore asks which parts of the optimal
 update can be relaxed while preserving the scan.
 
 \paragraph{Diagonal information as the tractable state.}
@@ -405,9 +407,9 @@ measured and which remain uncertain.
 
 \paragraph{Transition-aware diagonal prediction.}
 With a diagonal process model $\ve{D}_t=\diag(\ve{\alpha}_t)$ and diagonal process noise
-$\ve{Q}_t=\diag(\ve{q}_t)$, the Kalman covariance prediction remains pointwise:
+$\ve{\Omega}_t=\diag(\ve{\omega}_t)$, the Kalman covariance prediction remains pointwise:
 \begin{equation}
-  \widehat{\ve{p}}_t = \ve{\alpha}_t^2\odot \ve{p}_{t-1}+\ve{q}_t .
+  \widehat{\ve{p}}_t = \ve{\alpha}_t^2\odot \ve{p}_{t-1}+\ve{\omega}_t .
   \label{eq:diag-covariance-prediction}
 \end{equation}
 The gain is then the diagonal approximation of the Kalman gain,
@@ -425,40 +427,65 @@ parameterization, discussed below.
 
 \paragraph{Parallel gain from M\"obius prefix statistics.}
 A direct recurrent implementation would update $\ve{p}_t$ from the posterior covariance at
-every token. Kalman Linear Attention instead keeps the information-form sufficient statistics
-scan-computable, as in diagonal RLS, while allowing the process noise $\ve{q}_t$ to be
+every token. The diagonal Kalman Delta Network instead keeps the information-form sufficient statistics
+scan-computable, as in diagonal RLS, while allowing the process noise $\ve{\omega}_t$ to be
 parameterized independently. In information variables,
 \eqref{eq:diag-covariance-prediction} becomes
 \begin{equation}
   \widehat{\ve{c}}_t
   =
   \frac{\ve{c}_{t-1}}
-  {\ve{\alpha}_t^2+\ve{q}_t\odot\ve{c}_{t-1}},
+  {\ve{\alpha}_t^2+\ve{\omega}_t\odot\ve{c}_{t-1}},
   \qquad
   \widehat{\ve{p}}_t=\frac{1}{\widehat{\ve{c}}_t},
   \label{eq:prefix-diag-uncertainty}
 \end{equation}
-where products, ratios, and inverses are coordinatewise. The diagonal information update adds
-the observation's Fisher information,
+where products, ratios, and inverses are coordinatewise. This prediction step is exact under the
+diagonal covariance restriction. The approximation enters at the measurement update. In the full
+linear-Gaussian filter, observing value $\ve{v}_t$ through key $\ve{k}_t$ adds the rank-one Fisher
+information of the observation,
 \begin{equation}
-  \ve{u}_t=\frac{1}{r_t}\,\ve{k}_t\odot\ve{k}_t,
+  \ve{C}_t^{\mathrm{exact}}
+  =
+  \widehat{\ve{C}}_t+\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr},
+  \qquad
+  \widehat{\ve{C}}_t=\diag(\widehat{\ve{c}}_t).
+  \label{eq:diag-exact-info-update}
+\end{equation}
+Even when $\widehat{\ve{C}}_t$ is diagonal, the measurement term
+$\ve{k}_t\ve{k}_t^{\tr}/r_t$ is dense, so an exact update would leave the diagonal family and
+would no longer be represented by a vector $\ve{c}_t$. The diagonal KDN therefore projects the measurement
+information back to a diagonal information state. The literal diagonal projection would add
+$(\ve{k}_t\odot\ve{k}_t)/r_t$, but this is poorly scaled for $\ell_2$-normalized keys: a
+spread-out coordinate has variance $1/d_k$, so the raw per-coordinate Fisher increment is
+only $O(1/(d_k r_t))$. We instead use the standardized coordinate
+$\widetilde{k}_{t,i}=\sqrt{d_k}\,k_{t,i}$ inside the diagonal projection, giving the
+dimension-stable diagonal approximation
+\begin{equation}
+  \ve{u}_t=\frac{d_k}{r_t}\,\ve{k}_t\odot\ve{k}_t,
   \qquad
   \ve{c}_t=\widehat{\ve{c}}_t+\ve{u}_t,
   \qquad
   \ve{c}_0=\mu\ve{1}.
   \label{eq:diag-info-update}
 \end{equation}
+For $\ell_2$-normalized keys with spread-out coordinates, $\mathbb{E}[d_k k_{t,i}^2]\approx 1$,
+so each channel receives an $O(1/r_t)$ information increment. The factor is $d_k$ because the
+Fisher increment is quadratic in the scalar feature: standardizing the coordinate by
+$\sqrt{d_k}$ multiplies its squared information by $d_k$. The scale conditions only the
+uncertainty tracker used for future gains; the current residual-write gain still uses the
+observation denominator in \eqref{eq:diag-kalman-gain}.
 Combining prediction and update gives, for each channel $i$, a linear-fractional recurrence:
 \begin{equation}
   c_{t,i}
   =
   \frac{c_{t-1,i}}
-  {\alpha_{t,i}^2+q_{t,i}c_{t-1,i}}
+  {\alpha_{t,i}^2+\omega_{t,i}c_{t-1,i}}
   +u_{t,i}
   =
-  \frac{(1+u_{t,i}q_{t,i})c_{t-1,i}
+  \frac{(1+u_{t,i}\omega_{t,i})c_{t-1,i}
         +u_{t,i}\alpha_{t,i}^2}
-       {q_{t,i}c_{t-1,i}+\alpha_{t,i}^2}.
+       {\omega_{t,i}c_{t-1,i}+\alpha_{t,i}^2}.
   \label{eq:diag-info-mobius}
 \end{equation}
 Thus each token defines a M\"obius map per channel,
@@ -470,8 +497,8 @@ Thus each token defines a M\"obius map per channel,
   \ve{M}_{t,i}
   =
   \begin{bmatrix}
-    1+u_{t,i}q_{t,i} & u_{t,i}\alpha_{t,i}^2\\
-    q_{t,i} & \alpha_{t,i}^2
+    1+u_{t,i}\omega_{t,i} & u_{t,i}\alpha_{t,i}^2\\
+    \omega_{t,i} & \alpha_{t,i}^2
   \end{bmatrix}.
   \label{eq:diag-info-mobius-matrix}
 \end{equation}
@@ -491,7 +518,7 @@ by an associative scan over these $2\times2$ matrices:
   \label{eq:diag-info-scan}
 \end{equation}
 This keeps the gain transition-aware without imposing the state-proportional restriction
-$q_t\propto p_{t-1}$ required by the scalar affine scan.
+$\omega_t\propto p_{t-1}$ required by the scalar affine scan.
 
 \paragraph{Parameterization.}
 The learnable per-token quantities should be the memory transition and the additive process
@@ -501,7 +528,7 @@ parameterization is
   \begin{aligned}
     \ve{\alpha}_t&=\sigma(\ve{W}_{\alpha}\ve{x}_t+\ve{b}_{\alpha}),
     &
-    \ve{q}_t&=q_{\min}+\operatorname{softplus}(\ve{W}_{q}\ve{x}_t+\ve{b}_{q}),
+    \ve{\omega}_t&=\omega_{\min}+\operatorname{softplus}(\ve{W}_{\omega}\ve{x}_t+\ve{b}_{\omega}),
     \\[2pt]
     r_t&=r_{\min}+\operatorname{softplus}(\ve{w}_{r}^{\tr}\ve{x}_t+b_r),
     &
@@ -510,12 +537,12 @@ parameterization is
   \label{eq:kla-parameterization}
 \end{equation}
 The vector $\ve{\alpha}_t$ parameterizes the deterministic memory transition, while
-$\ve{q}_t$ parameterizes absolute process drift in covariance units. In this sense,
-$\ve{q}_t$ takes over the learnable role of ``how strongly should this token edit memory?''
+$\ve{\omega}_t$ parameterizes absolute process drift in covariance units. In this sense,
+$\ve{\omega}_t$ takes over the learnable role of ``how strongly should this token edit memory?''
 from the scalar write gate $\beta_t$ used in GDN and KDA, but indirectly: it changes predicted
 uncertainty, and then the gain $\ve{\kappa}_t$ becomes the actual adaptive write direction and
 strength. The scalar $r_t$ is the token-dependent observation noise: it controls how reliable
-the current value $\ve{v}_t$ is as a memory target. The floors $q_{\min}$, $r_{\min}$, and
+the current value $\ve{v}_t$ is as a memory target. The floors $\omega_{\min}$, $r_{\min}$, and
 $\mu$ can be fixed positive scalars or learned positive scalars per head; $\mu$ is used only to
 initialize $\ve{c}_0$, not as a per-token information injection.
 
@@ -535,7 +562,7 @@ scan:
 
 \refstepcounter{definition}\label{prop:kalman-linear-attention}
 \begin{tcolorbox}[
-  title={Proposition~\thedefinition: Kalman Linear Attention},
+  title={Proposition~\thedefinition: Diagonal Kalman Delta Network},
   colback=blue!7,
   colbacktitle=blue!22,
   colframe=blue!45!black,
@@ -548,7 +575,7 @@ scan:
   top=5pt,
   bottom=5pt
 ]
-Kalman Linear Attention is a scan-compatible diagonal-information approximation to the
+The diagonal Kalman Delta Network is a scan-compatible diagonal-information approximation to the
 Kalman optimal update. Given token representation $\ve{x}_t$, key--value pair
 $(\ve{k}_t,\ve{v}_t)$, and previous memory $\ve{S}_{t-1}$, the layer parameterizes a
 diagonal memory transition, additive process noise, and token-dependent observation noise,
@@ -556,7 +583,7 @@ diagonal memory transition, additive process noise, and token-dependent observat
 \begin{aligned}
   \ve{\alpha}_t &= \sigma(\ve{W}_{\alpha}\ve{x}_t+\ve{b}_{\alpha}),
   &
-  \ve{q}_t &= q_{\min}+\operatorname{softplus}(\ve{W}_{q}\ve{x}_t+\ve{b}_{q}),
+  \ve{\omega}_t &= \omega_{\min}+\operatorname{softplus}(\ve{W}_{\omega}\ve{x}_t+\ve{b}_{\omega}),
   &
   r_t &= r_{\min}+\operatorname{softplus}(\ve{w}_{r}^{\tr}\ve{x}_t+b_r),
   \\[2pt]
@@ -565,13 +592,13 @@ diagonal memory transition, additive process noise, and token-dependent observat
 \label{eq:kla-box-parameterization}
 \end{equation}
 It then computes transition-aware prefix information statistics by a per-channel M\"obius scan.
-With $\ve{u}_t=(\ve{k}_t\odot\ve{k}_t)/r_t$, define for each channel $i$
+With $\ve{u}_t=d_k(\ve{k}_t\odot\ve{k}_t)/r_t$, define for each channel $i$
 \begin{equation}
   \ve{M}_{t,i}
   =
   \begin{bmatrix}
-    1+u_{t,i}q_{t,i} & u_{t,i}\alpha_{t,i}^2\\
-    q_{t,i} & \alpha_{t,i}^2
+    1+u_{t,i}\omega_{t,i} & u_{t,i}\alpha_{t,i}^2\\
+    \omega_{t,i} & \alpha_{t,i}^2
   \end{bmatrix},
   \qquad
   \begin{bmatrix}n_{t,i}\\ d_{t,i}\end{bmatrix}
@@ -592,7 +619,7 @@ The adaptive gain at token $t$ uses the exclusive prefix state $\ve{c}_{t-1}$:
   \widehat{\ve{c}}_t
   &=
   \frac{\ve{c}_{t-1}}
-  {\ve{\alpha}_t^2+\ve{q}_t\odot\ve{c}_{t-1}},
+  {\ve{\alpha}_t^2+\ve{\omega}_t\odot\ve{c}_{t-1}},
   &
   \widehat{\ve{p}}_t
   &= \frac{1}{\widehat{\ve{c}}_t},
@@ -616,7 +643,7 @@ With $\ve{\kappa}_t$ available before the memory scan, the memory update is an a
 \end{aligned}
 \label{eq:kla-box-memory}
 \end{equation}
-Thus KLA preserves the Kalman structure of predicting memory through $\ve{D}_t$ and writing
+Thus the diagonal KDN preserves the Kalman structure of predicting memory through $\ve{D}_t$ and writing
 an uncertainty-weighted residual, while replacing the dense covariance recursion by
 parallel prefix statistics.
 \end{tcolorbox}
@@ -637,9 +664,9 @@ the vanilla delta-rule residual update with per-token write gate $\beta_t$ and t
 $\ve{D}_t=\diag(\ve{\alpha}_t)$. The transition alone then selects the baseline, with the
 \emph{same} isotropic gain in every case: $\ve{\alpha}_t=\ve{1}$ gives DeltaNet, a uniform
 $\ve{\alpha}_t$ gives GatedDeltaNet, and a \emph{per-channel} $\ve{\alpha}_t$ gives KDA. For KDA,
-this means choosing $\ve{q}_t$ so that
-$\widehat{\ve{p}}_{t,i}=\alpha_{t,i}^2 p_{t-1,i}+q_{t,i}=b_t$ for every channel, equivalently
-$q_{t,i}=b_t-\alpha_{t,i}^2 p_{t-1,i}$ when this is nonnegative. KLA strictly generalizes these
+this means choosing $\ve{\omega}_t$ so that
+$\widehat{\ve{p}}_{t,i}=\alpha_{t,i}^2 p_{t-1,i}+\omega_{t,i}=b_t$ for every channel, equivalently
+$\omega_{t,i}=b_t-\alpha_{t,i}^2 p_{t-1,i}$ when this is nonnegative. The diagonal KDN strictly generalizes these
 fixed-gain rules by allowing $\widehat{\ve{p}}_t$ to be anisotropic, so the write strength can
 vary across key channels with the accumulated evidence.
 
@@ -651,9 +678,9 @@ vary across key channels with the accumulated evidence.
 \subsection{Synthetic Experiments}
 \label{sec:synthetic-experiments}
 
-We evaluate Kalman Linear Attention on the synthetic long-context tests used by
+We evaluate Kalman Delta Networks on the synthetic long-context tests used by
 Kimi Linear~\citep{kimiteam2025kimilinear}. These tasks isolate the finite-memory
-behaviors that motivate KLA: exact copying, associative recall, and state tracking under
+behaviors that motivate KDNs: exact copying, associative recall, and state tracking under
 many interleaved updates. Following their setup, all synthetic runs use a small language
 model with $2$ layers, $2$ attention heads, and head dimension $128$. For each task, we train
 for at most $20{,}000$ steps and select the best training curve over the learning-rate grid
@@ -695,8 +722,63 @@ operations over $64$ independent last-in-first-out stacks, each identified by an
 operation such as \texttt{<push> 1 G} adds token \texttt{G} to stack $1$, while a pop query for
 stack $0$ asks the model to predict the most recently pushed token on that stack. The model
 must therefore maintain many evolving latent states and update only the addressed stack at
-each operation. This setting tests whether KLA can selectively overwrite stale information
+each operation. This setting tests whether a KDN can selectively overwrite stale information
 without erasing unrelated memory channels.
+
+
+% =============================================================================
+\section{Related Work}
+\label{sec:related-work}
+
+\paragraph{Linear attention, delta rules, and gated recurrent mixers.}
+Linear attention replaces the quadratic softmax attention matrix with a recurrent fast-weight
+state, giving constant-memory autoregressive inference and scan-parallel training
+\citep{katharopoulos2020transformers}. DeltaNet interprets this state as an online associative
+memory and updates it by writing only the value residual at the current key
+\citep{schlag2021linear}. Later gated variants add learned forgetting and more expressive
+state transitions, including Gated Linear Attention, Gated DeltaNet, and KDA
+\citep{yang2023gated,yang2024gdn,kimiteam2025kimilinear}. Our starting point is this
+associative-memory view: the recurrent state is a key--value map $\ve{S}_t$, the token
+measurement is $\ve{v}_t\approx \ve{S}_t^{\tr}\ve{k}_t$, and the write is a Kalman residual
+update. This lets us place DeltaNet, GDN, and KDA inside a single state-space filtering
+picture as fixed-gain or restricted-covariance approximations.
+
+\paragraph{Kalman filtering as a sequence mixer.}
+Classical Kalman filtering performs optimal online inference in linear--Gaussian state-space
+models by maintaining both a posterior mean and covariance. Recent work by
+\citet{shaj2026kalmanlinearattention} also introduces a method named Kalman Linear Attention
+and shows that a diagonal information-form Kalman filter can be made scan-parallel through a
+M\"obius precision recursion. Their layer treats token values as noisy observations of a
+per-channel latent feature state, uses an OU-discretized stochastic prior with time-invariant
+dynamics, and reads out the posterior mean by an elementwise query projection. In contrast, our
+KDN studies Kalman filtering for \emph{delta-network associative memory}: the latent object is
+the memory matrix $\ve{S}_t\in\R^{d_k\times d_v}$, the observation is a key-conditioned value
+measurement $\ve{v}_t=\ve{S}_t^{\tr}\ve{k}_t+\ve{e}_t$, and the central object is the Kalman
+write direction $\ve{\kappa}_t$. The exact filter for this model carries a dense key-space
+covariance, and our diagonal and isotropic variants are structured approximations to that exact
+associative-memory update. Thus the two papers share information-form scan algebra, but they
+apply it to different latent states and different notions of attention.
+
+\paragraph{Parallel scans and information-form recurrences.}
+The scanability of KDN comes from representing uncertainty recursions as associative maps.
+For our diagonal construction, the additive process-noise prediction followed by the diagonal
+information update yields a per-channel M\"obius map, so prefix uncertainty states are computed by
+products of $2\times2$ matrices. Once the gains are available, the memory update is a standard
+delta-family affine recurrence and can reuse the same scan machinery developed for linear
+attention and DeltaNet \citep{yang2024parallelizing}. This separates our contribution into two
+parts: a Kalman-derived gain scan, and a conventional fast-weight memory scan conditioned on
+those gains.
+
+\paragraph{Positioning.}
+Our goal is not only to add uncertainty to a recurrent mixer, but to identify which parts of
+Kalman filtering are compatible with key--value recall. Exact dense Kalman is the filtering
+reference for the associative-memory model, but its covariance-optimal gain can rotate writes
+away from the query key. The isotropic and diagonal variants therefore expose a useful design
+axis: scalar uncertainty gives an adaptive write strength while preserving the delta-rule
+binding direction, whereas anisotropic uncertainty gives a richer but potentially less
+retrieval-aligned write direction. This distinction is specific to the associative-memory
+formulation and is complementary to prior work that uses Kalman filtering primarily as a
+per-channel SSM primitive.
 
 
 % =============================================================================
@@ -735,7 +817,7 @@ to the Kalman update.
   \item \textbf{Block-diagonal covariance.} Track $\ve{P}_t$ or $\ve{C}_t=\ve{P}_t^{-1}$ in small blocks.
   This captures correlations among nearby key channels while replacing one large inverse by
   many small inverses. The prediction remains local:
-  $\widehat{\ve{P}}_t^{(j)}=\ve{D}_t^{(j)}\ve{P}_{t-1}^{(j)}\ve{D}_t^{(j)\tr}+\ve{Q}_t^{(j)}$.
+  $\widehat{\ve{P}}_t^{(j)}=\ve{D}_t^{(j)}\ve{P}_{t-1}^{(j)}\ve{D}_t^{(j)\tr}+\ve{\Omega}_t^{(j)}$.
 
   \item \textbf{Diagonal-plus-low-rank covariance.} Use
   $\ve{P}_t=\diag(\ve{p}_t)+\ve{U}_t\ve{U}_t^{\tr}$, with $\ve{p}_t$ and $\ve{U}_t$ produced from prefix statistics.
@@ -756,6 +838,124 @@ to the Kalman update.
 \appendix
 
 % =============================================================================
+\section{Theoretical Proofs}
+\label{app:proofs}
+
+\begin{proof}[Proof of Proposition~\ref{prop:kalman-optimal-update}]
+Fix a token $t$ and write
+\[
+  \widehat{\ve{S}}=\widehat{\ve{S}}_t,\qquad
+  \widehat{\ve{P}}=\widehat{\ve{P}}_t,\qquad
+  \ve{k}=\ve{k}_t,\qquad
+  \ve{v}=\ve{v}_t,\qquad
+  r=r_t .
+\]
+The prediction step is the standard linear--Gaussian time update. If the prior estimation
+error has covariance $\ve{P}_{t-1}$, then after the transition
+$\ve{S}_t^\star=\ve{D}_t\ve{S}_{t-1}^\star+\ve{W}_t$ the predicted mean and covariance are
+\[
+  \widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1},
+  \qquad
+  \widehat{\ve{P}}_t
+  =
+  \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t,
+\]
+because $\ve{W}_t$ is zero mean with covariance $\ve{\Omega}_t$ and is independent of the
+previous estimation error.
+
+It remains to choose the residual-write direction. Consider an arbitrary candidate
+$\ve{\kappa}\in\R^{d_k}$ and the update
+\[
+  \ve{S}^+
+  =
+  \widehat{\ve{S}}
+  +
+  \ve{\kappa}\big(\ve{v}-\widehat{\ve{S}}^{\tr}\ve{k}\big)^{\tr}.
+\]
+For any value coordinate, let $\ve{\epsilon}$ denote the predicted key-space estimation error
+and let $\eta$ denote the scalar observation noise in that coordinate. Then
+$\E[\ve{\epsilon}]=0$, $\Cov(\ve{\epsilon})=\widehat{\ve{P}}$, $\E[\eta]=0$,
+$\Var(\eta)=r$, and $\eta$ is independent of $\ve{\epsilon}$. The updated estimation error is
+\[
+  \ve{\epsilon}^+
+  =
+  (\ve{I}-\ve{\kappa}\ve{k}^{\tr})\ve{\epsilon}
+  -
+  \ve{\kappa}\eta .
+\]
+Thus the posterior covariance induced by this candidate write direction is
+\[
+  \ve{P}^+(\ve{\kappa})
+  =
+  (\ve{I}-\ve{\kappa}\ve{k}^{\tr})\widehat{\ve{P}}
+  (\ve{I}-\ve{\kappa}\ve{k}^{\tr})^{\tr}
+  +
+  r\,\ve{\kappa}\ve{\kappa}^{\tr},
+\]
+which is exactly the uncertainty objective in \eqref{eq:kalman-tracking-objective}.
+
+Now minimize its trace. Since $\widehat{\ve{P}}$ is symmetric positive semidefinite,
+\[
+\begin{aligned}
+  \Trace\!\left(\ve{P}^+(\ve{\kappa})\right)
+  &=
+  \Trace(\widehat{\ve{P}})
+  -2\ve{\kappa}^{\tr}\widehat{\ve{P}}\ve{k}
+  +
+  \big(r+\ve{k}^{\tr}\widehat{\ve{P}}\ve{k}\big)\ve{\kappa}^{\tr}\ve{\kappa}.
+\end{aligned}
+\]
+This is a strictly convex quadratic in $\ve{\kappa}$ because
+$r+\ve{k}^{\tr}\widehat{\ve{P}}\ve{k}>0$. Setting its gradient to zero gives
+\[
+  -2\widehat{\ve{P}}\ve{k}
+  +
+  2\big(r+\ve{k}^{\tr}\widehat{\ve{P}}\ve{k}\big)\ve{\kappa}
+  =
+  \ve{0},
+\]
+and therefore the unique minimizer is
+\[
+  \ve{\kappa}^\star
+  =
+  \frac{\widehat{\ve{P}}\ve{k}}
+       {r+\ve{k}^{\tr}\widehat{\ve{P}}\ve{k}} .
+\]
+Restoring the time index gives the gain in \eqref{eq:kalman-gain}.
+
+Substituting this minimizing gain into the residual write gives
+\[
+  \ve{S}_t
+  =
+  \widehat{\ve{S}}_t
+  +
+  \ve{\kappa}_t
+  \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr}.
+\]
+For the covariance, let
+$s=r+\ve{k}^{\tr}\widehat{\ve{P}}\ve{k}$ and
+$\ve{u}=\widehat{\ve{P}}\ve{k}=s\ve{\kappa}^\star$. The Joseph-form covariance becomes
+\[
+\begin{aligned}
+  \ve{P}^+(\ve{\kappa}^\star)
+  &=
+  \widehat{\ve{P}}
+  -\ve{\kappa}^\star\ve{u}^{\tr}
+  -\ve{u}\ve{\kappa}^{\star\tr}
+  +s\,\ve{\kappa}^\star\ve{\kappa}^{\star\tr}  \\
+  &=
+  \widehat{\ve{P}}
+  -\ve{\kappa}^\star\ve{u}^{\tr}
+  =
+  (\ve{I}-\ve{\kappa}^\star\ve{k}^{\tr})\widehat{\ve{P}} .
+\end{aligned}
+\]
+This is the covariance update stated in the proposition. The read
+$\ve{o}_t=\ve{S}_t^{\tr}\ve{q}_t$ is then the linear-attention read from the posterior memory
+estimate.
+\end{proof}
+
+% =============================================================================
 \section{Background: the Kalman filter}
 \label{app:kalman}
 
@@ -768,14 +968,14 @@ A hidden state $\ve{x}_t\in\R^n$ evolves and is observed through
 \begin{equation}
 \begin{aligned}
   \ve{x}_t &= \ve{F}_t \ve{x}_{t-1} + \ve{w}_t,
-  & \ve{w}_t &\sim \N(0,\ve{Q}_t)\quad\text{(process / dynamics)},\\[2pt]
+  & \ve{w}_t &\sim \N(0,\ve{\Omega}_t)\quad\text{(process / dynamics)},\\[2pt]
   \ve{y}_t &= \ve{H}_t \ve{x}_t + \ve{e}_t,
   & \ve{e}_t &\sim \N(0,\ve{R}_t)\quad\text{(observation)},
 \end{aligned}
 \label{eq:kf-ssm}
 \end{equation}
 with transition $\ve{F}_t$, observation map $\ve{H}_t$, and independent zero-mean Gaussian
-process and measurement noise of covariance $\ve{Q}_t$ and $\ve{R}_t$. Given $\ve{y}_{1:t}$ the
+process and measurement noise of covariance $\ve{\Omega}_t$ and $\ve{R}_t$. Given $\ve{y}_{1:t}$ the
 posterior over the state is Gaussian, $p(\ve{x}_t\mid \ve{y}_{1:t})=\N(\widehat{\ve{x}}_t,\ve{P}_t)$, and the
 filter propagates its mean $\widehat{\ve{x}}_t$ and covariance $\ve{P}_t$.
 
@@ -784,7 +984,7 @@ Each step is a \emph{predict} (time update) then an \emph{update} (measurement u
 \begin{equation}
 \begin{aligned}
   \text{predict:}\quad & \widehat{\ve{x}}_t^- = \ve{F}_t \widehat{\ve{x}}_{t-1},
-  & \ve{P}_t^- &= \ve{F}_t \ve{P}_{t-1} \ve{F}_t^{\tr} + \ve{Q}_t,\\[2pt]
+  & \ve{P}_t^- &= \ve{F}_t \ve{P}_{t-1} \ve{F}_t^{\tr} + \ve{\Omega}_t,\\[2pt]
   \text{update:}\quad  & \widehat{\ve{x}}_t = \widehat{\ve{x}}_t^- + \ve{K}_t\,\ve{\nu}_t,
   & \ve{P}_t &= (\ve{I} - \ve{K}_t \ve{H}_t)\,\ve{P}_t^-,
 \end{aligned}
@@ -808,14 +1008,14 @@ estimate. Without Gaussianity it remains the best \emph{linear} unbiased estimat
 is thus the optimal way to fuse a drifting prior with streaming observations.
 
 \paragraph{Special case: recursive least squares.}
-Take a \emph{static} state ($\ve{F}_t=\ve{I}$, $\ve{Q}_t=0$) observed through a regressor,
+Take a \emph{static} state ($\ve{F}_t=\ve{I}$, $\ve{\Omega}_t=0$) observed through a regressor,
 $y_t=\ve{\phi}_t^{\tr}\ve{\theta}+e_t$ (so $\ve{H}_t=\ve{\phi}_t^{\tr}$, scalar $R_t=r$). Then
 \eqref{eq:kf-rec}--\eqref{eq:kf-gain} reduce to \emph{recursive least squares}, which
 minimizes $\sum_{\tau\le t}\|y_\tau-\ve{\phi}_\tau^{\tr}\ve{\theta}\|_2^2$ online; the covariance
 $\ve{P}_t=\big(\sum_{\tau\le t}\ve{\phi}_\tau\ve{\phi}_\tau^{\tr}\big)^{-1}$ is the inverse data Gram
 matrix. An exponential \emph{forgetting factor} $\lambda\in(0,1]$ --- weighting old
 data by $\lambda^{t-\tau}$ --- is exactly the Kalman filter with process noise
-$\ve{Q}_t=(\lambda^{-1}-1)\ve{P}_{t-1}$ (equivalently covariance inflation $\ve{P}_t^-=\ve{P}_{t-1}/\lambda$),
+$\ve{\Omega}_t=(\lambda^{-1}-1)\ve{P}_{t-1}$ (equivalently covariance inflation $\ve{P}_t^-=\ve{P}_{t-1}/\lambda$),
 letting the estimate track slowly drifting parameters. RLS is therefore the
 static-state (or random-walk) special case of the Kalman filter.
 
@@ -828,12 +1028,12 @@ Write the memory itself as the hidden state: it drifts between tokens and is obs
 noisy key--value pair at a time, through the current key,
 \begin{equation}
 \begin{aligned}
-  \ve{S}_t &= \ve{D}_t \ve{S}_{t-1} + \ve{W}_t, & \ve{W}_t &\sim\N(0,\ve{Q}_t),\\[2pt]
+  \ve{S}_t &= \ve{D}_t \ve{S}_{t-1} + \ve{W}_t, & \ve{W}_t &\sim\N(0,\ve{\Omega}_t),\\[2pt]
   \ve{v}_t &= \ve{S}_t^{\tr}\ve{k}_t + \ve{e}_t, & \ve{e}_t &\sim\N(0,r_t),
 \end{aligned}
 \label{eq:mem-ssm}
 \end{equation}
-with transition/decay $\ve{D}_t\in\R^{d_k\times d_k}$, drift covariance $\ve{Q}_t$, and scalar
+with transition/decay $\ve{D}_t\in\R^{d_k\times d_k}$, drift covariance $\ve{\Omega}_t$, and scalar
 observation noise $r_t$. The observation map $\ve{k}_t^{\tr}$ and the dynamics $\ve{D}_t$ are shared by
 all $d_v$ value channels, so the posterior factorizes across them: we track one estimate
 $\ve{S}_t\in\R^{d_k\times d_v}$ and a single key-space covariance $\ve{P}_t\in\R^{d_k\times d_k}$.
@@ -844,7 +1044,7 @@ specialized to \eqref{eq:mem-ssm}:
 \begin{equation}
 \begin{aligned}
   \text{predict:}\quad & \widehat{\ve{S}}_t = \ve{D}_t \ve{S}_{t-1},
-  & \widehat{\ve{P}}_t &= \ve{D}_t \ve{P}_{t-1} \ve{D}_t^{\tr} + \ve{Q}_t,\\[2pt]
+  & \widehat{\ve{P}}_t &= \ve{D}_t \ve{P}_{t-1} \ve{D}_t^{\tr} + \ve{\Omega}_t,\\[2pt]
   \text{update:}\quad  & \ve{S}_t = \widehat{\ve{S}}_t
   + \ve{\kappa}_t\,(\ve{v}_t - \widehat{\ve{S}}_t^{\tr}\ve{k}_t)^{\tr},
   & \ve{P}_t &= (\ve{I} - \ve{\kappa}_t \ve{k}_t^{\tr})\widehat{\ve{P}}_t,
@@ -852,7 +1052,7 @@ specialized to \eqref{eq:mem-ssm}:
 \label{eq:mem-kf}
 \end{equation}
 with gain $\ve{\kappa}_t = \widehat{\ve{P}}_t \ve{k}_t/(r_t + \ve{k}_t^{\tr}\widehat{\ve{P}}_t \ve{k}_t)$. In the static-state limit
-($\ve{D}_t=\ve{I}$, $\ve{Q}_t=0$) the estimate has the closed weighted-least-squares form
+($\ve{D}_t=\ve{I}$, $\ve{\Omega}_t=0$) the estimate has the closed weighted-least-squares form
 \begin{equation}
   \ve{S}_t = \ve{P}_t \sum_{\tau\le t}\gamma_{t,\tau}\,\frac{1}{r_\tau}\ve{k}_\tau \ve{v}_\tau^{\tr},
   \qquad
@@ -871,11 +1071,11 @@ $\ve{b}_t=\beta_t \ve{k}_t \ve{v}_t^{\tr}$ depend on the \emph{inputs
 alone}; a chunk of such maps composes into dense matmuls (the WY / chunked scan). The
 optimal filter \eqref{eq:mem-kf} breaks this on two counts. First, the covariance obeys a
 \emph{Riccati recursion}
-$\ve{P}_t=(\ve{I}-\ve{\kappa}_t \ve{k}_t^{\tr})(\ve{D}_t \ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{Q}_t)$ that is
+$\ve{P}_t=(\ve{I}-\ve{\kappa}_t \ve{k}_t^{\tr})(\ve{D}_t \ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t)$ that is
 nonlinear (rational) in $\ve{P}_{t-1}$ and has no closed-form chunk composition --- it must be
 iterated token by token. Second, the gain $\ve{\kappa}_t$ depends on $\ve{P}_{t-1}$, so the state
 coefficient $\ve{A}_t$ depends on the \emph{accumulated} covariance rather than the current
-input, and the recurrence is no longer a fixed linear scan. (Letting $\ve{D}_t$ or $\ve{Q}_t$ depend
+input, and the recurrence is no longer a fixed linear scan. (Letting $\ve{D}_t$ or $\ve{\Omega}_t$ depend
 on $\ve{S}_{t-1}$ compounds this, making even the predict step nonlinear.) On top of the
 sequential dependence, the covariance is $d_k\times d_k$: $O(d_k^2)$ state and work per
 step, versus the delta family's $O(d_k d_v)$ matmuls.
@@ -916,7 +1116,7 @@ along one of these axes.
 \label{app:mem-rls-static}
 
 \paragraph{Online least-squares objective.}
-Dropping the drift ($\ve{D}_t=\ve{I}$, $\ve{Q}_t=0$) reduces the filter of \S\ref{app:mem-kf} to estimating
+Dropping the drift ($\ve{D}_t=\ve{I}$, $\ve{\Omega}_t=0$) reduces the filter of \S\ref{app:mem-kf} to estimating
 a \emph{fixed} memory from streaming observations --- ridge-regularized, recency-weighted
 least squares,
 \begin{equation}
@@ -987,7 +1187,7 @@ corresponding to \eqref{eq:mem-ssm} is
   \argmin_{\ve{S}_0,\ldots,\ve{S}_t}
   \frac12\|\ve{S}_0\|_{\ve{P}_0^{-1}}^2
   +\frac12\sum_{\tau=1}^t
-  \|\ve{S}_\tau-\ve{D}_\tau\ve{S}_{\tau-1}\|_{\ve{Q}_\tau^{-1}}^2
+  \|\ve{S}_\tau-\ve{D}_\tau\ve{S}_{\tau-1}\|_{\ve{\Omega}_\tau^{-1}}^2
   +\frac12\sum_{\tau=1}^t
   \frac{1}{r_\tau}
   \|\ve{S}_\tau^{\tr}\ve{k}_\tau-\ve{v}_\tau\|_2^2 ,
@@ -996,16 +1196,16 @@ corresponding to \eqref{eq:mem-ssm} is
 where $\|\ve{A}\|_{\ve{M}}^2:=\Trace(\ve{A}^{\tr}\ve{M}\ve{A})$. The first term is the prior,
 the second penalizes deviations from the deterministic drift
 $\ve{S}_\tau\approx\ve{D}_\tau\ve{S}_{\tau-1}$, and the third is the observation loss at the
-current key. Thus $\ve{Q}_\tau$ controls how much the memory is allowed to deviate from the
-drifted previous memory: small $\ve{Q}_\tau$ enforces nearly deterministic transport, while
-large $\ve{Q}_\tau$ allows abrupt changes.
+current key. Thus $\ve{\Omega}_\tau$ controls how much the memory is allowed to deviate from the
+drifted previous memory: small $\ve{\Omega}_\tau$ enforces nearly deterministic transport, while
+large $\ve{\Omega}_\tau$ allows abrupt changes.
 
 The online filter is the one-step version of this dynamic least-squares problem. Given the
 posterior at $t-1$, first predict
 \begin{equation}
   \widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1},
   \qquad
-  \widehat{\ve{P}}_t=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{Q}_t .
+  \widehat{\ve{P}}_t=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t .
   \label{eq:drift-filter-predict}
 \end{equation}
 Then the filtered memory is the minimizer
@@ -1025,7 +1225,155 @@ $\ve{S}_{0:t}$, and the online solution carries the predicted covariance
 $\widehat{\ve{P}}_t$ forward through the drift.
 
 % =============================================================================
-\subsection{Isotropic Kalman Linear Attention}
+\subsection{Exact Kalman Delta Network}
+\label{app:exact-kla}
+
+Both diagonal KDN (\S\ref{sec:kla}) and isotropic KDN (\S\ref{app:iso-kla}) restrict the
+uncertainty state to make it scan-computable. Before either approximation, it is useful to
+write down the \emph{exact} Kalman filter as a layer, both as the target the approximations aim
+at and as a ground-truth reference for testing. This is the Kalman optimal update of
+Proposition~\ref{prop:kalman-optimal-update} instantiated with the same learned parameters as
+the other KDN variants, and it is what we implement first as a naive recurrence.
+
+The only structural commitment is on the noise model: the memory transition is diagonal,
+$\ve{D}_t=\diag(\ve{\alpha}_t)$, and the process noise is an \emph{additive diagonal} matrix
+$\ve{\Omega}_t=\diag(\ve{\omega}_t)$ rather than a dense one, so each key channel accrues its own
+independently parameterized drift. Crucially, the covariance $\ve{P}_t$ itself is kept
+\emph{dense}: the rank-one measurement update makes $\ve{P}_t$ dense after the first token, and
+we do not project it back to a diagonal. The gain therefore stays the exact anisotropic Kalman
+gain \eqref{eq:kalman-gain}, not its diagonal surrogate \eqref{eq:diag-kalman-gain}. The cost is
+that $\ve{P}_t\in\R^{d_k\times d_k}$ is carried and updated in full ($O(d_k^2)$ state and work
+per token) and the gain depends on the accumulated posterior covariance, so the recurrence does
+not collapse to a parallel scan --- exactly the obstruction analyzed in
+Appendix~\ref{app:deltanet-wy-exact-kalman}. This is acceptable for a reference implementation
+and for the diagonal/isotropic equivalence checks; it is not the trained fast path.
+
+\paragraph{Prediction.}
+With $\ve{D}_t=\diag(\ve{\alpha}_t)$ and additive diagonal process noise
+$\ve{\Omega}_t=\diag(\ve{\omega}_t)$, the covariance prediction of \eqref{eq:kalman-predict}
+stays exact and is a cheap entrywise map,
+\begin{equation}
+  \widehat{\ve{P}}_t=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t,
+  \qquad
+  \widehat{P}_{t,ij}
+  =
+  \alpha_{t,i}\alpha_{t,j}\,P_{t-1,ij}+\omega_{t,i}\,\mathbf{1}[i=j],
+  \label{eq:exact-kla-predict}
+\end{equation}
+alongside the memory prediction $\widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1}$. Only the diagonal of
+$\widehat{\ve{P}}_t$ receives process noise; the off-diagonal correlations are transported by
+the transition but not injected with drift.
+
+\paragraph{Gain, update, and read.}
+The gain, residual write, and covariance downdate are the unmodified Kalman update
+\eqref{eq:kalman-gain}--\eqref{eq:kalman-update}, now carrying the dense
+$\widehat{\ve{P}}_t$:
+\begin{equation}
+  \ve{\kappa}_t
+  =
+  \frac{\widehat{\ve{P}}_t\ve{k}_t}{r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t},
+  \qquad
+  \ve{S}_t
+  =
+  \widehat{\ve{S}}_t+\ve{\kappa}_t\big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr},
+  \qquad
+  \ve{P}_t
+  =
+  (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t,
+  \label{eq:exact-kla-update}
+\end{equation}
+and the layer reads $\ve{o}_t=\ve{S}_t^{\tr}\ve{q}_t$. Unlike the fixed-gain delta rule, the
+gain direction $\ve{\kappa}_t$ is not proportional to $\ve{k}_t$: the dense
+$\widehat{\ve{P}}_t$ rotates and rescales the write so that well-measured directions are edited
+less than uncertain ones.
+
+\refstepcounter{definition}\label{prop:exact-kalman-linear-attention}
+\begin{tcolorbox}[
+  title={Proposition~\thedefinition: Exact Kalman Delta Network},
+  colback=blue!7,
+  colbacktitle=blue!22,
+  colframe=blue!45!black,
+  coltitle=black,
+  fonttitle=\bfseries,
+  boxrule=0.4pt,
+  arc=1pt,
+  left=5pt,
+  right=5pt,
+  top=5pt,
+  bottom=5pt
+]
+The exact Kalman Delta Network is the Kalman optimal update of
+Proposition~\ref{prop:kalman-optimal-update} run as a layer with a diagonal transition and an
+additive diagonal process noise, keeping the covariance $\ve{P}_t$ dense. Given token
+representation $\ve{x}_t$, key--value pair $(\ve{k}_t,\ve{v}_t)$, query $\ve{q}_t$, previous
+memory $\ve{S}_{t-1}$, and previous covariance $\ve{P}_{t-1}$, the layer parameterizes a
+diagonal memory transition, an additive diagonal process noise, and a token-dependent
+observation noise,
+\begin{equation}
+\begin{aligned}
+  \ve{\alpha}_t &= \sigma(\ve{W}_{\alpha}\ve{x}_t+\ve{b}_{\alpha}),
+  &
+  \ve{\omega}_t &= \omega_{\min}+\operatorname{softplus}(\ve{W}_{\omega}\ve{x}_t+\ve{b}_{\omega}),
+  &
+  r_t &= r_{\min}+\operatorname{softplus}(\ve{w}_{r}^{\tr}\ve{x}_t+b_r),
+  \\[2pt]
+  \ve{D}_t &= \diag(\ve{\alpha}_t),
+  &
+  \ve{\Omega}_t &= \diag(\ve{\omega}_t),
+\end{aligned}
+\label{eq:exact-kla-box-parameterization}
+\end{equation}
+initialized with $\ve{S}_0=\ve{0}$ and isotropic prior covariance $\ve{P}_0=\mu^{-1}\ve{I}$. It
+then runs the exact recurrence
+\begin{equation}
+\begin{aligned}
+  \text{predict:}\quad
+  \widehat{\ve{S}}_t &= \ve{D}_t\ve{S}_{t-1},
+  &
+  \widehat{\ve{P}}_t &= \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t,
+  \\[3pt]
+  \text{gain:}\quad
+  \ve{\kappa}_t &= \frac{\widehat{\ve{P}}_t\ve{k}_t}{r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t},
+  \\[3pt]
+  \text{update:}\quad
+  \ve{S}_t &= \widehat{\ve{S}}_t+\ve{\kappa}_t\big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr},
+  &
+  \ve{P}_t &= (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t,
+  \\[3pt]
+  \text{read:}\quad
+  \ve{o}_t &= \ve{S}_t^{\tr}\ve{q}_t .
+\end{aligned}
+\label{eq:exact-kla-box-recurrence}
+\end{equation}
+Because $\ve{P}_t$ is dense and the gain depends on it, the recurrence is $O(d_k^2)$ per token
+and is not a parallel scan; it is the ground-truth filter that diagonal KDN (\S\ref{sec:kla})
+and isotropic KDN (\S\ref{app:iso-kla}) approximate, and the naive recurrent version we
+implement first.
+\end{tcolorbox}
+
+\paragraph{Implementation notes.}
+For a numerically robust reference, use the symmetric (Joseph) form of the covariance downdate,
+which stays symmetric and positive semidefinite for any $\ve{\kappa}_t$:
+\begin{equation}
+  \ve{P}_t
+  =
+  (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})^{\tr}
+  +r_t\,\ve{\kappa}_t\ve{\kappa}_t^{\tr},
+  \label{eq:exact-kla-joseph}
+\end{equation}
+which equals the posterior covariance $\ve{P}_t(\ve{\kappa}_t)$ minimized in
+\eqref{eq:kalman-tracking-objective}; optionally re-symmetrize
+$\ve{P}_t\leftarrow\tfrac12(\ve{P}_t+\ve{P}_t^{\tr})$. Two equivalence checks fall out directly:
+projecting $\ve{P}_t$ to its diagonal $\diag(\ve{p}_t)$ after each step recovers the diagonal
+predicted variance $\widehat{\ve{p}}_t=\ve{\alpha}_t^2\odot\ve{p}_{t-1}+\ve{\omega}_t$ of
+\S\ref{sec:kla}, and averaging that diagonal recovers the isotropic scalar $\widehat{b}_t$ of
+\S\ref{app:iso-kla}. To align the dense reference with KDN's standardized-coordinate Fisher
+increment \eqref{eq:app-vector-update} for $\ell_2$-normalized keys, use the calibrated
+measurement precision $d_k/r_t$ (equivalently standardized keys
+$\widetilde{\ve{k}}_t=\sqrt{d_k}\,\ve{k}_t$) in the gain.
+
+% =============================================================================
+\subsection{Isotropic Kalman Delta Network}
 \label{app:iso-kla}
 
 Consider the most restrictive covariance family, the isotropic family
@@ -1039,61 +1387,78 @@ Consider the most restrictive covariance family, the isotropic family
   \label{eq:iso-cov-family}
 \end{equation}
 which keeps a single scalar uncertainty $b_t$ (equivalently a scalar information $c_t=b_t^{-1}$)
-for the entire key space. We derive the resulting update by specializing the diagonal KLA
+for the entire key space. We derive the resulting update by specializing the diagonal KDN
 recursion to this family with an independently parameterized additive process noise: predict
 the scalar uncertainty through the transition, apply the scalar measurement update, and read
-off the induced gain. The price of using an independent $q_t$ is that the information recursion
+off the induced gain. The price of using an independent $\omega_t$ is that the information recursion
 is no longer affine in $c_t$; it is a M\"obius map, which is still associative through a
 $2\times2$ matrix scan.
 
 \paragraph{Prediction.}
 With a diagonal transition $\ve{D}_t=\diag(\ve{\alpha}_t)$ and additive process covariance
-$q_t\ve{I}$, the covariance prediction is
-$\widehat{\ve{P}}_t=b_{t-1}\ve{D}_t^2+q_t\ve{I}$. Projecting this diagonal matrix back to the
+$\omega_t\ve{I}$, the covariance prediction is
+$\widehat{\ve{P}}_t=b_{t-1}\ve{D}_t^2+\omega_t\ve{I}$. Projecting this diagonal matrix back to the
 isotropic family by matching average variance gives
 \begin{equation}
   \widehat{b}_t
   =
-  a_t b_{t-1}+q_t,
+  a_t b_{t-1}+\omega_t,
   \qquad
   a_t=\frac{1}{d_k}\sum_{i=1}^{d_k}\ve{\alpha}_{t,i}^2,
   \qquad
-  \widehat{c}_t=\frac{c_{t-1}}{a_t+q_t c_{t-1}}.
+  \widehat{c}_t=\frac{c_{t-1}}{a_t+\omega_t c_{t-1}}.
   \label{eq:iso-kla-predict}
 \end{equation}
 If $\ve{\alpha}_t$ is uniform across channels, this projection is exact. If it is channel-wise,
 the memory transition can still be KDA's $\ve{D}_t=\diag(\ve{\alpha}_t)$, but the uncertainty
 used by the scalar gain sees only the average contraction $a_t$. A diagonal process covariance
-could be used instead by replacing $q_t$ with its average diagonal value.
+could be used instead by replacing $\omega_t$ with its average diagonal value.
 
 \paragraph{Information update and associative scan.}
-In the diagonal information form the Kalman measurement update is additive: the posterior
-information is the predicted information plus the diagonal of the observation's Fisher
-information $\ve{k}_t\ve{k}_t^{\tr}/r_t$, i.e.\ componentwise
+First consider the dimension-stable diagonal information update. Because an $\ell_2$-normalized
+key spreads unit energy over $d_k$ coordinates, the scalar feature for channel $i$ is the
+standardized coordinate $\widetilde{k}_{t,i}=\sqrt{d_k}\,\ve{k}_{t,i}$. The corresponding
+per-channel Fisher increment is therefore
 \begin{equation}
   \ve{c}_{t,i}
   =
-  \widehat{\ve{c}}_{t,i}+\frac{\ve{k}_{t,i}^2}{r_t},
+  \widehat{\ve{c}}_{t,i}+d_k\frac{\ve{k}_{t,i}^2}{r_t},
   \qquad i=1,\dots,d_k .
   \label{eq:iso-kla-diag-info-update}
 \end{equation}
-We collapse this posterior information vector to the isotropic family using the trace, i.e.\
-the total Fisher information in the observed key direction. The predicted covariance is already
-isotropic, so its scalar information is $\widehat{c}_t$; adding the trace of the measurement
-information and using $\sum_i\ve{k}_{t,i}^2=\|\ve{k}_t\|_2^2$ gives
+For spread-out normalized keys this is $O(1/r_t)$ per channel in expectation, instead of
+shrinking as $1/(d_k r_t)$. The isotropic tracker is the scalar average of these calibrated
+diagonal precisions. Since the predicted covariance is already isotropic, its scalar information
+is $\widehat{c}_t$; averaging the measurement increment and using
+$\sum_i\ve{k}_{t,i}^2=\|\ve{k}_t\|_2^2$ gives
 \begin{equation}
   c_t
   =
-  \widehat{c}_t+\sum_{i=1}^{d_k}\frac{\ve{k}_{t,i}^2}{r_t}
+  \widehat{c}_t+\frac{1}{d_k}\sum_{i=1}^{d_k}d_k\frac{\ve{k}_{t,i}^2}{r_t}
   =
   \widehat{c}_t+\frac{\|\ve{k}_t\|_2^2}{r_t},
   \qquad
   c_0=\mu,
   \label{eq:iso-kla-info-update}
 \end{equation}
-which is the scalar measurement update. This trace-scaled isotropic projection avoids the extra
-per-coordinate factor $1/d_k$: for normalized keys, each token contributes information $1/r_t$
-to the scalar uncertainty tracker.
+which is the scalar measurement update. Thus the IsoKLA update is not an additional scaling
+rule; it is the isotropic average of the same standardized-coordinate Fisher increments used by
+the diagonal tracker. Equivalently, the isotropic projection of the calibrated dense Fisher
+matrix $(d_k/r_t)\ve{k}_t\ve{k}_t^{\tr}$ is its trace average:
+\begin{equation}
+  u_t
+  =
+  \frac{1}{d_k}\Trace\!\left(\frac{d_k}{r_t}\ve{k}_t\ve{k}_t^{\tr}\right)
+  =
+  \frac{\|\ve{k}_t\|_2^2}{r_t}.
+  \label{eq:iso-kla-trace-projection}
+\end{equation}
+This is different from summing all entries of $\ve{k}_t\ve{k}_t^{\tr}$, which gives
+$(\ve{1}^{\tr}\ve{k}_t)^2$. That all-entry sum depends on coordinate signs and the chosen basis:
+a key can have large norm but nearly zero coordinate sum, so it would incorrectly assign almost
+no information to the measurement. Keeping the full rank-one matrix is the dense Kalman update;
+once we restrict to an isotropic scalar state, the trace average is the invariant scalar
+projection.
 
 Combining the prediction and update gives a linear-fractional recurrence in the previous
 information state. With
@@ -1105,9 +1470,9 @@ we have
 \begin{equation}
   c_t
   =
-  \frac{c_{t-1}}{a_t+q_t c_{t-1}}+u_t
+  \frac{c_{t-1}}{a_t+\omega_t c_{t-1}}+u_t
   =
-  \frac{(1+u_t q_t)c_{t-1}+u_t a_t}{q_t c_{t-1}+a_t}.
+  \frac{(1+u_t\omega_t)c_{t-1}+u_t a_t}{\omega_t c_{t-1}+a_t}.
   \label{eq:iso-kla-mobius}
 \end{equation}
 Thus each token defines a M\"obius map
@@ -1123,8 +1488,8 @@ Thus each token defines a M\"obius map
   \end{bmatrix}
   =
   \begin{bmatrix}
-    1+u_t q_t & u_t a_t\\
-    q_t & a_t
+    1+u_t\omega_t & u_t a_t\\
+    \omega_t & a_t
   \end{bmatrix}.
   \label{eq:iso-kla-mobius-matrix}
 \end{equation}
@@ -1163,14 +1528,14 @@ fixed-gain residual form
   +\beta_t\ve{k}_t\ve{v}_t^{\tr}.
   \label{eq:iso-kla-memory}
 \end{equation}
-Thus isotropic KLA can adapt the scalar write strength $\beta_t$ through the Kalman uncertainty
+Thus isotropic KDN can adapt the scalar write strength $\beta_t$ through the Kalman uncertainty
 scan, but --- keeping only one scalar for the entire key space --- it cannot assign different
 write strengths to different key channels; an anisotropic gain is recovered only by relaxing to
 the diagonal family.
 
 \refstepcounter{definition}\label{prop:isotropic-kalman-linear-attention}
 \begin{tcolorbox}[
-  title={Proposition~\thedefinition: Isotropic Kalman Linear Attention},
+  title={Proposition~\thedefinition: Isotropic Kalman Delta Network},
   colback=blue!7,
   colbacktitle=blue!22,
   colframe=blue!45!black,
@@ -1183,7 +1548,7 @@ the diagonal family.
   top=5pt,
   bottom=5pt
 ]
-Isotropic Kalman Linear Attention is the scalar-uncertainty specialization of KLA. Given
+The isotropic Kalman Delta Network is the scalar-uncertainty specialization of KDN. Given
 token representation $\ve{x}_t$, key--value pair $(\ve{k}_t,\ve{v}_t)$, and previous memory
 $\ve{S}_{t-1}$, the layer parameterizes a diagonal memory transition, an additive process noise,
 and a token-dependent observation noise,
@@ -1191,7 +1556,7 @@ and a token-dependent observation noise,
 \begin{aligned}
   \ve{\alpha}_t &= \sigma(\ve{W}_{\alpha}\ve{x}_t+\ve{b}_{\alpha}),
   &
-  q_t &= q_{\min}+\operatorname{softplus}(\ve{w}_{q}^{\tr}\ve{x}_t+b_q),
+  \omega_t &= \omega_{\min}+\operatorname{softplus}(\ve{w}_{\omega}^{\tr}\ve{x}_t+b_\omega),
   &
   r_t &= r_{\min}+\operatorname{softplus}(\ve{w}_{r}^{\tr}\ve{x}_t+b_r),
   \\[2pt]
@@ -1207,8 +1572,8 @@ It then computes scalar prefix information statistics by a M\"obius scan:
   \qquad
   \ve{M}_t=
   \begin{bmatrix}
-    1+u_t q_t & u_t a_t\\
-    q_t & a_t
+    1+u_t\omega_t & u_t a_t\\
+    \omega_t & a_t
   \end{bmatrix},
   \qquad
   \begin{bmatrix}n_t\\ d_t\end{bmatrix}
@@ -1227,7 +1592,7 @@ The gain at token $t$ uses the exclusive prefix state $c_{t-1}$:
 \begin{equation}
 \begin{aligned}
   \widehat{c}_t
-  &= \frac{c_{t-1}}{a_t+q_t c_{t-1}},
+  &= \frac{c_{t-1}}{a_t+\omega_t c_{t-1}},
   &
   \widehat{b}_t
   &= \frac{1}{\widehat{c}_t},
@@ -1246,14 +1611,14 @@ affine scan
   +\beta_t\ve{k}_t\ve{v}_t^{\tr}.
   \label{eq:iso-kla-box-memory}
 \end{equation}
-Thus ISO-KLA preserves the Kalman idea of adapting write strength from uncertainty, but the
+Thus ISO-KDN preserves the Kalman idea of adapting write strength from uncertainty, but the
 isotropic covariance restriction forces the gain direction to be $\ve{k}_t$.
 \end{tcolorbox}
 
-Therefore ISO-KLA sits between fixed-gain delta rules and diagonal KLA: it keeps a
+Therefore ISO-KDN sits between fixed-gain delta rules and diagonal KDN: it keeps a
 Kalman-style scalar uncertainty and token-dependent observation noise, but because
 $\ve{P}_t$ is isotropic, it always writes along $\ve{k}_t$ with one scalar strength. Diagonal
-KLA strictly generalizes this by replacing the scalar $b_t$ with a vector
+Diagonal KDN strictly generalizes this by replacing the scalar $b_t$ with a vector
 $\ve{p}_t$, allowing the gain to be anisotropic.
 
 % =============================================================================
@@ -1261,22 +1626,24 @@ $\ve{p}_t$, allowing the gain to be anisotropic.
 \label{app:diag-info}
 
 This section derives, step by step, the predicted uncertainty $\widehat{\ve{p}}_t$ of
-\S\ref{sec:kla} from the diagonal covariance recursion. With an independently parameterized
-process noise, the information update is a M\"obius map; this remains parallelizable because
-M\"obius maps compose by $2\times2$ matrix multiplication. All products, inverses, and ratios
-are coordinatewise; we write a single channel and drop the index.
+\S\ref{sec:kla} from the diagonal covariance recursion and identifies the only approximation:
+the dense measurement information is projected back to a diagonal state. With an independently
+parameterized process noise, the resulting information update is a M\"obius map; this remains
+parallelizable because M\"obius maps compose by $2\times2$ matrix multiplication. All products,
+inverses, and ratios are coordinatewise after the diagonal projection; we then write a single
+channel and drop the index.
 
 \paragraph{Diagonal state.}
 Restrict the key-space covariance of the associative-memory filter \eqref{eq:mem-kf} to
 diagonal, $\ve{P}_t=\diag(\ve{p}_t)$, with transition $\ve{D}_t=\diag(\ve{\alpha}_t)$ and process
-noise $\ve{Q}_t=\diag(\ve{q}_t)$. Per channel, track the variance $p_t$ and its reciprocal, the
+noise $\ve{\Omega}_t=\diag(\ve{\omega}_t)$. Per channel, track the variance $p_t$ and its reciprocal, the
 information $c_t=1/p_t$.
 
 \paragraph{Step 1 --- predict (the master recursion).}
-The covariance predict $\widehat{\ve{P}}_t=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{Q}_t$ preserves
+The covariance predict $\widehat{\ve{P}}_t=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t$ preserves
 diagonality, and per channel is
 \begin{equation}
-  \boxed{\;\widehat{p}_t=\alpha_t^2\,p_{t-1}+q_t\;}
+  \boxed{\;\widehat{p}_t=\alpha_t^2\,p_{t-1}+\omega_t\;}
   \label{eq:app-predict}
 \end{equation}
 (the diagonal form of \eqref{eq:diag-covariance-prediction}). This is the \emph{only} exact
@@ -1284,74 +1651,92 @@ predicted variance; every expression below is \eqref{eq:app-predict} written in 
 variables.
 
 \paragraph{Step 2 --- update, in information form.}
-The measurement step of the information filter adds the observation's information,
-$\ve{C}_t=\widehat{\ve{C}}_t+\ve{k}_t\ve{k}_t^{\tr}/r_t$; keeping the diagonal (the diagonal
-restriction) gives, per channel,
+Restore vector notation for the measurement step. Given the predicted diagonal information
+$\widehat{\ve{C}}_t=\diag(\widehat{\ve{c}}_t)$, the exact linear-Gaussian information update is
 \begin{equation}
-  c_t=\widehat{c}_t+\frac{k_t^2}{r_t},
+  \ve{C}_t^{\mathrm{exact}}
+  =
+  \widehat{\ve{C}}_t+\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr}.
+  \label{eq:app-exact-info-update}
+\end{equation}
+The added Fisher information is rank one and generally dense, so keeping only a diagonal vector
+$\ve{c}_t$ is a projection approximation. The literal diagonal projection would add
+$\ve{k}_t\odot\ve{k}_t/r_t$. For $\ell_2$-normalized keys, however, a raw coordinate has typical
+squared size $1/d_k$, so that update gives each channel only $O(1/(d_k r_t))$ information.
+Using the standardized coordinate $\widetilde{k}_{t,i}=\sqrt{d_k}\,\ve{k}_{t,i}$ gives the
+calibrated diagonal update
+\begin{equation}
+  \ve{c}_t=\widehat{\ve{c}}_t+\frac{d_k}{r_t}\,\ve{k}_t\odot\ve{k}_t.
+  \label{eq:app-vector-update}
+\end{equation}
+Equivalently, per channel,
+\begin{equation}
+  c_t=\widehat{c}_t+d_k\frac{k_t^2}{r_t},
   \qquad
   \widehat{c}_t:=\frac{1}{\widehat{p}_t}.
   \label{eq:app-update}
 \end{equation}
-So $\widehat{c}_t$ is \emph{defined} as $1/\widehat{p}_t$; it is not a separate quantity.
+For normalized keys with roughly uniform coordinate energy, this gives
+$\mathbb{E}[d_k k_t^2/r_t]\approx 1/r_t$ per channel. The predicted information
+$\widehat{c}_t$ is still \emph{defined} as $1/\widehat{p}_t$; it is not a separate quantity.
 
 \paragraph{Step 3 --- the recursion.}
 Insert \eqref{eq:app-predict} into $\widehat{c}_t=1/\widehat{p}_t$ and use $p_{t-1}=1/c_{t-1}$:
 \begin{equation}
   \widehat{c}_t
-  =\frac{1}{\alpha_t^2\,p_{t-1}+q_t}
-  =\frac{1}{\alpha_t^2/c_{t-1}+q_t}
-  =\frac{c_{t-1}}{\alpha_t^2+q_t\,c_{t-1}},
+  =\frac{1}{\alpha_t^2\,p_{t-1}+\omega_t}
+  =\frac{1}{\alpha_t^2/c_{t-1}+\omega_t}
+  =\frac{c_{t-1}}{\alpha_t^2+\omega_t\,c_{t-1}},
   \label{eq:app-chat}
 \end{equation}
 so the full posterior recursion is
 \begin{equation}
-  c_t=\frac{c_{t-1}}{\alpha_t^2+q_t\,c_{t-1}}+\frac{k_t^2}{r_t}.
+  c_t=\frac{c_{t-1}}{\alpha_t^2+\omega_t\,c_{t-1}}+d_k\frac{k_t^2}{r_t}.
   \label{eq:app-cfull}
 \end{equation}
-For a general $q_t$ this is a \emph{M\"obius} (linear-fractional) map of $c_{t-1}$,
+For a general $\omega_t$ this is a \emph{M\"obius} (linear-fractional) map of $c_{t-1}$,
 $c_t=(A_tc_{t-1}+B_t)/(C_tc_{t-1}+D_t)$, with
 \begin{equation}
   \begin{bmatrix}A_t&B_t\\[2pt] C_t&D_t\end{bmatrix}
-  =\begin{bmatrix}1+\tfrac{k_t^2}{r_t}\,q_t & \tfrac{k_t^2}{r_t}\,\alpha_t^2\\[3pt] q_t & \alpha_t^2\end{bmatrix}.
+  =\begin{bmatrix}1+d_k\tfrac{k_t^2}{r_t}\,\omega_t & d_k\tfrac{k_t^2}{r_t}\,\alpha_t^2\\[3pt] \omega_t & \alpha_t^2\end{bmatrix}.
   \label{eq:app-mobius}
 \end{equation}
 M\"obius maps compose by matrix multiplication, so $c_T$ is the action of the product
-$\ve{M}_T\cdots\ve{M}_1$ on $c_0$. When $q_t$ is input-only the matrices are input-only, the
+$\ve{M}_T\cdots\ve{M}_1$ on $c_0$. When $\omega_t$ is input-only the matrices are input-only, the
 product is associative, and it parallelizes as the scan in \eqref{eq:diag-info-scan} (at higher
 constant cost than an affine scan, and needing per-chunk renormalization since the entries can
-span a wide range). This is the diagonal-information recursion used by KLA with freely
+span a wide range). This is the diagonal-information recursion used by KDN with freely
 parameterized additive process noise.
 
 \paragraph{Step 4 --- the special choice that linearizes the scan.}
-Equation~\eqref{eq:app-cfull} is affine in $c_{t-1}$ iff the product $q_t\,c_{t-1}$ is
-state-independent, i.e.\ iff $q_t\propto p_{t-1}$. Writing this as
+Equation~\eqref{eq:app-cfull} is affine in $c_{t-1}$ iff the product $\omega_t\,c_{t-1}$ is
+state-independent, i.e.\ iff $\omega_t\propto p_{t-1}$. Writing this as
 \begin{equation}
-  q_t=(\lambda_t^{-1}-\alpha_t^2)\,p_{t-1}
+  \omega_t=(\lambda_t^{-1}-\alpha_t^2)\,p_{t-1}
   \qquad\Longleftrightarrow\qquad
-  \lambda_t=\frac{1}{\alpha_t^2+q_t/p_{t-1}}
+  \lambda_t=\frac{1}{\alpha_t^2+\omega_t/p_{t-1}}
   \label{eq:app-lambda}
 \end{equation}
-(the identity \eqref{eq:app-lambda}) makes $\alpha_t^2+q_t\,c_{t-1}=\lambda_t^{-1}$, so
+(the identity \eqref{eq:app-lambda}) makes $\alpha_t^2+\omega_t\,c_{t-1}=\lambda_t^{-1}$, so
 \eqref{eq:app-chat}--\eqref{eq:app-cfull} collapse to the affine scan
 \begin{equation}
   \widehat{c}_t=\lambda_t\,c_{t-1},
   \qquad
-  c_t=\lambda_t\,c_{t-1}+\frac{k_t^2}{r_t},
+  c_t=\lambda_t\,c_{t-1}+d_k\frac{k_t^2}{r_t},
   \label{eq:app-affine}
 \end{equation}
-which is the cheaper affine-scan restriction. Substituting the \emph{same} $q_t$ back into the master
+which is the cheaper affine-scan restriction. Substituting the \emph{same} $\omega_t$ back into the master
 recursion \eqref{eq:app-predict},
 \begin{equation}
-  \widehat{p}_t=\alpha_t^2\,p_{t-1}+q_t=\lambda_t^{-1}\,p_{t-1}=\frac{1}{\widehat{c}_t},
+  \widehat{p}_t=\alpha_t^2\,p_{t-1}+\omega_t=\lambda_t^{-1}\,p_{t-1}=\frac{1}{\widehat{c}_t},
   \label{eq:app-phat}
 \end{equation}
 i.e.\ \eqref{eq:prefix-diag-uncertainty}. The transition term $\alpha_t^2$ is not dropped; it is
-exactly cancelled by this $q_t$. The small prior $\mu$ enters only through the initialization
+exactly cancelled by this $\omega_t$. The small prior $\mu$ enters only through the initialization
 $c_0=\mu$, which keeps the information state positive at the start of the scan.
 
 \paragraph{Recovering KDA.}
-KLA reduces to KDA when the transition remains KDA's diagonal transition and the predicted
+KDN reduces to KDA when the transition remains KDA's diagonal transition and the predicted
 uncertainty becomes isotropic. In the diagonal information form, this means
 \begin{equation}
   \ve{D}_t=\diag(\ve{\alpha}_t),
@@ -1361,18 +1746,18 @@ uncertainty becomes isotropic. In the diagonal information form, this means
   \widehat{\ve{c}}_t=b_t^{-1}\ve{1}
   \label{eq:app-kda-isotropic-condition}
 \end{equation}
-for some scalar $b_t>0$. Since KLA parameterizes an additive process noise and uses
-$\widehat{p}_{t,i}=\alpha_{t,i}^2p_{t-1,i}+q_{t,i}$, the isotropic condition is
+for some scalar $b_t>0$. Since KDN parameterizes an additive process noise and uses
+$\widehat{p}_{t,i}=\alpha_{t,i}^2p_{t-1,i}+\omega_{t,i}$, the isotropic condition is
 \begin{equation}
-  \alpha_{t,i}^2p_{t-1,i}+q_{t,i}
+  \alpha_{t,i}^2p_{t-1,i}+\omega_{t,i}
   =
   b_t,
   \qquad\text{equivalently}\qquad
-  q_{t,i}=b_t-\alpha_{t,i}^2p_{t-1,i},
-  \label{eq:app-kda-q-condition}
+  \omega_{t,i}=b_t-\alpha_{t,i}^2p_{t-1,i},
+  \label{eq:app-kda-omega-condition}
 \end{equation}
-for every channel $i$, with the validity condition $q_{t,i}\ge 0$. Under
-\eqref{eq:app-kda-isotropic-condition}, the KLA gain collapses to
+for every channel $i$, with the validity condition $\omega_{t,i}\ge 0$. Under
+\eqref{eq:app-kda-isotropic-condition}, the KDN gain collapses to
 \begin{equation}
   \ve{\kappa}_t
   =
@@ -1392,16 +1777,369 @@ For normalized keys, $\beta_t=b_t/(r_t+b_t)$.
 
 \paragraph{Consequences.}
 \begin{itemize}[leftmargin=1.4em,itemsep=3pt,topsep=2pt]
-  \item Equation~\eqref{eq:app-predict}, $\widehat{p}_t=\alpha_t^2 p_{t-1}+q_t$, is the master
+  \item Equation~\eqref{eq:app-predict}, $\widehat{p}_t=\alpha_t^2 p_{t-1}+\omega_t$, is the master
   recursion; \eqref{eq:app-chat} is the same recursion written in information variables.
   \item $\widehat{p}_t=1/\widehat{c}_t$ is not an additional modeling term. Since
-  $\widehat{c}_t=c_{t-1}/(\alpha_t^2+q_t c_{t-1})$, its inverse is exactly
-  $\alpha_t^2p_{t-1}+q_t$. Adding $q_t$ again would double-count the process noise.
-  \item Free, input-only, $p$-independent $q_t$ gives the M\"obius scan
-  \eqref{eq:app-mobius}; the older $\lambda$-form $q_t\propto p_{t-1}$ is the special case that
+  $\widehat{c}_t=c_{t-1}/(\alpha_t^2+\omega_t c_{t-1})$, its inverse is exactly
+  $\alpha_t^2p_{t-1}+\omega_t$. Adding $\omega_t$ again would double-count the process noise.
+  \item Free, input-only, $p$-independent $\omega_t$ gives the M\"obius scan
+  \eqref{eq:app-mobius}; the older $\lambda$-form $\omega_t\propto p_{t-1}$ is the special case that
   collapses this to the affine scan \eqref{eq:app-affine}.
 \end{itemize}
 
+
+% =============================================================================
+\section{Can the DeltaNet WY trick parallelize exact Kalman?}
+\label{app:deltanet-wy-exact-kalman}
+
+The chunkwise DeltaNet algorithm of \citet{yang2024parallelizing} is a useful comparison point,
+but it does not directly remove the covariance recursion of the exact Kalman filter. The reason is
+where the associativity lives.
+
+\paragraph{What the DeltaNet trick parallelizes.}
+Up to transpose conventions, the fixed-gain delta update has the form
+\begin{equation}
+  \ve{S}_t
+  =
+  (\ve{I}-\beta_t\ve{k}_t\ve{k}_t^{\tr})\ve{S}_{t-1}
+  +\beta_t\ve{k}_t\ve{v}_t^{\tr}.
+  \label{eq:app-deltanet-fixed-gain}
+\end{equation}
+The erase direction $\beta_t\ve{k}_t$ is known from the current token before the memory state is
+updated. Therefore the within-chunk transition matrices
+$\ve{I}-\beta_t\ve{k}_t\ve{k}_t^{\tr}$ are input-known rank-one maps. DeltaNet exploits this by
+representing their product with a compact WY/UT form.
+
+To see the algebra, use DeltaNet's row-state convention within a chunk of length $C$:
+\begin{equation}
+  \ve{S}_r
+  =
+  \ve{S}_{r-1}(\ve{I}-\beta_r\ve{k}_r\ve{k}_r^{\tr})
+  +\beta_r\ve{v}_r\ve{k}_r^{\tr},
+  \qquad r=1,\ldots,C,
+  \label{eq:app-deltanet-row-update}
+\end{equation}
+with chunk input state $\ve{S}_0$. Write
+$\ve{H}_r=\ve{I}-\beta_r\ve{k}_r\ve{k}_r^{\tr}$. The unrolled state has the form
+\begin{equation}
+  \ve{S}_r=\ve{S}_0\ve{P}_r+\ve{R}_r,
+  \qquad
+  \ve{P}_r=\ve{H}_1\cdots\ve{H}_r.
+  \label{eq:app-deltanet-unroll}
+\end{equation}
+The compact representation is that both $\ve{P}_r$ and the additive term $\ve{R}_r$ can be
+written using only vectors:
+\begin{equation}
+  \ve{P}_r
+  =
+  \ve{I}-\sum_{i=1}^r \ve{w}_i\ve{k}_i^{\tr},
+  \qquad
+  \ve{R}_r
+  =
+  \sum_{i=1}^r \ve{u}_i\ve{k}_i^{\tr}.
+  \label{eq:app-deltanet-compact-pr}
+\end{equation}
+Induction gives the recurrences
+\begin{equation}
+\begin{aligned}
+  \ve{w}_r
+  &=
+  \beta_r
+  \left(
+    \ve{k}_r-\sum_{i<r}\ve{w}_i(\ve{k}_i^{\tr}\ve{k}_r)
+  \right),
+  \\
+  \ve{u}_r
+  &=
+  \beta_r
+  \left(
+    \ve{v}_r-\sum_{i<r}\ve{u}_i(\ve{k}_i^{\tr}\ve{k}_r)
+  \right).
+\end{aligned}
+\label{eq:app-deltanet-wu-rec}
+\end{equation}
+These equations still look sequential, but the dependency is only lower triangular within the
+chunk. Stack the row vectors into
+$\ve{K},\ve{W}\in\R^{C\times d_k}$ and
+$\ve{V},\ve{U}\in\R^{C\times d_v}$, and let
+$\ve{B}=\diag(\ve{\beta})$. If
+\begin{equation}
+  \ve{L}=\operatorname{tril}(\ve{B}\ve{K}\ve{K}^{\tr},-1),
+  \label{eq:app-deltanet-lower}
+\end{equation}
+then \eqref{eq:app-deltanet-wu-rec} is exactly the pair of triangular systems
+\begin{equation}
+  (\ve{I}_C+\ve{L})\ve{W}=\ve{B}\ve{K},
+  \qquad
+  (\ve{I}_C+\ve{L})\ve{U}=\ve{B}\ve{V}.
+  \label{eq:app-deltanet-tri-systems}
+\end{equation}
+Equivalently,
+\begin{equation}
+  \ve{T}=(\ve{I}_C+\ve{L})^{-1}\ve{B},
+  \qquad
+  \ve{W}=\ve{T}\ve{K},
+  \qquad
+  \ve{U}=\ve{T}\ve{V}.
+  \label{eq:app-deltanet-ut}
+\end{equation}
+This is the UT form used by \citet{yang2024parallelizing}. The only solve is over the
+$C\times C$ lower-triangular matrix $\ve{I}_C+\ve{L}$; after it is solved, the rest of the
+chunk is standard matrix multiplication.
+
+Substituting \eqref{eq:app-deltanet-compact-pr} into
+\eqref{eq:app-deltanet-unroll} gives
+\begin{equation}
+  \ve{S}_r
+  =
+  \ve{S}_0+\sum_{i=1}^r
+  \left(\ve{u}_i-\ve{S}_0\ve{w}_i\right)\ve{k}_i^{\tr}.
+  \label{eq:app-deltanet-chunk-state}
+\end{equation}
+Thus, with $\widetilde{\ve{U}}=\ve{U}-\ve{W}\ve{S}_0^{\tr}$ and causal mask
+$\ve{M}_C$, the whole chunk is
+\begin{equation}
+  \ve{S}_C=\ve{S}_0+\widetilde{\ve{U}}^{\tr}\ve{K},
+  \qquad
+  \ve{O}
+  =
+  \ve{Q}\ve{S}_0^{\tr}
+  +(\ve{Q}\ve{K}^{\tr}\odot\ve{M}_C)\widetilde{\ve{U}}.
+  \label{eq:app-deltanet-chunk-parallel}
+\end{equation}
+This is the parallelizable form: no per-token hidden matrices $\ve{S}_1,\ldots,\ve{S}_C$ are
+materialized, and the recurrent-looking inner update has become one triangular solve plus
+matrix multiplications.
+
+The same idea applies to any fixed-gain residual memory update whose erase/write directions are
+available before the memory scan. In particular, once KDN has computed a sequence of gains
+$\ve{\kappa}_t$, the memory update
+\begin{equation}
+  \ve{S}_t
+  =
+  (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\ve{D}_t\ve{S}_{t-1}
+  +\ve{\kappa}_t\ve{v}_t^{\tr}
+  \label{eq:app-kla-memory-fixed-kappa}
+\end{equation}
+is again an affine fast-weight recurrence with input-known coefficients. DeltaNet-style chunking
+can then parallelize the \emph{memory} update.
+
+\paragraph{Where exact Kalman differs.}
+In the exact filter, however, the gain is not input-known:
+\begin{equation}
+  \ve{\kappa}_t
+  =
+  \frac{\widehat{\ve{P}}_t\ve{k}_t}
+       {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t},
+  \qquad
+  \widehat{\ve{P}}_t
+  =
+  \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t .
+  \label{eq:app-exact-kalman-state-dependent-gain}
+\end{equation}
+The coefficient of the rank-one memory map in \eqref{eq:app-kla-memory-fixed-kappa} depends on
+the accumulated posterior covariance. Thus the triangular WY system cannot be formed from
+$(\ve{k}_t,\ve{v}_t,\ve{D}_t,\ve{\Omega}_t,r_t)$ alone: one must first solve the uncertainty
+recursion that determines $\widehat{\ve{P}}_t$.
+
+Equivalently, the exact covariance update is a Riccati recursion,
+\begin{equation}
+  \ve{P}_t
+  =
+  \widehat{\ve{P}}_t
+  -
+  \frac{\widehat{\ve{P}}_t\ve{k}_t\ve{k}_t^{\tr}\widehat{\ve{P}}_t}
+       {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}
+  =
+  \left(\widehat{\ve{P}}_t^{-1}+\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr}\right)^{-1}.
+  \label{eq:app-full-riccati}
+\end{equation}
+This is the part not handled by DeltaNet's WY representation. WY parallelizes products of
+already-known rank-one memory transitions; it does not make the state-dependent Kalman gains
+available for free.
+
+\paragraph{Associative in principle, but not cheap.}
+The full Riccati recursion still has algebraic structure. Assuming $\ve{D}_t$ is invertible, the
+prediction step can be written as the matrix linear-fractional map
+\begin{equation}
+  \widehat{\ve{P}}_t
+  =
+  \big(\ve{D}_t\ve{P}_{t-1}
+      +\ve{\Omega}_t\ve{D}_t^{-\tr}\big)
+  \big(\ve{D}_t^{-\tr}\big)^{-1},
+  \label{eq:app-predict-lft}
+\end{equation}
+and the measurement update as
+\begin{equation}
+  \ve{P}_t
+  =
+  \ve{P}_t^-
+  \left(\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr}\ve{P}_t^-+\ve{I}\right)^{-1}.
+  \label{eq:app-measure-lft}
+\end{equation}
+Thus each token can be represented by a block matrix acting on covariance matrices through
+\begin{equation}
+  \ve{P}\mapsto(\ve{A}\ve{P}+\ve{B})(\ve{C}\ve{P}+\ve{D})^{-1},
+  \qquad
+  \begin{bmatrix}\ve{A}&\ve{B}\\ \ve{C}&\ve{D}\end{bmatrix}\in\R^{2d_k\times 2d_k}.
+  \label{eq:app-matrix-mobius}
+\end{equation}
+These matrix M\"obius maps compose by block-matrix multiplication, exactly like the scalar
+$2\times2$ maps in \eqref{eq:app-mobius}. Therefore an exact parallel scan exists in principle.
+But its scan state is dense: composing two summaries costs cubic time in $d_k$ in the generic
+case, and materializing prefix summaries costs quadratic memory per token. This is a very
+different object from the DeltaNet chunk solve, whose within-chunk work is built from
+$C\times C$ triangular systems and $d_k$-wide matrix multiplications.
+
+\paragraph{Special cases and practical routes.}
+The exact measurement update is simple in dense information form:
+\begin{equation}
+  \ve{C}_t
+  =
+  \widehat{\ve{C}}_t+\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr}.
+  \label{eq:app-dense-info-rank-one}
+\end{equation}
+The difficulty is the next prediction step when additive process noise is present. Process noise is
+added in covariance space, so with $\ve{C}_{t-1}=\ve{P}_{t-1}^{-1}$ the predicted information is
+\begin{equation}
+  \widehat{\ve{C}}_t
+  =
+  \left(
+    \ve{D}_t\ve{C}_{t-1}^{-1}\ve{D}_t^{\tr}+\ve{\Omega}_t
+  \right)^{-1}.
+  \label{eq:app-dense-info-predict}
+\end{equation}
+If $\ve{\Omega}_t=0$, this reduces to a linear information prediction,
+\begin{equation}
+  \ve{C}_t^-
+  =
+  \ve{D}_t^{-\tr}\ve{C}_{t-1}\ve{D}_t^{-1},
+  \qquad
+  \ve{C}_t
+  =
+  \ve{C}_t^-+\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr}.
+  \label{eq:app-no-drift-linear-info}
+\end{equation}
+For diagonal $\ve{D}_t=\diag(\ve{\alpha}_t)$, this is just entrywise scaling,
+$\widehat{C}_{t,ij}=C_{t-1,ij}/(\alpha_{t,i}\alpha_{t,j})$, followed by the rank-one add
+\eqref{eq:app-dense-info-rank-one}. Thus the no-drift dense information recursion is an affine
+scan over dense matrices.
+
+With additive drift $\ve{\Omega}_t\ne0$, the inverse in \eqref{eq:app-dense-info-predict} does
+not distribute over the sum. Even if both $\ve{D}_t$ and $\ve{\Omega}_t$ are diagonal, a previous
+rank-one measurement has already made $\ve{C}_{t-1}$ dense. Define
+\begin{equation}
+  \ve{G}_t=\ve{D}_t^{-\tr}\ve{C}_{t-1}\ve{D}_t^{-1}.
+  \label{eq:app-dense-g}
+\end{equation}
+Woodbury gives the equivalent information prediction
+\begin{equation}
+  \widehat{\ve{C}}_t
+  =
+  \ve{G}_t
+  -
+  \ve{G}_t
+  \left(\ve{\Omega}_t^{-1}+\ve{G}_t\right)^{-1}
+  \ve{G}_t .
+  \label{eq:app-dense-woodbury-predict}
+\end{equation}
+Although $\ve{\Omega}_t^{-1}$ is diagonal, $\ve{G}_t$ is dense, so
+$\ve{\Omega}_t^{-1}+\ve{G}_t$ is dense and computing $\widehat{\ve{C}}_t$ requires a dense solve.
+This is the precise sense in which additive diagonal process noise breaks the simple dense
+information scan: the observation update remains a rank-one add, but the prediction step becomes
+a dense matrix-fractional map.
+
+\paragraph{Possible workarounds.}
+There are several ways around this obstruction, but each changes either the exactness target or
+the computational profile.
+\begin{enumerate}[leftmargin=1.6em,itemsep=3pt,topsep=3pt]
+  \item \textbf{Track dense covariance directly.}
+  In covariance variables, additive diagonal process noise is easy:
+  \begin{equation}
+    \widehat{\ve{P}}_t=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t,
+    \qquad
+    \widehat{P}_{t,ij}
+    =
+    \alpha_{t,i}\alpha_{t,j}P_{t-1,ij}
+    +\omega_{t,i}\mathbf{1}[i=j].
+    \label{eq:app-dense-cov-predict}
+  \end{equation}
+  The measurement update is also an explicit rank-one downdate,
+  \begin{equation}
+    \ve{P}_t
+    =
+    \widehat{\ve{P}}_t
+    -
+    \frac{\widehat{\ve{P}}_t\ve{k}_t\ve{k}_t^{\tr}\widehat{\ve{P}}_t}
+         {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}.
+    \label{eq:app-dense-cov-update}
+  \end{equation}
+  This gives an exact dense recurrent reference without matrix inversion, but the gain still
+  depends on the updated covariance, so the sequence remains state-dependent and not a cheap
+  DeltaNet-style chunk scan.
+
+  \item \textbf{Remove additive drift.}
+  Setting $\ve{\Omega}_t=0$ gives the affine dense-information scan
+  \eqref{eq:app-no-drift-linear-info}. This is exact for a deterministic transition model, but it
+  removes independent process drift. For contractive $\alpha_{t,i}<1$, the deterministic map
+  shrinks covariance and therefore increases information unless additional modeling choices
+  counteract it.
+
+  \item \textbf{Use state-proportional process noise.}
+  Choose process noise so that prediction is multiplicative in covariance,
+  \begin{equation}
+    \widehat{\ve{P}}_t
+    =
+    \lambda_t^{-1}\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr},
+    \qquad
+    \ve{\Omega}_t
+    =
+    (\lambda_t^{-1}-1)\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}.
+    \label{eq:app-state-proportional-drift}
+  \end{equation}
+  Then
+  \begin{equation}
+    \widehat{\ve{C}}_t
+    =
+    \lambda_t\ve{D}_t^{-\tr}\ve{C}_{t-1}\ve{D}_t^{-1},
+    \label{eq:app-state-proportional-info}
+  \end{equation}
+  so the information scan is affine again. The price is semantic: $\ve{\Omega}_t$ is no longer an
+  independently parameterized diagonal additive noise; it is tied to the current posterior
+  covariance.
+
+  \item \textbf{Use block-diagonal covariance.}
+  Partition key channels into blocks and keep dense Kalman algebra only within each block:
+  \begin{equation}
+    \ve{C}_t^{(j)}
+    =
+    \widehat{\ve{C}}_t^{(j)}
+    +
+    \frac{1}{r_t}\ve{k}_t^{(j)}\ve{k}_t^{(j)\tr}.
+    \label{eq:app-block-info-update}
+  \end{equation}
+  This preserves within-block correlations and replaces one full $d_k\times d_k$ solve by many
+  small $b\times b$ solves or matrix M\"obius scans. It is approximate because the cross-block
+  Fisher terms $\ve{k}_t^{(j)}\ve{k}_t^{(\ell)\tr}/r_t$ are dropped.
+
+  \item \textbf{Use diagonal plus low rank information.}
+  Maintain
+  \begin{equation}
+    \ve{C}_t=\diag(\ve{c}_t)+\ve{U}_t\ve{U}_t^{\tr}.
+    \label{eq:app-diag-low-rank-info}
+  \end{equation}
+  The measurement update appends a rank-one direction. Woodbury can then keep predictions and
+  gains tractable as long as the rank is controlled. This requires a truncation or compression
+  rule, so it is a richer approximation rather than an exact fixed-size filter.
+\end{enumerate}
+
+The practical conclusion is simple: the WY trick and exact Kalman address different
+bottlenecks. The WY trick is valuable after the gains are known; exact Kalman still needs a
+tractable gain recursion. KDN chooses the diagonal restriction, where the Riccati map reduces to
+independent scalar M\"obius scans. A natural middle ground is block-diagonal covariance: use
+small $b\times b$ matrix M\"obius scans to compute blockwise gains, then feed those gains into a
+chunked memory update. This keeps the exact Kalman algebra inside each block, while making the
+cost scale with the chosen block size rather than the full head dimension.
 
 
 

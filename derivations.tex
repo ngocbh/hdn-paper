@@ -1,0 +1,898 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{enumitem}
+\usepackage{xcolor}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\ve}[1]{\boldsymbol{#1}}
+\newcommand{\tr}{\intercal}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\Trace}{Tr}
+
+\title{Kalman Associative Memory Derivations}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Kalman Associative Memory: optimal update}
+
+Let the associative-memory state be
+\[
+  \ve{S}_t \in \R^{d_k\times d_v},
+  \qquad
+  \mathcal{M}_t(\ve{k})=\ve{S}_t^{\tr}\ve{k}.
+\]
+The linear--Gaussian state-space model is
+\begin{align}
+  \ve{S}_t^\star
+  &= \ve{D}_t\ve{S}_{t-1}^\star+\ve{W}_t,
+  &
+  \ve{W}_t&\sim\mathcal{N}(0,\ve{\Omega}_t), \\
+  \ve{v}_t
+  &= \ve{S}_t^{\star\tr}\ve{k}_t+\ve{e}_t,
+  &
+  \ve{e}_t&\sim\mathcal{N}(0,r_t\ve{I}).
+\end{align}
+Let $\ve{z}_s=(\ve{k}_s,\ve{v}_s)$ denote the key--value observation at step $s$.
+At the end of step $t-1$, the Kalman filter represents the posterior over the latent
+memory as a Gaussian,
+\begin{equation}
+  p(\ve{S}_{t-1}^\star\mid \ve{z}_{1:t-1})
+  =
+  \mathcal{N}(\ve{S}_{t-1},\ve{P}_{t-1}),
+  \label{eq:previous-filtering-posterior}
+\end{equation}
+where $\ve{S}_{t-1}$ is the posterior mean, i.e.\ the point estimate of the memory after
+processing the first $t-1$ key--value pairs, and $\ve{P}_{t-1}$ is its key-space uncertainty.
+For the matrix memory, this covariance is understood per value coordinate, with the same
+key-space covariance shared across value columns.
+
+Before observing token $t$, the filter first predicts the next latent memory by marginalizing
+over the previous posterior:
+\begin{equation}
+  p(\ve{S}_t^\star\mid \ve{z}_{1:t-1})
+  =
+  \int
+  p(\ve{S}_t^\star\mid \ve{S}_{t-1}^\star)
+  p(\ve{S}_{t-1}^\star\mid \ve{z}_{1:t-1})
+  \,d\ve{S}_{t-1}^\star .
+  \label{eq:prediction-integral}
+\end{equation}
+Because both factors are linear--Gaussian, the predicted distribution is Gaussian,
+\begin{equation}
+  p(\ve{S}_t^\star\mid \ve{z}_{1:t-1})
+  =
+  \mathcal{N}(\widehat{\ve{S}}_t,\widehat{\ve{P}}_t).
+  \label{eq:predicted-prior}
+\end{equation}
+Its mean and covariance are the exact Kalman prediction:
+\begin{equation}
+  \widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1},
+  \qquad
+  \widehat{\ve{P}}_t
+  =
+  \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t.
+  \label{eq:kam-predict}
+\end{equation}
+Thus $\widehat{\ve{S}}_t$ is a point estimate, but specifically the \emph{predicted prior
+mean} of $\ve{S}_t^\star$ conditioned on the past key--value sequence
+$\ve{z}_{1:t-1}$. It is not yet the point estimate of
+$p(\ve{S}_t^\star\mid \ve{z}_{1:t})$, because the current pair
+$(\ve{k}_t,\ve{v}_t)$ has not been used. The covariance $\widehat{\ve{P}}_t$ is not a point
+estimate; it is the predicted uncertainty around that mean.
+The predicted read and innovation are
+\begin{equation}
+  \widehat{\ve{v}}_t=\widehat{\ve{S}}_t^{\tr}\ve{k}_t,
+  \qquad
+  \ve{\delta}_t=\ve{v}_t-\widehat{\ve{v}}_t.
+  \label{eq:kam-innovation}
+\end{equation}
+
+This residual form is the matrix version of the standard Kalman correction. To see it,
+first look at one value coordinate $j$. Let $\ve{s}_{t,j}$ be column $j$ of the memory and
+let $v_{t,j}$ be coordinate $j$ of the observed value. The measurement model is
+\begin{equation}
+  v_{t,j}
+  =
+  \ve{k}_t^{\tr}\ve{s}_{t,j}^\star+e_{t,j},
+  \qquad
+  e_{t,j}\sim\mathcal{N}(0,r_t).
+  \label{eq:single-value-coordinate-observation}
+\end{equation}
+Before this measurement is used, the predicted distribution for this column is
+\begin{equation}
+  \ve{s}_{t,j}^\star \mid \ve{z}_{1:t-1}
+  \sim
+  \mathcal{N}(\widehat{\ve{s}}_{t,j},\widehat{\ve{P}}_t).
+  \label{eq:single-coordinate-prior}
+\end{equation}
+The observation $v_{t,j}$ is one scalar. Its predicted mean is
+$\ve{k}_t^{\tr}\widehat{\ve{s}}_{t,j}$, so the part of the observation not already predicted
+by the prior is the scalar residual
+\begin{equation}
+  \delta_{t,j}
+  =
+  v_{t,j}-\ve{k}_t^{\tr}\widehat{\ve{s}}_{t,j}.
+  \label{eq:single-coordinate-innovation}
+\end{equation}
+For a joint Gaussian pair $(x,y)$ with scalar $y$, the conditional mean is
+\[
+  \mathbb{E}[x\mid y]
+  =
+  \mathbb{E}[x]
+  +
+  \operatorname{Cov}(x,y)\operatorname{Var}(y)^{-1}
+  \big(y-\mathbb{E}[y]\big).
+\]
+Apply this identity with $x=\ve{s}_{t,j}^\star$ and $y=v_{t,j}$. Under
+\eqref{eq:single-coordinate-prior}--\eqref{eq:single-value-coordinate-observation},
+\begin{equation}
+  \operatorname{Cov}(\ve{s}_{t,j}^\star,v_{t,j})
+  =
+  \widehat{\ve{P}}_t\ve{k}_t,
+  \qquad
+  \operatorname{Var}(v_{t,j})
+  =
+  \ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t+r_t.
+  \label{eq:single-coordinate-cross-cov}
+\end{equation}
+Therefore the posterior mean is
+\begin{equation}
+  \ve{s}_{t,j}
+  =
+  \widehat{\ve{s}}_{t,j}
+  +
+  \ve{\kappa}_t\,\delta_{t,j}.
+  \label{eq:single-coordinate-kalman-correction}
+\end{equation}
+where
+\begin{equation}
+  \ve{\kappa}_t
+  =
+  \frac{\widehat{\ve{P}}_t\ve{k}_t}
+  {\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t+r_t}.
+  \label{eq:single-coordinate-gain}
+\end{equation}
+The same $\ve{\kappa}_t$ applies to every value coordinate because the model uses the same
+key-space covariance $\widehat{\ve{P}}_t$ and the same observation noise $r_t$ for every
+coordinate of $\ve{v}_t$. Stacking \eqref{eq:single-coordinate-kalman-correction} over
+$j=1,\ldots,d_v$ gives the rank-one residual write
+\begin{equation}
+  \ve{S}_t
+  =
+  \widehat{\ve{S}}_t
+  +
+  \ve{\kappa}_t
+  \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr}.
+  \label{eq:kam-residual-write}
+\end{equation}
+Thus the residual write does not come from DeltaNet first; it comes from the Kalman
+posterior-mean update $x^+=x^-+K(y-Hx^-)$. DeltaNet later appears as the fixed-gain special
+case where $\ve{\kappa}_t$ is forced to be proportional to $\ve{k}_t$.
+For a candidate write direction $\ve{\kappa}_t$, the posterior covariance induced by this
+write is
+\begin{equation}
+  \ve{P}_t(\ve{\kappa}_t)
+  =
+  (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})
+  \widehat{\ve{P}}_t
+  (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})^{\tr}
+  +
+  r_t\ve{\kappa}_t\ve{\kappa}_t^{\tr}.
+  \label{eq:kam-candidate-cov}
+\end{equation}
+The Kalman write direction is the minimizer of total posterior uncertainty,
+\begin{equation}
+  \ve{\kappa}_t^\star
+  =
+  \arg\min_{\ve{\kappa}_t}
+  \Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right).
+  \label{eq:kam-trace-objective}
+\end{equation}
+Expanding the trace gives
+\begin{equation}
+  \Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right)
+  =
+  \Trace(\widehat{\ve{P}}_t)
+  -2\ve{\kappa}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t
+  +
+  \big(r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t\big)
+  \ve{\kappa}_t^{\tr}\ve{\kappa}_t .
+  \label{eq:kam-trace-expanded}
+\end{equation}
+Taking the gradient with respect to $\ve{\kappa}_t$ and setting it to zero yields
+\begin{equation}
+  \boxed{
+  \ve{\kappa}_t
+  =
+  \frac{\widehat{\ve{P}}_t\ve{k}_t}
+  {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}
+  }.
+  \label{eq:kam-optimal-gain}
+\end{equation}
+Therefore the exact Kalman Associative Memory update is
+\begin{equation}
+\begin{aligned}
+  \widehat{\ve{S}}_t
+  &=\ve{D}_t\ve{S}_{t-1},
+  &
+  \widehat{\ve{P}}_t
+  &=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t,
+  \\
+  \ve{\kappa}_t
+  &=
+  \frac{\widehat{\ve{P}}_t\ve{k}_t}
+  {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t},
+  &
+  \ve{S}_t
+  &=
+  \widehat{\ve{S}}_t
+  +
+  \ve{\kappa}_t
+  \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr},
+  \\
+  \ve{P}_t
+  &=
+  (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t.
+\end{aligned}
+\label{eq:kam-optimal-update}
+\end{equation}
+This is the reference update. The remaining question is which part of it can be made
+tractable and scan-computable without losing the link between uncertainty, transition, and
+write strength.
+
+\section{Dense covariance and dense information before approximation}
+
+Before introducing any diagonal restriction, keep the covariance as a full dense matrix
+$\ve{P}_t\in\R^{d_k\times d_k}$. The prediction step is exactly
+\begin{equation}
+  \widehat{\ve{P}}_t
+  =
+  \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t.
+  \label{eq:dense-predict}
+\end{equation}
+After the measurement at key $\ve{k}_t$, the Kalman gain and covariance update are
+\begin{equation}
+  \ve{\kappa}_t
+  =
+  \frac{\widehat{\ve{P}}_t\ve{k}_t}
+  {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t},
+  \qquad
+  \ve{P}_t
+  =
+  (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t.
+  \label{eq:dense-cov-update}
+\end{equation}
+Substituting the gain into the covariance update gives the dense posterior covariance
+explicitly:
+\begin{equation}
+\begin{aligned}
+  \ve{P}_t
+  &=
+  \widehat{\ve{P}}_t
+  -
+  \frac{\widehat{\ve{P}}_t\ve{k}_t}
+       {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}
+  \ve{k}_t^{\tr}\widehat{\ve{P}}_t \\
+  &=
+  \widehat{\ve{P}}_t
+  -
+  \frac{
+    \widehat{\ve{P}}_t\ve{k}_t\ve{k}_t^{\tr}\widehat{\ve{P}}_t
+  }
+  {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}.
+\end{aligned}
+  \label{eq:dense-cov-expanded}
+\end{equation}
+This is still exact and dense.
+
+Now define dense information matrices
+\[
+  \ve{C}_t=\ve{P}_t^{-1},
+  \qquad
+  \widehat{\ve{C}}_t=\widehat{\ve{P}}_t^{-1}.
+\]
+The rank-one Woodbury identity gives
+\begin{equation}
+  \left(\widehat{\ve{C}}_t+\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr}\right)^{-1}
+  =
+  \widehat{\ve{P}}_t
+  -
+  \frac{
+    \widehat{\ve{P}}_t\ve{k}_t\ve{k}_t^{\tr}\widehat{\ve{P}}_t
+  }
+  {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}.
+  \label{eq:dense-woodbury}
+\end{equation}
+The right-hand side is exactly \eqref{eq:dense-cov-expanded}. Therefore the same dense
+measurement update in information form is
+\begin{equation}
+  \boxed{
+  \ve{C}_t
+  =
+  \widehat{\ve{C}}_t+\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr}.
+  }
+  \label{eq:exact-info-update}
+\end{equation}
+So if we allow dense $\ve{P}_t$ or dense $\ve{C}_t$, there is no approximation here. The
+measurement adds a rank-one dense information matrix.
+
+\paragraph{What becomes difficult.}
+The dense route is mathematically clean but not the desired linear-attention primitive.
+First, the state itself costs $O(d_k^2)$ per head instead of $O(d_k)$. Computing the gain
+requires the dense matrix-vector product $\widehat{\ve{P}}_t\ve{k}_t$ and the quadratic form
+$\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t$, which are $O(d_k^2)$ per token. Second, the
+covariance recursion is sequential: the gain at time $t$ depends on the dense posterior
+uncertainty produced by all previous keys. Third, dense information form only makes the
+measurement update simple. The prediction step becomes
+\begin{equation}
+  \widehat{\ve{C}}_t
+  =
+  \left(\ve{D}_t\ve{C}_{t-1}^{-1}\ve{D}_t^{\tr}+\ve{\Omega}_t\right)^{-1},
+  \label{eq:dense-info-predict-hard}
+\end{equation}
+which requires an inverse when the process noise $\ve{\Omega}_t$ is additive. Thus dense
+$\ve{C}_t$ is easy to update after a measurement but hard to predict through process noise,
+while dense $\ve{P}_t$ is easy to predict but expensive to update and use for gains.
+
+\paragraph{What is $\widehat{\ve{C}}_t$ used for?}
+The Kalman gain itself is naturally written in terms of the predicted covariance:
+\begin{equation}
+  \ve{\kappa}_t
+  =
+  \frac{\widehat{\ve{P}}_t\ve{k}_t}
+  {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}.
+  \label{eq:gain-needs-phat}
+\end{equation}
+Thus the gain does not need $\widehat{\ve{C}}_t$ as a matrix; it needs the vector
+\begin{equation}
+  \ve{x}_t=\widehat{\ve{P}}_t\ve{k}_t
+  =
+  \widehat{\ve{C}}_t^{-1}\ve{k}_t,
+  \qquad
+  \ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t=\ve{k}_t^{\tr}\ve{x}_t.
+  \label{eq:gain-from-chat-solve}
+\end{equation}
+If $\widehat{\ve{C}}_t$ is dense, computing $\ve{x}_t$ means solving the linear system
+$\widehat{\ve{C}}_t\ve{x}_t=\ve{k}_t$, which is not cheaper than dense covariance algebra in
+general.
+
+One can compute the gain ingredients directly from $\ve{C}_{t-1}$ without explicitly forming
+$\widehat{\ve{C}}_t$:
+\begin{equation}
+\begin{aligned}
+  \widehat{\ve{P}}_t\ve{k}_t
+  &=
+  \big(\ve{D}_t\ve{C}_{t-1}^{-1}\ve{D}_t^{\tr}+\ve{\Omega}_t\big)\ve{k}_t \\
+  &=
+  \ve{D}_t\ve{C}_{t-1}^{-1}(\ve{D}_t^{\tr}\ve{k}_t)
+  +\ve{\Omega}_t\ve{k}_t.
+\end{aligned}
+  \label{eq:gain-direct-from-ctminus}
+\end{equation}
+This is exact if the solve with $\ve{C}_{t-1}$ is exact. It is useful conceptually because it
+shows that $\widehat{\ve{C}}_t$ is mainly a predicted information state for the measurement
+update and scan recursion, not a required intermediate for the gain. In the diagonal case,
+\eqref{eq:gain-direct-from-ctminus} becomes coordinatewise:
+\begin{equation}
+  \widehat{p}_{t,i}k_{t,i}
+  =
+  \left(\frac{\alpha_{t,i}^2}{c_{t-1,i}}+\omega_{t,i}\right)k_{t,i},
+  \qquad
+  \ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t
+  =
+  \sum_i
+  \left(\frac{\alpha_{t,i}^2}{c_{t-1,i}}+\omega_{t,i}\right)k_{t,i}^2.
+  \label{eq:diag-gain-direct-from-cprev}
+\end{equation}
+Equivalently, $\widehat{c}_{t,i}=1/\widehat{p}_{t,i}$ is used when updating the information
+state after the measurement.
+
+\paragraph{Can we parameterize $\ve{\Omega}_t\ve{k}_t$ directly?}
+The term $\ve{\Omega}_t\ve{k}_t$ is the process-noise contribution to the gain numerator.
+Define
+\[
+  \ve{\xi}_t\triangleq \ve{\Omega}_t\ve{k}_t .
+\]
+Then the gain ingredients can be written as
+\begin{equation}
+\begin{aligned}
+  \widehat{\ve{P}}_t\ve{k}_t
+  &=
+  \ve{D}_t\ve{C}_{t-1}^{-1}(\ve{D}_t^{\tr}\ve{k}_t)
+  +\ve{\xi}_t,\\
+  \ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t
+  &=
+  (\ve{D}_t^{\tr}\ve{k}_t)^{\tr}\ve{C}_{t-1}^{-1}
+  (\ve{D}_t^{\tr}\ve{k}_t)
+  +\ve{k}_t^{\tr}\ve{\xi}_t .
+\end{aligned}
+  \label{eq:gain-direct-xi}
+\end{equation}
+So for the gain alone, it is enough to know the vector action $\ve{\xi}_t$ and the scalar
+$\ve{k}_t^{\tr}\ve{\xi}_t$; one does not need the full matrix $\ve{\Omega}_t$.
+
+However, $\ve{\xi}_t$ is not automatically a valid process covariance. To remain
+Kalman-consistent, there must exist a symmetric positive semidefinite $\ve{\Omega}_t$ such that
+$\ve{\xi}_t=\ve{\Omega}_t\ve{k}_t$ and
+$\ve{k}_t^{\tr}\ve{\xi}_t=\ve{k}_t^{\tr}\ve{\Omega}_t\ve{k}_t\ge 0$. In the diagonal case this
+means
+\[
+  \ve{\xi}_t=\ve{\omega}_t\odot\ve{k}_t,
+  \qquad
+  \ve{\omega}_t\ge 0,
+  \qquad
+  \ve{k}_t^{\tr}\ve{\xi}_t=\sum_i\omega_{t,i}k_{t,i}^2.
+\]
+This is equivalent to parameterizing the diagonal process noise $\ve{\omega}_t$; it does not
+change the uncertainty scan. If instead we parameterize an arbitrary vector $\ve{\xi}_t$ and a
+positive scalar denominator contribution directly, the gain can be made easier to compute and
+remains input-only once the prefix information state is known. But then the update is no
+longer the exact Kalman covariance recursion unless we also define a compatible
+$\ve{\Omega}_t$ and update the uncertainty state with it. In that case it should be viewed as a
+learned gain approximation rather than a full process-noise model.
+
+\paragraph{Options from the dense information prediction.}
+Strictly, \eqref{eq:dense-info-predict-hard} defines the predicted information
+$\widehat{\ve{C}}_t$, not the posterior information $\ve{C}_t$. From this equation, the
+available paths are:
+\begin{enumerate}[leftmargin=1.6em,itemsep=3pt]
+  \item \textbf{Stay exact and dense.} Compute
+  $\widehat{\ve{C}}_t=(\ve{D}_t\ve{C}_{t-1}^{-1}\ve{D}_t^{\tr}+\ve{\Omega}_t)^{-1}$ directly.
+  This keeps the Kalman filter exact, but requires dense inverses or dense linear solves.
+
+  \item \textbf{Use covariance for prediction.} Keep the uncertainty state in covariance form
+  rather than information form. Then the process step is immediate:
+  \[
+    \widehat{\ve{P}}_t
+    =
+    \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t .
+  \]
+  This avoids the difficult inverse in \eqref{eq:dense-info-predict-hard}. The gain is then
+  computed from this predicted covariance:
+  \[
+    \ve{\kappa}_t
+    =
+    \frac{\widehat{\ve{P}}_t\ve{k}_t}
+    {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}.
+  \]
+  After the measurement, the covariance state for the next token is
+  \[
+    \ve{P}_t
+    =
+    (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t.
+  \]
+  Therefore the recurrence is
+  \[
+    \ve{P}_{t-1}
+    \longrightarrow
+    \widehat{\ve{P}}_t
+    \longrightarrow
+    \ve{\kappa}_t
+    \longrightarrow
+    \ve{P}_t .
+  \]
+  If implemented literally, this recurrence is sequential. If we ignore storage and compute
+  cost, however, the dense covariance recursion is parallelizable in principle. Each token
+  defines a Riccati map $\ve{P}_t=F_t(\ve{P}_{t-1})$, and prefix covariances are
+  \[
+    \ve{P}_t=(F_t\circ F_{t-1}\circ\cdots\circ F_1)(\ve{P}_0).
+  \]
+  Function composition is associative. More concretely, when $\ve{D}_t$ is invertible, the
+  prediction and measurement updates are matrix fractional maps. The prediction can be
+  written as
+  \[
+    \widehat{\ve{P}}_t
+    =
+    (\ve{D}_t\ve{P}_{t-1}+\ve{\Omega}_t\ve{D}_t^{-\tr})
+    (\ve{D}_t^{-\tr})^{-1},
+  \]
+  and the measurement update can be written as
+  \[
+    \ve{P}_t
+    =
+    \widehat{\ve{P}}_t
+    \left(\ve{I}+\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr}\widehat{\ve{P}}_t\right)^{-1}.
+  \]
+  These fractional maps compose by multiplying their block-matrix representations, so the
+  dense uncertainty prefix can be computed by a scan in principle. The issue is therefore not
+  mathematical associativity. The issue is that this is a dense Riccati scan, not the cheap
+  affine memory scan used by linear attention; after the scan one still has to recover
+  $\widehat{\ve{P}}_t$ and form $\widehat{\ve{P}}_t\ve{k}_t$ for every token to get the gains.
+  Converting to information would mean forming
+  $\widehat{\ve{C}}_t=\widehat{\ve{P}}_t^{-1}$, which is another dense inverse, so this path
+  usually stays in covariance form.
+
+  The memory cost is the main practical obstacle. At autoregressive inference time, a dense
+  covariance filter stores one $\ve{P}_t\in\R^{d_k\times d_k}$ per head, i.e.\ $O(d_k^2)$
+  uncertainty state instead of the $O(d_k)$ state of a diagonal tracker. In parallel training,
+  a dense Riccati scan must materialize either dense prefix covariances or dense fractional-map
+  scan elements for many tokens. Each token's fractional map is represented by a
+  $2d_k\times 2d_k$ block matrix, equivalently four dense $d_k\times d_k$ blocks, so the
+  scan state is still $O(d_k^2)$ per token. Across a length-$T$ sequence this is
+  $O(Td_k^2)$ per head just for the uncertainty scan, before storing the usual key, value,
+  gain, and memory-scan quantities. The diagonal approximation reduces this uncertainty-scan
+  storage to $O(Td_k)$.
+
+  \item \textbf{Remove additive process noise.} If $\ve{\Omega}_t=0$ and $\ve{D}_t$ is
+  invertible, then the information prediction is exact and simple:
+  \[
+    \widehat{\ve{C}}_t=\ve{D}_t^{-\tr}\ve{C}_{t-1}\ve{D}_t^{-1}.
+  \]
+  This is tractable algebraically, but it removes the additive uncertainty growth that
+  represents drift.
+
+  \item \textbf{Restrict to a diagonal family.} If $\ve{D}_t$, $\ve{\Omega}_t$, and
+  $\ve{C}_{t-1}$ are diagonal, the inverse is coordinatewise:
+  \[
+    \widehat{c}_{t,i}
+    =
+    \frac{c_{t-1,i}}{\alpha_{t,i}^2+\omega_{t,i}c_{t-1,i}}.
+  \]
+  This is the tractable path used below, but the following measurement update must be
+  projected back to diagonal.
+
+  \item \textbf{Use structured covariance.} Keep blocks, diagonal-plus-low-rank factors, or
+  chunkwise dense states. These approximate the dense equation more closely than a diagonal
+  vector, but their scan and gain computations are more expensive.
+\end{enumerate}
+
+This is the point where tractability enters. The diagonal state below is not needed for the
+Kalman derivation; it is a computational restriction that keeps the uncertainty state
+linear in $d_k$ and makes a scan-compatible approximation possible.
+
+\section{Diagonal information as the tractable state}
+
+Because the dense recursions above are too expensive for a linear-attention layer, we
+restrict the uncertainty state to the space of diagonal covariance matrices, the simplest
+family that is still more expressive than a scalar gain:
+\begin{equation}
+  \ve{P}_t\in\{\diag(\ve{p}):\ve{p}\in\R_+^{d_k}\},
+  \qquad
+  \ve{P}_t=\diag(\ve{p}_t),
+  \qquad
+  \ve{C}_t=\ve{P}_t^{-1}=\diag(\ve{c}_t).
+  \label{eq:diag-cov-family}
+\end{equation}
+Here $\ve{p}_t$ is per-channel uncertainty and $\ve{c}_t$ is per-channel information.
+The information parameterization $\ve{C}_t$ is useful, but it is only one possible way to
+move forward; the exact object under the diagonal restriction is still the covariance
+prediction below.
+
+\subsection{Transition-aware diagonal prediction}
+
+With a diagonal process model $\ve{D}_t=\diag(\ve{\alpha}_t)$ and diagonal process noise
+$\ve{\Omega}_t=\diag(\ve{\omega}_t)$, the Kalman covariance prediction remains pointwise:
+\begin{equation}
+  \widehat{\ve{p}}_t
+  =
+  \ve{\alpha}_t^2\odot\ve{p}_{t-1}+\ve{\omega}_t .
+  \tag{21}
+  \label{eq:diag-predict-vector}
+\end{equation}
+The gain is then the diagonal approximation of the Kalman gain,
+\begin{equation}
+  \ve{\kappa}_t
+  =
+  \frac{\widehat{\ve{p}}_t\odot\ve{k}_t}
+  {r_t+\sum_i\widehat{p}_{t,i}k_{t,i}^2}.
+  \tag{22}
+  \label{eq:diag-gain-vector}
+\end{equation}
+Unlike the fixed-gain delta rule, in the exact prediction \eqref{eq:diag-predict-vector} the
+gain $\ve{\kappa}_t$ depends on the same process model that predicts the memory: if a channel
+is forgotten or assigned high process noise, its uncertainty changes before the write is
+formed. How much of this coupling survives once the recursion is made scan-computable
+depends on the parameterization.
+
+Per channel, the covariance predict is
+\begin{equation}
+  \boxed{\widehat{p}_t=\alpha_t^2p_{t-1}+\omega_t.}
+  \tag{67}
+  \label{eq:diag-predict-scalar}
+\end{equation}
+This is the diagonal form of \eqref{eq:diag-predict-vector}. It is the only exact predicted
+variance; every expression below is \eqref{eq:diag-predict-scalar} written in different
+variables or followed by an approximation.
+
+\subsection*{Options after the exact predicted variance}
+
+At this point the derivation is still exact under the diagonal covariance restriction. There
+are several ways to go forward:
+\begin{enumerate}[leftmargin=1.6em,itemsep=3pt]
+  \item \textbf{Keep covariance variables.} Track $\ve{p}_t$ directly and compute
+  $\widehat{\ve{p}}_t$ by \eqref{eq:diag-predict-vector}. This is closest to the Kalman gain,
+  but the posterior covariance update after measurement is not diagonal unless we project.
+
+  \item \textbf{Use information variables.} Track $\ve{c}_t=\ve{p}_t^{-1}$. This makes the
+  Gaussian measurement update additive in information form and can lead to a scan-computable
+  recursion. This is one option, not the only one.
+
+  \item \textbf{Project to an isotropic scalar.} Replace $\ve{p}_t$ by $b_t\ve{1}$ or
+  $\ve{P}_t$ by $b_t\ve{I}$. This preserves the delta-rule write direction
+  $\ve{\kappa}_t\propto\ve{k}_t$, but loses per-channel uncertainty.
+
+  \item \textbf{Use a richer structured family.} Track block-diagonal, diagonal-plus-low-rank,
+  or chunk-boundary covariance states. These keep more correlations than a diagonal vector,
+  but they are more expensive and require a different scan design.
+
+  \item \textbf{Freeze or approximate the gain.} Compute gains from input-only or chunkwise
+  prefix statistics and then use the standard affine memory scan. This is an implementation
+  choice, not an exact Kalman covariance recursion.
+\end{enumerate}
+
+\section{Measurement boundary after choosing a diagonal state}
+
+From the dense derivation above, the measurement update in information variables is
+\eqref{eq:exact-info-update}. Now impose the diagonal state restriction. If
+$\widehat{\ve{C}}_t=\diag(\widehat{\ve{c}}_t)$, then the measurement still gives
+\begin{equation}
+  \ve{C}_t
+  =
+  \diag(\widehat{\ve{c}}_t)+\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr}.
+  \label{eq:diag-prior-dense-posterior}
+\end{equation}
+The rank-one term is dense for a general key $\ve{k}_t$, so the posterior information matrix
+is generally not diagonal:
+\[
+  \ve{C}_t\notin
+  \{\diag(\ve{c}):\ve{c}\in\R_+^{d_k}\}.
+\]
+A vector state $\ve{c}_t$ cannot represent this posterior exactly. This is where exactness
+stops for the diagonal family: any diagonal update after \eqref{eq:diag-prior-dense-posterior}
+is a projection or approximation.
+
+\subsection*{Options at the measurement boundary}
+
+After reaching the dense posterior in \eqref{eq:diag-prior-dense-posterior}, the available
+choices are:
+\begin{enumerate}[leftmargin=1.6em,itemsep=3pt]
+  \item \textbf{Keep the exact dense posterior.} This remains Kalman-exact, but it loses the
+  diagonal state and is not the intended tractable linear-attention update.
+
+  \item \textbf{Literal diagonal projection.} Keep only the diagonal of
+  $\ve{k}_t\ve{k}_t^{\tr}/r_t$, giving
+  $\ve{c}_t=\widehat{\ve{c}}_t+(\ve{k}_t\odot\ve{k}_t)/r_t$. This is the literal diagonal of the
+  exact Fisher term, but it is poorly scaled for normalized high-dimensional keys.
+
+  \item \textbf{Calibrated diagonal projection.} Standardize each key coordinate before taking
+  the diagonal Fisher increment, giving the dimension-stable update derived below.
+
+  \item \textbf{Isotropic projection.} Average the calibrated diagonal information into one
+  scalar. This keeps a scalar uncertainty and recovers a gain direction proportional to
+  $\ve{k}_t$.
+
+  \item \textbf{Structured projection.} Keep block-diagonal or low-rank pieces of the
+  rank-one Fisher term. This is closer to the exact posterior but more expensive than a
+  diagonal vector.
+\end{enumerate}
+
+\section{Calibrated diagonal information update}
+
+If we choose a diagonal vector state, we need to replace the dense Fisher matrix
+$\ve{k}_t\ve{k}_t^{\tr}/r_t$ by a diagonal increment. The literal diagonal increment is
+\[
+  \frac{1}{r_t}\ve{k}_t\odot\ve{k}_t.
+\]
+For $\ell_2$-normalized keys with spread-out energy, a typical coordinate satisfies
+$\mathbb{E}[k_{t,i}^2]\approx 1/d_k$. Therefore the literal per-channel increment has size
+\[
+  \mathbb{E}\!\left[\frac{k_{t,i}^2}{r_t}\right]
+  \approx
+  \frac{1}{d_k r_t},
+\]
+which vanishes as the key dimension grows. That scaling makes the diagonal tracker depend on
+the arbitrary representation dimension rather than on the observation reliability $r_t$.
+
+To get a dimension-stable per-channel Fisher increment, use the standardized coordinate
+\[
+  \widetilde{k}_{t,i}=\sqrt{d_k}\,k_{t,i}.
+\]
+For normalized spread-out keys,
+\[
+  \mathbb{E}[\widetilde{k}_{t,i}^{\,2}]
+  =
+  d_k\mathbb{E}[k_{t,i}^2]
+  \approx 1.
+\]
+The scalar Fisher information contributed by coordinate $i$ is therefore
+\[
+  \frac{\widetilde{k}_{t,i}^{\,2}}{r_t}
+  =
+  \frac{d_k}{r_t}k_{t,i}^2.
+\]
+This gives the calibrated diagonal update
+\begin{equation}
+  \boxed{
+  \ve{c}_t
+  =
+  \widehat{\ve{c}}_t
+  +
+  \frac{d_k}{r_t}\,\ve{k}_t\odot\ve{k}_t.
+  }
+  \label{eq:calibrated-diag-update}
+\end{equation}
+Equivalently, per channel,
+\begin{equation}
+  c_{t,i}
+  =
+  \widehat{c}_{t,i}
+  +
+  \frac{d_k}{r_t}k_{t,i}^2.
+  \label{eq:calibrated-diag-update-coordinate}
+\end{equation}
+
+\subsection*{Where approximation enters}
+
+The prediction
+\[
+  \widehat{p}_{t,i}=\alpha_{t,i}^2p_{t-1,i}+\omega_{t,i}
+\]
+is exact under the diagonal covariance restriction. The dense information update
+\[
+  \ve{C}_t
+  =
+  \widehat{\ve{C}}_t+\ve{k}_t\ve{k}_t^{\tr}/r_t
+\]
+is exact for the linear--Gaussian measurement. The calibrated diagonal update
+\eqref{eq:calibrated-diag-update} is not the exact posterior; it is a dimension-stable
+diagonal projection of the measurement information. From this point onward, any
+scan-computable diagonal recursion, including an information-form or M\"obius recurrence,
+is an approximation to the exact dense Kalman posterior.
+
+\subsection*{Options after the calibrated projection}
+
+Once the calibrated diagonal update is chosen, the remaining design options are:
+\begin{enumerate}[leftmargin=1.6em,itemsep=3pt]
+  \item \textbf{Free additive process noise.} Keep $\omega_{t,i}$ as an input-only additive
+  variance. In information variables this produces a per-channel linear-fractional
+  recurrence that can be scanned with $2\times2$ matrices.
+
+  \item \textbf{State-proportional process noise.} Choose $\omega_t\propto p_{t-1}$ so the
+  information recursion becomes affine. This is cheaper, but it restricts the process-noise
+  model.
+
+  \item \textbf{Isotropic information.} Average the diagonal information into one scalar if the
+  goal is to preserve the delta-rule write direction exactly.
+
+  \item \textbf{Richer covariance families.} Move beyond the diagonal projection with blocks,
+  low-rank terms, or chunkwise dense updates if the diagonal approximation is too weak.
+\end{enumerate}
+
+\section*{Note: language-modeling objective}
+
+The trace objective in \eqref{eq:kam-trace-objective} is a local Bayesian criterion for the
+associative-memory update. Under the linear--Gaussian model, it chooses the Kalman/MMSE write
+direction by minimizing posterior covariance. This is a useful adaptive-gain prior, but it is
+not the objective optimized by an autoregressive language model. A language model is trained
+to minimize future next-token negative log likelihood under a finite memory budget.
+
+For the language-modeling use case, the more aligned local question is therefore:
+\begin{quote}
+  \emph{Choose the write gain that most improves future next-token prediction under limited
+  memory capacity.}
+\end{quote}
+Writing
+\[
+  \ve{S}_t(\ve{\kappa})
+  =
+  \widehat{\ve{S}}_t
+  +
+  \ve{\kappa}
+  \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr},
+\]
+a direct idealization is
+\begin{equation}
+  \ve{\kappa}_t^\star
+  \approx
+  \arg\min_{\ve{\kappa}}
+  \mathbb{E}_{1\le h\le H}
+  \left[
+    \ell_{\mathrm{LM}}\!\left(
+      x_{t+h}\mid x_{<t+h},\ve{S}_t(\ve{\kappa})
+    \right)
+  \right]
+  +
+  \lambda_{\mathrm{int}}\,
+  \mathcal{I}_t(\ve{\kappa}),
+  \label{eq:lm-predictive-memory-objective}
+\end{equation}
+where $\mathcal{I}_t$ measures interference with useful contents already stored in the
+memory. This objective is not meant to be solved literally inside the layer. It clarifies
+what the Kalman update should approximate if it is to be useful for language modeling.
+
+\paragraph{Short-horizon predictive loss.}
+The most direct proxy is to prefer writes that reduce cross entropy over a short future
+horizon:
+\[
+  \ve{\kappa}_t
+  \quad\text{should reduce}\quad
+  \ell_{\mathrm{LM}}(x_{t+1:t+H}\mid x_{\le t},\ve{S}_t).
+\]
+This says that a good write is one that helps future prediction, not merely one that reduces
+geometric uncertainty.
+
+\paragraph{Future-read reconstruction.}
+The memory should store information that future queries will actually read. A corresponding
+proxy is
+\[
+  \mathbb{E}_{\tau>t}
+  \left[
+    \left\|
+      \ve{S}_t(\ve{\kappa})^{\tr}\ve{q}_{\tau}
+      -
+      \ve{y}_{\tau}
+    \right\|_2^2
+  \right],
+\]
+where $\ve{q}_{\tau}$ denotes a future read query and $\ve{y}_{\tau}$ denotes the target
+content for that query. This differs from $\Trace(\ve{P}_t)$ because language modeling does
+not value all key-space directions equally; it values directions that future tokens will
+query.
+
+\paragraph{Surprise-weighted writing.}
+A language-model memory should write more when the current token contributes useful new
+information. Thus the gain should depend not only on key-space uncertainty, but also on a
+causal surprise signal:
+\[
+  \text{write strength}
+  \propto
+  \text{useful surprise}
+  \times
+  \text{retrievability}
+  \times
+  \text{non-redundancy}.
+\]
+The associative-memory innovation is one local, non-leaking proxy:
+\[
+  \ve{\delta}_t
+  =
+  \ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t,
+  \qquad
+  s_t
+  =
+  \operatorname{sg}\!\left(
+    \frac{1}{d_v}\|\ve{\delta}_t\|_2^2
+  \right),
+\]
+where $\operatorname{sg}(\cdot)$ denotes stop-gradient. A conservative implementation can
+let $s_t$ modulate the Kalman confidence parameters:
+\[
+  r_t
+  =
+  r_{\min}+\operatorname{softplus}(\rho_t-a\,\widetilde{s}_t),
+  \qquad
+  \omega_{t,i}
+  =
+  \omega_{\min}+\operatorname{softplus}(\eta_{t,i}+b_i\,\widetilde{s}_t).
+\]
+Large innovation can then decrease $r_t$ or increase $\omega_t$, allowing a larger update.
+The modulation coefficients should be initialized near zero and used with floors or clamps,
+so the model starts as ordinary KLA and learns whether surprise-dependent plasticity helps.
+
+\paragraph{Capacity-aware utility.}
+Because the recurrent state is small relative to the sequence, every write competes with
+existing contents. A language-model-aligned update should therefore optimize a net utility:
+\[
+  \text{future CE improvement}
+  -
+  \text{interference cost}.
+\]
+This is the most relevant framing for KLA and DeltaNet-style memories. A write is useful
+only if it improves future recall or prediction more than it harms information already stored
+for future reads.
+
+In this framing, Kalman uncertainty minimization provides a principled adaptive-gain prior.
+For language models, the actual selection pressure is predictive memory utility: writes
+should reduce future language-model loss under capacity and interference constraints.
+Signals derived from top-level entropy or realized negative log likelihood must be used
+causally, for example to modulate the next update, so that the memory update does not leak
+the target token into the current hidden state.
+
+\end{document}

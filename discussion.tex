@@ -1,0 +1,210 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,booktabs,microtype}
+\usepackage[colorlinks=true,linkcolor=blue!50!black]{hyperref}
+
+\title{Discussion: Identifiability and Optimization in Diagonal Kalman Delta Networks}
+\author{}
+\date{July 29, 2026}
+
+\newcommand{\vct}[1]{\boldsymbol{#1}}
+\newcommand{\diag}{\operatorname{diag}}
+
+\begin{document}
+\maketitle
+
+\section{Setup}
+
+The diagonal Kalman Delta Network (KDN) predicts a diagonal covariance and uses it to form
+an uncertainty-dependent delta-rule write. For key $\vct{k}_t$, transition
+$\vct{\alpha}_t$, process noise $\vct{\omega}_t$, and observation noise $r_t$,
+\begin{align}
+  \widehat{\vct{p}}_t
+    &= \vct{\alpha}_t^2\odot\vct{p}_{t-1}+\vct{\omega}_t, \\
+  \vct{\kappa}_t
+    &= \frac{\widehat{\vct{p}}_t\odot\vct{k}_t}
+      {r_t+\sum_i\widehat p_{t,i}k_{t,i}^2}.
+\end{align}
+The memory update remains a delta update,
+\begin{equation}
+  \vct{S}_t
+  = \vct{D}_t\vct{S}_{t-1}
+  + \vct{\kappa}_t
+    \left(\vct{v}_t-(\vct{D}_t\vct{S}_{t-1})^\top\vct{k}_t\right)^\top,
+  \qquad \vct{D}_t=\diag(\vct{\alpha}_t).
+\end{equation}
+The implementation additionally tracks diagonal information $\vct{c}_t=1/\vct{p}_t$ with
+the calibrated projected update
+\begin{equation}
+  \vct{c}_t
+  = \frac{1}{\widehat{\vct{p}}_t}
+  + \frac{d_k}{r_t}\vct{k}_t^2.
+\end{equation}
+This is a scan-compatible diagonal-information approximation, not an exact diagonal Kalman
+posterior.
+
+\section{The Scale Symmetry}
+
+For any constant $\lambda>0$, consider
+\begin{equation}
+  \vct{p}_t' = \lambda\vct{p}_t,
+  \qquad
+  \vct{\omega}_t'=\lambda\vct{\omega}_t,
+  \qquad
+  r_t'=\lambda r_t,
+  \qquad
+  \mu'=\frac{\mu}{\lambda},
+\end{equation}
+where $\mu=\vct{c}_0$ is the initial information and hence
+$\vct{p}_0=1/\mu$. The predicted covariance scales as
+\begin{equation}
+  \widehat{\vct{p}}_t'
+  = \vct{\alpha}_t^2\odot(\lambda\vct{p}_{t-1})
+    +\lambda\vct{\omega}_t
+  = \lambda\widehat{\vct{p}}_t.
+\end{equation}
+Consequently, the gain is invariant:
+\begin{equation}
+  \vct{\kappa}_t'
+  = \frac{\lambda\widehat{\vct{p}}_t\odot\vct{k}_t}
+    {\lambda r_t+\sum_i\lambda\widehat p_{t,i}k_{t,i}^2}
+  = \vct{\kappa}_t.
+\end{equation}
+The information update also transforms consistently as
+$\vct{c}_t'=\vct{c}_t/\lambda$. Therefore $\vct{\omega}$, $r$, and $\mu$
+contain a common covariance-scale degree of freedom that cannot be identified from the memory
+output. Positive floors weaken the symmetry near their boundaries but do not remove the general
+conditioning problem.
+
+The transition $\vct{\alpha}_t$ is different. It affects both covariance prediction and the
+memory transition $\vct{D}_t\vct{S}_{t-1}$, so it is not part of the exact scale symmetry.
+Nevertheless, $\vct{\alpha}_t$ and $\vct{\omega}_t$ are partially confounded in the covariance
+path because multiple pairs can produce similar $\widehat{\vct{p}}_t$.
+
+\section{What the Noisy-MQAR Results Establish}
+
+The original diagonal model obtains $76.2\pm22.3$ percent over the $5\times5$ initialization
+and data grid. Its initialization component of variation (19.2 points) is larger than its data
+component (11.4 points). This is not uniform under-capacity: many cells reach 88--96 percent,
+while a few fail severely.
+
+The most informative intervention is isotropic gain initialization. Zeroing the output map of
+the process-noise projection makes $\vct{\omega}_t$ uniform across channels at initialization,
+after which anisotropy is learned. At the same learning rate and with the same optimizer, this
+changes performance from
+\begin{equation}
+  76.2\pm22.3 \quad\longrightarrow\quad 83.7\pm10.4,
+\end{equation}
+and halves the initialization variation from 19.2 to 9.0 points. It also rescues both severe
+collapse cells. Thus the current evidence identifies random initial gain anisotropy as the
+primary failure, not the nominal learning rate or scale symmetry.
+
+The scale symmetry remains relevant as a secondary optimization defect. It creates a flat
+direction, gives equivalent physical models different raw parameter values, and lets coupled
+quantities evolve under different optimizer geometries. In the current Muon setup, matrix
+weights use Muon with adjusted learning rates, while biases and the one-dimensional prior
+parameter use AdamW. A single printed learning rate therefore does not imply uniform motion of
+the physical uncertainty variables.
+
+The prior $\mu$ is unlikely to explain late failures. It only controls the initial information,
+and its influence should decay rapidly over a long sequence when process noise has a positive
+floor. Learning it adds a weakly identified parameter with little expected benefit.
+
+\section{Ways to Remove or Reduce the Symmetry}
+
+\subsection{Fix the observation-noise scale}
+
+The strongest and simplest gauge choice is
+\begin{equation}
+  r_t\equiv1, \qquad \mu\equiv1.
+\end{equation}
+The model then learns process uncertainty in units of observation noise:
+\begin{equation}
+  \vct{\omega}_t
+  = \omega_{\min}+\operatorname{softplus}(f_\omega(\vct{x}_t)).
+\end{equation}
+Because $r$ can no longer be rescaled, the common covariance-scale symmetry is removed. This
+parameterization is the preferred baseline unless token-dependent observation reliability is
+shown empirically to matter.
+
+\subsection{Learn bounded relative observation reliability}
+
+If heteroscedastic observation noise is useful, it should change confidence relative to a fixed
+reference rather than learn an unrestricted global scale. One option is
+\begin{equation}
+  r_t=\exp\!\left(s\tanh f_r(\vct{x}_t)\right),
+\end{equation}
+with fixed $s$. For $s=\log4$, $r_t\in[1/4,4]$. The projection should have no learnable global
+bias, and the prior can remain fixed at $\mu=1$. A soft anchoring penalty can further control
+drift,
+\begin{equation}
+  \mathcal{L}_{\mathrm{scale}}
+  = \gamma\left(\mathbb{E}[\log r_t]\right)^2.
+\end{equation}
+This reduces rather than mathematically eliminates every possible input-dependent rescaling,
+but it prevents the practically harmful unbounded common-scale direction.
+
+\subsection{Parameterize a stationary uncertainty level}
+
+The $\vct{\alpha}$--$\vct{\omega}$ interaction can be made more interpretable with
+\begin{equation}
+  \omega_{t,i}
+  = \omega_{\min}+(1-\alpha_{t,i}^2)\rho_{t,i},
+  \qquad
+  \rho_{t,i}=\operatorname{softplus}(f_\rho(\vct{x}_t)).
+\end{equation}
+Here $\alpha$ controls retention and $\rho$ is the uncertainty level toward which prediction
+moves. This is exactly the completed \texttt{DiagKLA1} experiment. Coupling alone changes
+$76.2\pm22.3$ to $76.9\pm20.9$, which is effectively a wash. The completed
+\texttt{DiagKLA1-zi} experiment combines coupling with isotropic gain initialization and obtains
+$80.1\pm13.3$, below the simpler \texttt{DiagKLA-zi} result of $83.7\pm10.4$. Thus this
+parameterization has already been tested: it neither replaces isotropic initialization nor
+improves on free additive process noise once that initialization is used.
+
+\section{Recommended Ablation}
+
+The transition-coupled process-noise comparison is already complete:
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+Variant & Free additive $\omega$ & $(1-\alpha^2)\rho$ \\
+\midrule
+Random anisotropic initialization & $76.2\pm22.3$ & $76.9\pm20.9$ \\
+Isotropic gain initialization & $83.7\pm10.4$ & $80.1\pm13.3$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The remaining experiment should isolate covariance-scale choices while keeping free additive
+$\omega$ and isotropic gain initialization fixed:
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+Variant & $\mu$ & $r_t$ & $\omega_t$ \\
+\midrule
+A & learned & learned positive & free additive \\
+B & fixed at 1 & learned positive & free additive \\
+C & fixed at 1 & fixed at 1 & free additive \\
+D & fixed at 1 & bounded relative & free additive \\
+\bottomrule
+\end{tabular}
+\end{center}
+Run at least the same $5\times5$ initialization--data grid. Report mean, total standard
+deviation, initialization variation, non-finite runs, and convergence time. During training,
+log $\omega$, $r$, effective write strength, gain anisotropy, the minimum channel gain, and
+gradient norms for the process-noise, observation-noise, prior, and transition parameters.
+
+If C matches or improves A, the production model should remove both $r_{\mathrm{proj}}$ and
+$\mu_{\mathrm{param}}$. If D improves C, retain only bounded relative observation reliability.
+Only after fixing this gauge is a separate uncertainty-parameter learning-rate sweep readily
+interpretable.
+
+\section{Conclusion}
+
+The diagonal KDN has a genuine common-scale non-identifiability in
+$(\vct{\omega},r,\mu)$, but the completed noisy-MQAR experiments show that random initial
+anisotropy is the dominant observed instability. The appropriate design is therefore
+twofold: start the gain isotropically, and fix a covariance unit---preferably $r=1$ and
+$\mu=1$---so the model learns only uncertainty ratios that affect its predictions.
+
+\end{document}

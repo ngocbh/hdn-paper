@@ -1,0 +1,772 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,mathtools,booktabs,microtype}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[colorlinks=true,linkcolor=blue!50!black]{hyperref}
+
+\title{Direction A: Richer Process Models for Kalman Associative Memory}
+\author{}
+\date{July 30, 2026}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\ve}[1]{\boldsymbol{#1}}
+\newcommand{\tr}{\intercal}
+\newcommand{\I}{\ve{I}}
+\newcommand{\N}{\mathcal{N}}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\blockdiag}{blockdiag}
+\DeclareMathOperator{\RePart}{Re}
+
+\begin{document}
+\maketitle
+
+\section{Question and scope}
+
+Kalman associative memory separates the evolution of memory from the correction made by a
+new key--value observation. Its linear--Gaussian model is
+\begin{align}
+  \ve{S}_t^\star
+    &= \ve{D}_t\ve{S}_{t-1}^\star+\ve{W}_t,
+  &
+  \ve{W}_t&\sim\N(0,\ve{\Omega}_t),
+  \label{eq:base-process}\\
+  \ve{v}_t
+    &= \ve{S}_t^{\star\tr}\ve{k}_t+\ve{e}_t,
+  &
+  \ve{e}_t&\sim\N(0,r_t\I).
+  \label{eq:base-observation}
+\end{align}
+The Kalman prediction is
+\begin{equation}
+  \widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1},
+  \qquad
+  \widehat{\ve{P}}_t
+  =\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t.
+  \label{eq:base-prediction}
+\end{equation}
+The usual discussion interprets $\ve{D}_t$ as a forgetting operator. More precisely,
+vanilla DeltaNet has $\ve{D}_t=\I$ and does not impose global geometric forgetting;
+later delta writes can still damage an old binding when their keys overlap it. Explicit
+geometric decay enters Gated DeltaNet through $\ve{D}_t=\alpha_t\I$ and KDA through
+$\ve{D}_t=\diag(\ve{\alpha}_t)$.
+
+Diagnostics from the current GDN-2 model make the question concrete. Its median learned
+amplitude half-life is seven tokens, while only $16.9\%$ of channels exceed 512 tokens and
+$7.8\%$ exceed 4096 tokens. At length 8192, the mean effective rank of the memory is
+$18.1$ out of 128. These measurements motivate a persistent subspace, but do not by
+themselves prove that decay is the only cause: low-dimensional key and write geometry can
+also produce low state rank. The hypothesis here is therefore not merely ``add slower
+channels.'' It is to give surviving information a controllable latent geometry and route
+selected content through it.
+
+The Kalman view permits a broader question. Instead of only asking how quickly a stored
+association should shrink, can the process model move it into a latent subspace that has
+little effect on current predictions, preserve it there, and make it visible to a later
+query? A useful richer process must control three properties separately:
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Property & Controlled by & Meaning \\
+\midrule
+survival & transition-product norm & how long state amplitude remains \\
+phase & rotation angle & how state moves among latent coordinates \\
+visibility & write/read routing & whether a query currently observes it \\
+\bottomrule
+\end{tabular}
+\end{center}
+For the normal rotation blocks developed below, the transition-product norm is exactly the
+product of their radii. Spectral radius alone would not control finite-time survival for a
+general non-normal or time-varying transition. Positive diagonal decay already permits
+visibility changes through a changing query; what it lacks is a process mechanism that moves
+surviving information between latent directions. This note develops a structured linear
+$\ve{D}_t$ with that mechanism. A nonlinear
+state-dependent process $f_t(\ve{S}_{t-1})$ is possible in an extended-filter formulation,
+but it gives up the exact Kalman recursion and most of the current scan structure. The first
+step should therefore remain linear in the recurrent state, while allowing its coefficients
+to be token dependent and known before the memory scan.
+
+
+\section{Geometric decay cannot hide by state motion}
+
+Consider the contribution of one innovation written at time $\tau$,
+\begin{equation}
+  \ve{U}_\tau=\ve{\kappa}_\tau\ve{\delta}_\tau^{\tr},
+  \qquad
+  \ve{\delta}_\tau
+  =\ve{v}_\tau-\widehat{\ve{S}}_\tau^{\tr}\ve{k}_\tau.
+\end{equation}
+To isolate the process model, first suppress all intervening measurement corrections. The
+hypothetical process-only contribution at time $t>\tau$ is
+\begin{equation}
+  \widetilde{\ve{S}}^{\mathrm{proc}}_{t\leftarrow\tau}
+  =\ve{\Phi}_{t:\tau}\ve{\kappa}_\tau\ve{\delta}_\tau^{\tr},
+  \qquad
+  \ve{\Phi}_{t:\tau}
+  =\ve{D}_t\ve{D}_{t-1}\cdots\ve{D}_{\tau+1}.
+  \label{eq:process-contribution}
+\end{equation}
+Applying a query to this process-only state gives
+\begin{equation}
+  \widetilde{\ve{o}}^{\mathrm{proc}}_{t\leftarrow\tau}
+  =\ve{\delta}_\tau
+   \underbrace{\ve{\kappa}_\tau^{\tr}
+   \ve{\Phi}_{t:\tau}^{\tr}\ve{q}_t}_{\text{visibility of write $\tau$ at time $t$}}.
+  \label{eq:visibility}
+\end{equation}
+Equation~\eqref{eq:visibility} distinguishes process survival from process-only visibility. The norm
+$\|\ve{\Phi}_{t:\tau}\ve{\kappa}_\tau\|$ measures how much of the write survives, whereas
+its alignment with $\ve{q}_t$ measures how much is currently observable.
+
+For KDA,
+\begin{equation}
+  \ve{\Phi}_{t:\tau}
+  =\diag\!\left(
+    \prod_{s=\tau+1}^{t}\alpha_{s,1},\ldots,
+    \prod_{s=\tau+1}^{t}\alpha_{s,d_k}
+  \right).
+  \label{eq:diagonal-product}
+\end{equation}
+When $0\leq\alpha_{s,i}\leq1$, the magnitude of every scalar mode is nonincreasing.
+A fast mode becomes exponentially small and cannot be restored by the process alone. A slow
+mode survives, but it is not hidden by the process: it remains in the same coordinate and is
+visible whenever the query overlaps that coordinate. Different $\alpha_i$ therefore form a
+bank of decay timescales, not a bank of Fourier frequencies. A fixed basis rotation
+$\ve{U}\diag(\ve{\alpha})\ve{U}^{\tr}$ still has only positive real eigenvalues and the same
+zero-frequency exponential modes in a different coordinate system.
+
+The exact posterior-mean recurrence includes every intervening residual correction. Expanding
+the Kalman update gives
+\begin{equation}
+  \ve{S}_t
+  =\underbrace{(\I-\ve{\kappa}_t\ve{k}_t^{\tr})\ve{D}_t}_{\ve{A}_t}
+   \ve{S}_{t-1}
+   +\ve{\kappa}_t\ve{v}_t^{\tr}.
+  \label{eq:closed-loop-carry}
+\end{equation}
+Define the closed-loop propagation operator
+\begin{equation}
+  \ve{\Psi}_{t:\tau}=\ve{A}_t\ve{A}_{t-1}\cdots\ve{A}_{\tau+1}.
+  \label{eq:closed-loop-product}
+\end{equation}
+The actual contribution of write $\tau$ to the posterior output at time $t$ is therefore
+\begin{equation}
+  \ve{o}_{t\leftarrow\tau}
+  =\ve{\delta}_\tau
+   \ve{\kappa}_\tau^{\tr}\ve{\Psi}_{t:\tau}^{\tr}\ve{q}_t.
+  \label{eq:closed-loop-contribution}
+\end{equation}
+The process-only response in \eqref{eq:process-contribution} isolates what the choice of
+$\ve{D}_t$ contributes; \eqref{eq:closed-loop-contribution} is the retrieval quantity the
+full layer must preserve. For hidden modes to survive, ordinary measurement keys must weakly
+observe those modes, or later residual corrections will erase and mix them.
+
+
+\section{A damped rotational process model}
+
+General tunable phase requires two-dimensional real planes; a scalar negative pole is the
+special Nyquist case $\theta=\pi$. Define the real rotation
+\begin{equation}
+  \ve{R}(\theta)
+  =
+  \begin{bmatrix}
+    \cos\theta&-\sin\theta\\
+    \sin\theta& \cos\theta
+  \end{bmatrix}.
+\end{equation}
+Partition the memory rows into $M$ fixed mode groups. Mode $m$ contains two quadratures of an
+$r_m$-dimensional content address and uses
+\begin{equation}
+  \ve{D}_t^{(m)}
+  =\rho_{t,m}\ve{R}(\theta_{t,m})\otimes\I_{r_m},
+  \qquad
+  0<\rho_{t,m}\leq1,
+  \label{eq:oscillator-block}
+\end{equation}
+with
+\begin{equation}
+  \ve{D}_t
+  =\blockdiag\!\left(
+    \ve{D}_t^{(1)},\ldots,\ve{D}_t^{(M)}
+  \right).
+  \label{eq:spectral-transition}
+\end{equation}
+An optional fixed orthogonal basis $\ve{U}$ gives
+$\ve{U}\ve{D}_t\ve{U}^{\tr}$; in a neural layer this basis can usually be absorbed into the
+key and query projections rather than applied to the recurrent state at every token.
+
+Because all rotations within one fixed plane commute, the transition product remains simple:
+\begin{equation}
+  \ve{\Phi}_{t:\tau}^{(m)}
+  =
+  \left(\prod_{s=\tau+1}^{t}\rho_{s,m}\right)
+  \ve{R}\!\left(\sum_{s=\tau+1}^{t}\theta_{s,m}\right)
+  \otimes\I_{r_m}.
+  \label{eq:oscillator-product}
+\end{equation}
+For constant $\rho_m$ and $\theta_m$, the eigenvalues are the complex-conjugate pair
+$\rho_m e^{\pm\mathrm{i}\theta_m}$ in the closed unit disk. The homogeneous dynamics are
+asymptotically stable for $\rho_m<1$ and only marginally stable for $\rho_m=1$. The radius
+$\rho_m$ sets lifetime. For $\rho_m<1$,
+the amplitude half-life is
+\begin{equation}
+  L_{1/2,m}=\frac{\log 2}{-\log\rho_m},
+\end{equation}
+while $\rho_m=1$ gives an infinite half-life. The angle $\theta_m$ sets frequency and phase
+evolution. These are independent parameters.
+
+For a scalar content direction, let $\ve{b}_m\in\R^2$ be its write phase and
+$\ve{c}_m\in\R^2$ its read phase. The process impulse response is
+\begin{equation}
+  h_m(\ell)
+  =\ve{c}_m^{\tr}(\rho_m\ve{R}(\theta_m))^\ell\ve{b}_m
+  =\rho_m^\ell
+   \left(A_m\cos(\ell\theta_m)+B_m\sin(\ell\theta_m)\right)
+  \label{eq:damped-mode-response}
+\end{equation}
+for scalar coefficients $A_m,B_m$ determined by the write and read phases. A bank of such modes
+produces
+\begin{equation}
+  h(\ell)
+  =\sum_{m=1}^{M}\rho_m^\ell
+   \left(A_m\cos(\ell\theta_m)+B_m\sin(\ell\theta_m)\right),
+  \label{eq:filter-bank-response}
+\end{equation}
+a complex-pole filter bank. It is BIBO stable when every radius is strictly below one;
+unit-radius modes are non-expansive without input but accumulate persistent writes. This is
+Fourier-like, but it is not generally a Fourier transform of the entire history: damping
+makes it an online rational filter, and token-dependent angles make it nonstationary. Complex
+phase with decay is already an established sequence-model construction
+\citep{sun2023retentive}; negative real eigenvalues are also known to improve linear-RNN state
+tracking \citep{grazzi2025statetracking}. The question here is specifically how these modes
+interact with Kalman associative writes, uncertainty, and content-addressed retrieval.
+
+The distinction between frequency and timescale is important. A low-frequency aligned mode
+has $\cos\theta\approx1$ and can be maximally visible at the next token. A high-frequency mode
+can alternate or cancel, but need not be short lived. A desired recent-versus-delayed split
+must be designed jointly through radius, frequency, and relative write/read phase.
+
+
+\section{Hiding in one quadrature and revealing in the other}
+
+Let $\ve{e}_{\mathrm{vis}}=(1,0)^{\tr}$ and
+$\ve{e}_{\mathrm{hid}}=(0,1)^{\tr}$. An aligned immediate path has
+\begin{equation}
+  \ve{b}=\ve{c}=\ve{e}_{\mathrm{vis}},
+  \qquad
+  h_{\mathrm{direct}}(\ell)
+  =\rho^\ell\cos(\ell\theta).
+\end{equation}
+In particular, $\theta=0$ recovers ordinary geometric decay. A cross-quadrature path has
+\begin{equation}
+  \ve{b}=\ve{e}_{\mathrm{hid}},
+  \qquad
+  \ve{c}=\ve{e}_{\mathrm{vis}},
+  \qquad
+  h_{\mathrm{delay}}(\ell)
+  =-\rho^\ell\sin(\ell\theta).
+  \label{eq:quadrature-delay}
+\end{equation}
+It is exactly invisible at insertion and grows as rotation moves it toward the visible axis.
+For $0<\rho<1$ and $0<\theta<\pi$, treating $\ell$ as continuous, the first-lobe peak in
+magnitude is
+\begin{equation}
+  \ell^\star
+  =\frac{1}{\theta}
+   \arctan\!\left(\frac{\theta}{-\log\rho}\right),
+  \label{eq:delayed-peak}
+\end{equation}
+which approaches $\pi/(2\theta)$ as $\rho\to1$. The actual token lag is the maximizing nearby
+integer, so the continuous expression can be inaccurate near the Nyquist frequency. A slowly
+rotating channel is useful as a delayed channel only if its radius is large enough for the
+write to survive until this peak.
+
+This is hidden state relative to the layer readout: it is currently unseen, not erased. For a
+sequence of read vectors $\ve{g}_{t+j}$, define the finite-horizon retrieval-observability
+Gramian
+\begin{equation}
+  \ve{W}_{o}(t,L)
+  =\sum_{j=0}^{L}
+   \ve{\Phi}_{t+j:t}^{\tr}\ve{g}_{t+j}\ve{g}_{t+j}^{\tr}
+   \ve{\Phi}_{t+j:t}.
+  \label{eq:observability-gramian}
+\end{equation}
+A direction $\ve{z}$ can be hidden now because $\ve{g}_t^{\tr}\ve{z}=0$, yet remain
+recoverable if $\ve{z}^{\tr}\ve{W}_{o}(t,L)\ve{z}>0$. For one oscillator read through
+$\ve{e}_{\mathrm{vis}}$, the two-step observability matrix is
+\begin{equation}
+  \begin{bmatrix}
+    \ve{e}_{\mathrm{vis}}^{\tr}\\
+    \ve{e}_{\mathrm{vis}}^{\tr}\rho\ve{R}(\theta)
+  \end{bmatrix}
+  =
+  \begin{bmatrix}
+    1&0\\
+    \rho\cos\theta&-\rho\sin\theta
+  \end{bmatrix}.
+\end{equation}
+It has full rank whenever $\rho\sin\theta\neq0$. Thus the latent quadrature is recoverable,
+although very small $\theta$ makes recovery poorly conditioned. The same rotation also causes
+periodic echoes; damping or a mixture of frequencies is needed when one delayed peak, rather
+than repeated resurfacing, is desired. This Gramian concerns the output read $\ve{g}_t$;
+detectability of the Kalman covariance is instead governed by the measurement feature used in
+the update.
+
+
+\section{A Fourier bank gives modulo-age selection}
+
+The frequency analogy can be made exact for age classes by spending state dimension on a
+temporal code. This section is an illustrative augmented-state, broadcast-gain mean
+recurrence, not yet the exact Kalman update derived in the next section: it changes the state
+dimension, write map, and lag-conditioned read in addition to changing $\ve{D}_t$.
+Let $\ve{Z}_{m,t}\in\C^{d_a\times d_v}$ be mode $m$, choose
+$\omega_m=2\pi m/M$, and broadcast the same associative innovation
+$\ve{U}_t=\bar{\ve{\kappa}}_t\ve{\delta}_t^{\tr}$ to every mode:
+\begin{equation}
+  \ve{Z}_{m,t}
+  =\rho e^{\mathrm{i}\omega_m}\ve{Z}_{m,t-1}+\ve{U}_t,
+  \qquad m=0,\ldots,M-1.
+  \label{eq:complex-delay-write}
+\end{equation}
+Given a content query $\bar{\ve{q}}_t$ and a requested lag $\ell$, read with the conjugate
+phase
+\begin{equation}
+  \ve{o}_t(\ell)
+  =\RePart\!\left[
+    \frac{1}{M}\sum_{m=0}^{M-1}
+    e^{-\mathrm{i}\omega_m\ell}\ve{Z}_{m,t}^{\tr}\bar{\ve{q}}_t
+  \right].
+  \label{eq:complex-delay-read}
+\end{equation}
+For integer age $n=t-\tau$ and requested integer lag $\ell$, one write contributes the phase factor
+\begin{equation}
+  \frac{1}{M}\sum_{m=0}^{M-1}
+  e^{\mathrm{i}\omega_m(n-\ell)}
+  =
+  \begin{cases}
+    1,&n\equiv\ell\pmod M,\\
+    0,&\text{otherwise}.
+  \end{cases}
+  \label{eq:fourier-delay-identity}
+\end{equation}
+Consequently,
+\begin{equation}
+  \ve{o}_{t\leftarrow\tau}(\ell)
+  =\rho^n
+   (\bar{\ve{\kappa}}_\tau^{\tr}\bar{\ve{q}}_t)
+   \ve{\delta}_\tau
+\end{equation}
+when $n\equiv\ell\pmod M$, and it cancels at the other represented age classes. Unrolling all
+writes makes the aliasing explicit:
+\begin{equation}
+  \ve{o}_t(\ell)
+  =\sum_{\substack{n\geq0\\n\equiv\ell\ (\mathrm{mod}\ M)}}
+   \rho^n\ve{U}_{t-n}^{\tr}\bar{\ve{q}}_t.
+  \label{eq:modulo-age-accumulator}
+\end{equation}
+This is a modulo-$M$ age-addressed accumulator, not an overwriting circular buffer. It selects
+one unique age only while the represented history is shorter than $M$; afterward it sums all
+aliases, geometrically weighted when $\rho<1$. Content similarity chooses \emph{which}
+association to retrieve, while phase matching chooses \emph{which age class} to expose.
+Complex arithmetic is not required: conjugate mode pairs correspond to the real $2\times2$
+rotation blocks in \eqref{eq:oscillator-block}; the DC mode, and the Nyquist mode for even
+$M$, are one-dimensional real exceptions.
+
+A true length-$M$ sliding Fourier delay line would have to remove the expired write,
+\begin{equation}
+  \ve{Z}_{m,t}
+  =\rho e^{\mathrm{i}\omega_m}\ve{Z}_{m,t-1}
+   +\ve{U}_t-\rho^M\ve{U}_{t-M}.
+  \label{eq:true-fourier-delay-line}
+\end{equation}
+The expired write can be supplied by an external delay buffer, but it is also recoverable from
+the complete modal state. If
+$\ve{Z}_{m,t-1}=\sum_{n=0}^{M-1}\rho^n e^{\mathrm{i}\omega_m n}\ve{U}_{t-1-n}$, then
+\begin{equation}
+  \ve{U}_{t-M}
+  =\rho^{-(M-1)}\frac{1}{M}\sum_{j=0}^{M-1}
+   e^{\mathrm{i}\omega_j}\ve{Z}_{j,t-1}.
+\end{equation}
+Substitution into \eqref{eq:true-fourier-delay-line} gives the state-only update
+\begin{equation}
+  \ve{Z}_{m,t}
+  =\rho e^{\mathrm{i}\omega_m}\ve{Z}_{m,t-1}+\ve{U}_t
+   -\frac{\rho}{M}\sum_{j=0}^{M-1}
+    e^{\mathrm{i}\omega_j}\ve{Z}_{j,t-1}.
+  \label{eq:coupled-fourier-overwrite}
+\end{equation}
+Thus exact overwrite remains fixed dimensional, but it is no longer an independent
+block-diagonal oscillator recurrence: the removal is a rank-one coupling across all modes.
+That coupling changes both the scan and the covariance structure developed for
+\eqref{eq:spectral-transition}.
+
+This construction answers the existence question, but it exposes the cost. It replicates a
+content address across $M$ temporal modes, aliases ages separated by $M$, and requires the
+read controller to supply a lag or compatible phase. Unequal radii prevent the radial factor
+from leaving the Fourier sum and turn the exact age-class response into a soft kernel that
+depends on both age and requested lag. Learned complex weights can instead
+produce a general query-dependent response
+\begin{equation}
+  h_t(n)
+  =\RePart\!\left[
+    \sum_m w_{t,m}\rho_m^n e^{\mathrm{i}n\omega_m}
+  \right],
+  \label{eq:learned-lag-kernel}
+\end{equation}
+trading exact age-class selection for a lower-dimensional, task-adaptive temporal filter.
+
+
+\section{The corresponding Kalman model}
+
+A spectral state may use more rows than the original content key. It is therefore useful to
+separate the measurement address from the external key and the read address from the external
+query. Let
+\begin{equation}
+  \ve{S}_t\in\R^{d_s\times d_v},
+  \qquad
+  \ve{P}_t\in\R^{d_s\times d_s},
+  \qquad
+  \ve{E}_t,\ve{F}_t\in\R^{d_s\times d_k},
+\end{equation}
+and define
+\begin{equation}
+  \ve{h}_t=\ve{E}_t\ve{k}_t\in\R^{d_s},
+  \qquad
+  \ve{g}_t=\ve{F}_t\ve{q}_t\in\R^{d_s},
+\end{equation}
+where $\ve{E}_t$ chooses the measured modes and phases and $\ve{F}_t$ chooses the modes and
+phases visible to the query. Under a block-isotropic covariance the measurement lift also
+selects the corresponding write modes; under a dense covariance, cross-correlations can rotate
+the Kalman gain elsewhere. The generalized associative-memory filter is
+\begin{align}
+  \widehat{\ve{S}}_t
+    &=\ve{D}_t\ve{S}_{t-1},
+  &
+  \widehat{\ve{P}}_t
+    &=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t,
+  \label{eq:spectral-kalman-predict}\\
+  \ve{\kappa}_t
+    &=\frac{\widehat{\ve{P}}_t\ve{h}_t}
+      {r_t+\ve{h}_t^{\tr}\widehat{\ve{P}}_t\ve{h}_t},
+  &
+  \ve{S}_t
+    &=\widehat{\ve{S}}_t+\ve{\kappa}_t
+      (\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{h}_t)^{\tr},
+  \label{eq:spectral-kalman-update}\\
+  \ve{P}_t
+    &=(\I-\ve{\kappa}_t\ve{h}_t^{\tr})\widehat{\ve{P}}_t,
+  &
+  \ve{o}_t&=\ve{S}_t^{\tr}\ve{g}_t.
+  \label{eq:spectral-kalman-read}
+\end{align}
+This is not a new filtering rule. It is the same Kalman filter with a richer latent geometry.
+The original model is recovered by $d_s=d_k$, $\ve{E}_t=\ve{F}_t=\I$, and a diagonal
+$\ve{D}_t$. The explicit $\ve{E}_t,\ve{F}_t$ make one limitation precise: $\ve{D}_t$ can
+preserve and move information, but it cannot by itself define what ``hidden from this query''
+means.
+
+The broadcast write in the Fourier example is not automatically the gain produced here.
+It is Kalman-consistent only under a symmetric measurement lift and covariance that yield
+identical gain blocks, or it can be used as a fixed-gain approximation. Its role above is to
+prove an age-selection property of an augmented spectral state, not to claim that $\ve{D}_t$
+alone supplies a delay memory.
+
+Rotational dynamics have a particularly convenient covariance approximation. For mode $m$,
+let its dimension be $d_m=2r_m$. Assume the full covariance and process noise are block
+diagonal and isotropic inside every block,
+\begin{equation}
+  \ve{P}_{t-1}
+  =\blockdiag_m(p_{t-1,m}\I_{d_m}),
+  \qquad
+  \ve{\Omega}_t
+  =\blockdiag_m(\nu_{t,m}\I_{d_m}).
+\end{equation}
+Then the prediction is scalar per mode:
+\begin{equation}
+  \widehat{\ve{P}}_t^{(m)}
+  =\left(\rho_{t,m}^2p_{t-1,m}+\nu_{t,m}\right)\I_{d_m},
+  \qquad
+  \widehat p_{t,m}=\rho_{t,m}^2p_{t-1,m}+\nu_{t,m}.
+  \label{eq:block-isotropic-predict}
+\end{equation}
+The rotation cancels from covariance prediction while still rotating the memory mean. The
+resulting gain is
+\begin{equation}
+  \ve{\kappa}_t^{(m)}
+  =\frac{\widehat p_{t,m}\ve{h}_t^{(m)}}
+  {r_t+\sum_j\widehat p_{t,j}\|\ve{h}_t^{(j)}\|_2^2}.
+  \label{eq:block-isotropic-gain}
+\end{equation}
+An exact measurement update leaves the block-isotropic family: it creates rank-one anisotropy
+inside every observed block as well as correlations across blocks. This is the same closure
+problem that motivates projecting the current diagonal-information KDN rather than calling a
+diagonal posterior exact. A trace-matching projection back to the block-isotropic family would
+give
+\begin{equation}
+  p_{t,m}
+  =\widehat p_{t,m}
+   -\frac{\widehat p_{t,m}^2\|\ve{h}_t^{(m)}\|_2^2}
+    {d_m\left(r_t+\sum_j\widehat p_{t,j}
+    \|\ve{h}_t^{(j)}\|_2^2\right)}.
+  \label{eq:block-isotropic-project}
+\end{equation}
+This projection is an approximation, not an exact block Kalman posterior. It is also a
+sequential coupled recurrence because its denominator depends on every block, so it does not
+give the independent M\"obius scan used by the current diagonal KDN.
+
+For a scan-compatible first model, use a calibrated scalar information state
+$c_{t,m}=1/p_{t,m}$ per mode. Prediction is exact within the block-isotropic family,
+\begin{equation}
+  \widehat c_{t,m}
+  =\frac{c_{t-1,m}}
+   {\rho_{t,m}^2+\nu_{t,m}c_{t-1,m}},
+  \qquad
+  \widehat p_{t,m}=\frac{1}{\widehat c_{t,m}}.
+  \label{eq:block-info-predict}
+\end{equation}
+The measurement update is projected and standardized as
+\begin{equation}
+  u_{t,m}
+  =\frac{d_s}{d_m r_t}\|\ve{h}_t^{(m)}\|_2^2,
+  \qquad
+  c_{t,m}=\widehat c_{t,m}+u_{t,m}.
+  \label{eq:block-info-update}
+\end{equation}
+The literal trace projection of the information increment would omit the factor $d_s$.
+Equation~\eqref{eq:block-info-update} instead applies the same coordinate standardization as
+the current diagonal KDN: for an $\ell_2$-normalized feature spread across $d_s$ coordinates,
+$\mathbb{E}[\|\ve{h}_t^{(m)}\|_2^2]\approx d_m/d_s$, so each block receives an expected $O(1/r_t)$
+increment. This is a calibrated approximation, not an exact posterior projection.
+
+Combining \eqref{eq:block-info-predict} and \eqref{eq:block-info-update} gives the per-mode
+M\"obius recurrence
+\begin{equation}
+  c_{t,m}
+  =\frac{(1+u_{t,m}\nu_{t,m})c_{t-1,m}
+          +u_{t,m}\rho_{t,m}^2}
+         {\nu_{t,m}c_{t-1,m}+\rho_{t,m}^2},
+  \label{eq:block-info-mobius}
+\end{equation}
+represented by the associative matrix
+\begin{equation}
+  \ve{M}_{t,m}
+  =
+  \begin{bmatrix}
+    1+u_{t,m}\nu_{t,m} & u_{t,m}\rho_{t,m}^2\\
+    \nu_{t,m} & \rho_{t,m}^2
+  \end{bmatrix}.
+  \label{eq:block-info-matrix}
+\end{equation}
+The gains in \eqref{eq:block-isotropic-gain} are then available from an independent prefix
+scan for each mode before the mean-memory scan. This is the uncertainty approximation assumed
+by the recommended spectral KDN below.
+
+
+\section{Scheduled resurfacing versus recall on cue}
+
+A fixed oscillator makes a memory visible according to elapsed time. That is useful for
+delay-sensitive prediction, but it does not by itself retrieve an arbitrary fact when a
+semantic cue arrives at an arbitrary future time. There are three increasingly expressive
+ways to add cue control.
+
+\paragraph{Query-controlled observability.}
+Let the query projection emit both quadratures and a mode gate. At ordinary tokens it can
+suppress persistent modes; at a recall cue it can read the matching hidden phase. In
+\eqref{eq:spectral-kalman-read}, this is a token-dependent $\ve{F}_t$ and requires no
+state-dependent transition. It is the simplest and most scan-friendly mechanism. The usual
+learned query projection can already implement part of this behavior, but an explicit
+per-mode gate makes the intended separation testable.
+
+\paragraph{Input-conditioned phase increments.}
+Use
+\begin{equation}
+  \rho_{t,m}=\exp(-\Delta_{t,m}\lambda_m),
+  \qquad
+  \theta_{t,m}=\Delta_{t,m}\omega_m+\gamma_{t,m},
+  \label{eq:dynamic-pole-parameterization}
+\end{equation}
+where $\Delta_{t,m}>0$ is an input-dependent step size, $\lambda_m\geq0$ is a decay rate,
+$\omega_m$ is a base frequency, and $\gamma_{t,m}$ is a bounded input-dependent phase kick.
+A retrieval cue can rotate a latent mode toward the visible phase before the current read.
+Because the coefficients depend only on input-known quantities, log-radii and angles still
+compose by prefix addition. The caveat is that one phase kick rotates every association in
+that mode; content selection must still come from the key/query match.
+
+\paragraph{Active/archive routing.}
+Allocate paired active and archive subspaces. A write gate routes durable information toward
+the archive quadrature, and a read gate chooses when the archive participates in the output.
+Continuous $\rho\ve{R}(\theta)\otimes\I$ gives scheduled, periodic exchange between active
+and archive coordinates; it does not keep an item archived until a cue. Cue-controlled archive
+semantics require either $\theta_t=0$ between explicit transfer events or a query gate that
+fully suppresses the archive until retrieval. The lifts $\ve{E}_t$ and $\ve{F}_t$ then provide
+content-conditioned storage and recall. This gives the clearest semantics for ``hide and
+later query,'' at the cost of either a larger state or fewer content dimensions per subspace
+under a fixed state budget.
+
+For arbitrary cue-driven recall, query-controlled observability should be present before
+dynamic phase kicks are added. Otherwise the model may learn a clock that solves fixed-delay
+training examples but fails when query times and recall order are randomized.
+
+
+\section{Parallelism and implementation constraints}
+
+The proposed transition remains structured, but it is not a drop-in use of the current
+KDA/GDN-2 delta-family kernels.
+\begin{enumerate}[leftmargin=1.7em,itemsep=4pt]
+  \item Applying block rotations to $\ve{S}_t$ costs $O(d_s d_v)$, the same order as diagonal
+  decay, with a larger constant for paired multiply-adds. A dense learned change of basis
+  would instead cost $O(d_s^2d_v)$ and should be absorbed into projections or avoided.
+
+  \item Fixed-plane transitions compose associatively. Each mode can represent its prefix
+  product by cumulative log-radius and cumulative phase, or by complex multiplication. This
+  keeps the process prediction scan-friendly.
+
+  \item Once gains are input known, the full mean recurrence is the affine scan
+  \begin{equation}
+    \ve{S}_t
+    =(\I-\ve{\kappa}_t\ve{h}_t^{\tr})\ve{D}_t\ve{S}_{t-1}
+     +\ve{\kappa}_t\ve{v}_t^{\tr}.
+  \end{equation}
+  It is associative in principle, but efficient DeltaNet chunking exploits more structure
+  than abstract associativity. The paired/complex key scores and decay normalization require
+  a new derivation and kernel; equal asymptotic work does not imply equal throughput.
+
+  \item A block-isotropic uncertainty prediction stays scalar per mode, as shown in
+  \eqref{eq:block-isotropic-predict}, and the calibrated update
+  \eqref{eq:block-info-mobius} supplies a per-mode gain scan. A full $2\times2$ covariance is
+  a useful next step for a scalar-content plane. When $r_m>1$, an exact update additionally
+  creates correlations among content directions; cross-mode correlations still require
+  projection or dense filtering.
+
+  \item If $\theta_{t,m}$ depends on the sequential memory $\ve{S}_{t-1}$, it is not known
+  before the memory scan. Initial models should use fixed angles, token-local angles, or angles
+  derived from separately scan-computable prefix statistics.
+\end{enumerate}
+
+A conservative development ladder is
+\begin{center}
+\begin{tabular}{cll}
+\toprule
+Stage & Transition & Question isolated \\
+\midrule
+A0 & pair-tied channels, $\theta=0$ & matched no-rotation control \\
+A1 & fixed $\theta_m$, learned $\rho_m$ & do complex poles help? \\
+A2 & fixed poles, learned write/read phase & can state be hidden then read? \\
+A3 & query-dependent read phase & can recall occur on an arbitrary cue? \\
+A4 & token-dependent phase increments & does dynamic reorganization help? \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+\section{Limits and failure modes}
+
+\begin{enumerate}[leftmargin=1.7em,itemsep=4pt]
+  \item \textbf{No extra capacity for free.} A fixed-dimensional linear state cannot retain an
+  unbounded number of independent values losslessly. Oscillation changes temporal coding and
+  interference; it does not eliminate superposition capacity limits.
+
+  \item \textbf{Aliasing.} A finite frequency grid confuses ages modulo its period. Damping,
+  multiple incommensurate frequencies, resets, or a sufficiently large temporal code can
+  soften this, but each choice has a state or optimization cost.
+
+  \item \textbf{Persistent noise.} With $\rho=1$, additive writes and process noise do not
+  decay. In a unitary mode that remains unobserved, covariance can grow without bound. Stable
+  operation needs $\rho<1$, reliable overwrite/reset behavior, or sufficiently frequent
+  observability.
+
+  \item \textbf{Phase mismatch.} Rotating the memory address without a compatible key/query
+  lift can make an association inaccessible rather than usefully latent. The transition,
+  observation feature, and read feature must be designed together.
+
+  \item \textbf{Periodic leakage.} One oscillator repeatedly reveals a stored value. A mixture
+  can localize one lag through interference, but imperfect learned phases may produce periodic
+  false recalls.
+
+  \item \textbf{Optimization collapse.} Learned angles may collapse to zero, reducing the
+  model to ordinary decay, or cluster at a few phases. Fixed frequency initialization and
+  explicit diagnostics are needed before concluding that the spectral model is unused.
+\end{enumerate}
+
+
+\section{Falsifiable experiments}
+
+All comparisons should match total recurrent state dimension, parameter count, and, where
+possible, FLOPs. An augmented Fourier bank is otherwise advantaged simply by storing more
+numbers.
+
+\paragraph{Lag-resolved associative recall.}
+Train MQAR with a broad distribution of write--query gaps and report accuracy by exact lag,
+including lags outside the training range. Compare ordinary untied diagonal KDN/KDA, pair-tied
+$\theta=0$ modes with exactly the same lifts and query gates as the spectral model, signed-real
+$\theta\in\{0,\pi\}$ modes, fixed oscillators, learned write/read phases, and
+query-demodulated modes. Periodic accuracy dips would directly reveal aliasing or phase
+mismatch.
+
+\paragraph{Survival versus visibility probe.}
+Write one tagged association, feed controlled distractors, and record both the process-only
+lineage $\ve{\Phi}_{t:\tau}\ve{\kappa}_\tau$ and the actual closed-loop lineage
+$\ve{\Psi}_{t:\tau}\ve{\kappa}_\tau$. For each, measure norm and visibility under a fixed
+read phase; an intervention difference between runs with and without the tagged write is an
+equivalent empirical measurement. Holding the read fixed prevents changing query routing from
+creating an apparent delayed peak even for diagonal decay. The defining spectral hypothesis
+is that closed-loop lineage norm can remain high while current visibility is low, followed by
+a later rise in visibility.
+
+\paragraph{Cue-controlled recall.}
+Randomize query times and the order in which stored items are requested. This prevents a fixed
+oscillator clock from solving the task. Ablate the temporal read phase, content router, and
+input-conditioned phase kick separately. A useful archive must respond to the cue rather than
+only to elapsed time.
+
+\paragraph{Collision and capacity tests.}
+At fixed lag, vary the number of simultaneously stored key--value pairs and the number of
+distractors. This tests whether improved lag selectivity is purchased by a loss of content
+capacity. Measure effective state rank and per-mode write/read energy in addition to task
+accuracy.
+
+\paragraph{Core ablations and diagnostics.}
+The essential controls are $\theta=0$ damping only, signed-real
+$\theta\in\{0,\pi\}$, $\rho=1$ rotation only, damped rotation, aligned versus
+cross-quadrature routing, fixed versus learned versus token-dependent angles, and diagonal
+versus block-isotropic uncertainty. Log learned poles $(\rho_m,\theta_m)$, half-lives, phase
+usage, process-only and closed-loop impulse responses, state norms, covariance scale,
+throughput, and gradient stability.
+
+
+\section{Recommended first model}
+
+The first implementation should be a \emph{spectral KDN} rather than a fully general learned
+transition:
+\begin{enumerate}[leftmargin=1.7em,itemsep=3pt]
+  \item pair fixed state planes and use
+  $\ve{D}_t^{(m)}=\rho_{t,m}\ve{R}(\theta_m)\otimes\I_{r_m}$;
+  \item retain zero-angle modes spanning both fast and slow radii, and include the pair-tied
+  zero-angle model with identical lifts and gates as the main no-rotation control;
+  \item initialize the remaining angles from log-spaced target delays
+  $L_m$ through $\theta_m\approx\pi/(2L_m)$ and give them radii whose lifetimes exceed
+  $L_m$;
+  \item let key and query projections learn the two quadratures, with an explicit query gate
+  over modes;
+  \item use block-isotropic process noise and the calibrated M\"obius information scan in
+  \eqref{eq:block-info-mobius}, so the gain is available before the mean scan; and
+  \item test variable-lag and randomized-cue recall before introducing token-dependent phase
+  kicks.
+\end{enumerate}
+
+The central claim is deliberately narrow. Positive geometric decay decides how much of a
+memory remains. Damped rotations add a separate mechanism that decides where the surviving
+memory sits relative to the current readout. With phase-aware write and read maps, this can
+hide an association in a latent quadrature and later expose it. A complete Fourier bank gives
+exact selection of an age class, but without explicit overwrite it accumulates aliases rather
+than becoming a finite delay buffer. Whether the spectral process helps language modeling
+depends on closed-loop survival, content routing, cue-controlled observability, interference,
+and efficient kernels, all of which the proposed experiments measure directly.
+
+\bibliographystyle{plainnat}
+\bibliography{main}
+
+\end{document}
