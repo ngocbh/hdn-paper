@@ -726,6 +726,105 @@ each operation. This setting tests whether a KDN can selectively overwrite stale
 without erasing unrelated memory channels.
 
 
+\subsection{Pretraining Experiments}
+\label{sec:pretraining-experiments}
+
+\paragraph{Setup.}
+Beyond the synthetic probes, we pretrain Kalman Delta Networks and competing linear-attention
+mixers from scratch on FineWeb-Edu at two scales: a $220$M-parameter model trained on $20$B
+tokens, used for a controlled mixer ablation, and a $750$M-parameter model trained on $50$B
+tokens. At each scale all mixers share the same backbone, optimizer, and data order, and are
+matched both in parameter count---the feed-forward width is calibrated per mixer---and in
+recurrent-state size, so that measured differences isolate the update rule rather than model
+capacity. We train with AdamW (peak learning rate $4\times10^{-4}$, $\beta=(0.9,0.95)$, weight
+decay $0.1$), gradient clipping at $1.0$, a cosine schedule with a $0.5$B-token warm-up, a global
+batch of $0.5$M tokens, and a sequence length of $4$K. We compare against
+DeltaNet~\citep{schlag2021linear}, Gated DeltaNet~\citep{yang2024gdn},
+GDN-2~\citep{hatamizadeh2026gdn2}, and KDA~\citep{kimiteam2025kimilinear}; the Kalman Delta
+Networks are the Isotropic and Diagonal variants developed above. We evaluate zero-shot with the
+standard harness for recurrent language models and report in-context retrieval on RULER.
+
+\paragraph{Language modeling and commonsense reasoning.}
+Table~\ref{tab:pretrain-lm} reports WikiText and LAMBADA perplexity, zero-shot LAMBADA accuracy,
+and the commonsense suite (PIQA, HellaSwag, WinoGrande, ARC-easy, ARC-challenge). Because the
+recurrent-state size is matched, gains reflect a stronger update rule rather than a larger memory.
+At $220$M/$20$B the two KDN variants and KDA form a clear top group, improving average accuracy
+over GDN-2, Gated DeltaNet, and DeltaNet by roughly two points, with the Isotropic KDN attaining
+the best perplexity and the best average. The ordering sharpens at $750$M/$50$B: the Isotropic KDN
+is best on WikiText, LAMBADA, and every commonsense task except LAMBADA accuracy (where it ties
+KDA), lifting average accuracy to $54.5$ versus $53.9$ for KDA and $51.5$ for GDN-2.
+
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{@{}l cc cccccc c@{}}
+\toprule
+& \multicolumn{2}{c}{Perplexity $\downarrow$} & \multicolumn{6}{c}{Zero-shot accuracy (\%) $\uparrow$} & \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-9}
+Model & Wiki. & LMB. & LMB. & PIQA & Hella. & Wino. & ARC-e & ARC-c & Avg. \\
+\midrule
+\multicolumn{10}{@{}l}{\emph{220M parameters, 20B tokens}}\\
+DeltaNet        & 31.26 & 54.07 & 27.36 & 63.38 & 36.06 & 51.38 & 53.11 & 26.45 & 42.96 \\
+Gated DeltaNet  & 30.83 & 46.89 & 27.34 & \underline{65.07} & 37.12 & 49.96 & 55.01 & 26.54 & 43.51 \\
+GDN-2           & 31.62 & 42.95 & 30.18 & 63.98 & 35.47 & 51.62 & 54.17 & 26.28 & 43.62 \\
+KDA             & 29.31 & \underline{36.39} & \underline{31.61} & 64.96 & \textbf{38.37} & \textbf{53.59} & 56.61 & \underline{27.39} & 45.42 \\
+Diagonal KDN    & \underline{28.92} & 38.44 & 31.22 & \textbf{65.94} & \underline{37.96} & 51.30 & \textbf{58.54} & \textbf{27.73} & \underline{45.45} \\
+Isotropic KDN   & \textbf{28.67} & \textbf{35.40} & \textbf{32.99} & \textbf{65.94} & 37.89 & \underline{52.49} & \underline{57.45} & 26.37 & \textbf{45.52} \\
+\midrule
+\multicolumn{10}{@{}l}{\emph{750M parameters, 50B tokens}}\\
+GDN-2           & 21.20 & 17.89 & 41.20 & 70.02 & 46.98 & 54.62 & 64.27 & 31.66 & 51.46 \\
+KDA             & \underline{18.85} & \underline{15.06} & \textbf{44.23} & \underline{71.00} & \underline{51.23} & \underline{54.93} & \underline{67.63} & \underline{34.13} & \underline{53.86} \\
+Isotropic KDN   & \textbf{18.42} & \textbf{14.67} & \underline{44.21} & \textbf{71.16} & \textbf{52.14} & \textbf{55.96} & \textbf{68.18} & \textbf{35.15} & \textbf{54.47} \\
+\bottomrule
+\end{tabular}
+\caption{Language modeling and zero-shot commonsense reasoning. Perplexity on WikiText and LAMBADA
+(lower is better) and zero-shot accuracy (\%) on LAMBADA and the commonsense suite; \emph{Avg.} is
+the mean of the six accuracies. All mixers are matched in parameter count and recurrent-state size
+at each scale. Best per column within each block in \textbf{bold}, second best \underline{underlined}.
+\note{Diagonal KDN at 750M is still training; row to be added.}}
+\label{tab:pretrain-lm}
+\end{table}
+
+\paragraph{In-context retrieval.}
+Table~\ref{tab:pretrain-niah} reports single- and multi-key needle-in-a-haystack accuracy from
+RULER~\citep{hsieh2024ruler}. At $220$M/$20$B retrieval is near chance for every mixer: the models
+are too small and undertrained to store high-entropy needles reliably, so these numbers are noisy
+and we include them only for completeness. The separation emerges at $750$M/$50$B, where both KDA
+and the Isotropic KDN dramatically outperform GDN-2 (retrieval average $52$--$53$ versus $30$). On
+the interference-heavy S-NIAH-3 the Isotropic KDN reaches $62.4$ against $3.6$ for GDN-2 and $48.4$
+for KDA, while KDA leads the simpler S-NIAH-2 and multi-key settings---consistent with the Kalman
+gain protecting existing associations under interference.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}l cccc@{}}
+\toprule
+Model & S-NIAH-2 @4K & S-NIAH-3 @2K & MK-NIAH-1 @4K & Avg. \\
+\midrule
+\multicolumn{5}{@{}l}{\emph{220M parameters, 20B tokens}}\\
+DeltaNet        & 7.6  & \textbf{4.4} & 17.8 & 9.9 \\
+Gated DeltaNet  & 14.8 & 0.8 & \textbf{22.4} & \underline{12.7} \\
+GDN-2           & \underline{19.4} & 0.2 & 16.0 & 11.9 \\
+KDA             & 12.8 & \underline{3.2} & 11.6 & 9.2 \\
+Diagonal KDN    & \textbf{32.0} & 0.2 & \underline{18.0} & \textbf{16.7} \\
+Isotropic KDN   & 11.0 & 2.2 & 14.8 & 9.3 \\
+\midrule
+\multicolumn{5}{@{}l}{\emph{750M parameters, 50B tokens}}\\
+GDN-2           & 61.2 & 3.6 & 25.0 & 29.9 \\
+KDA             & \textbf{82.0} & \underline{48.4} & \textbf{27.6} & \textbf{52.7} \\
+Isotropic KDN   & \underline{66.8} & \textbf{62.4} & \underline{26.4} & \underline{51.9} \\
+\bottomrule
+\end{tabular}
+\caption{In-context retrieval accuracy (\%) on RULER single- and multi-key needle-in-a-haystack
+tasks~\citep{hsieh2024ruler}. At $220$M/$20$B all mixers are near chance (undertrained); meaningful
+separation appears at $750$M/$50$B. Best per column within each block in \textbf{bold}, second best \underline{underlined}.
+\note{Diagonal KDN at 750M pending.}}
+\label{tab:pretrain-niah}
+\end{table}
+
+
 % =============================================================================
 \section{Related Work}
 \label{sec:related-work}
