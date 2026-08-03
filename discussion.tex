@@ -2,6 +2,7 @@
 
 \usepackage[margin=1in]{geometry}
 \usepackage{amsmath,amssymb,booktabs,microtype}
+\usepackage{xcolor}
 \usepackage[colorlinks=true,linkcolor=blue!50!black]{hyperref}
 
 \title{Discussion: Identifiability and Optimization in Diagonal Kalman Delta Networks}
@@ -198,6 +199,508 @@ If C matches or improves A, the production model should remove both $r_{\mathrm{
 $\mu_{\mathrm{param}}$. If D improves C, retain only bounded relative observation reliability.
 Only after fixing this gauge is a separate uncertainty-parameter learning-rate sweep readily
 interpretable.
+
+\section{Why DiagKLA Does Not Yet Dominate IsoKLA}
+
+The available implementation tests establish that the Triton kernels reproduce the intended
+PyTorch recurrence; they do not establish that this recurrence is the best approximation for an
+associative memory. Empirically, the extra diagonal uncertainty state has not produced a general
+advantage over the isotropic state. This section separates the approximation question from the
+kernel-correctness question and states the experiment needed to identify the useful part of the
+diagonal model.
+
+\subsection{Current evidence}
+
+The controlled 220M/20B information-scale runs do not establish a general DiagKLA advantage.
+The best default-calibrated variants give:
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+Metric & DiagKLA, $s=d_k$ & IsoKLA, $s=1$ \\
+\midrule
+WikiText word perplexity $\downarrow$ & 28.99 & 28.79 \\
+LAMBADA perplexity $\downarrow$ & 35.12 & 35.66 \\
+Five-task multiple-choice average $\uparrow$ & 0.472 & 0.477 \\
+S-NIAH-2 at 4K $\uparrow$ & 0.272 & 0.046 \\
+S-NIAH-3 at 2K $\uparrow$ & 0.004 & 0.008 \\
+MK-NIAH-1 at 4K $\uparrow$ & 0.178 & 0.182 \\
+\bottomrule
+\end{tabular}
+\end{center}
+General language-modeling quality is mixed and effectively tied. DiagKLA has a large, specific
+S-NIAH-2 advantage, a direction that also appears in the earlier 220M comparison, but it does
+not improve the harder single-key or multikey probes. The recent sweeps use one training seed
+and different GPU world sizes, and a current-code 750M DiagKLA evaluation is not yet available.
+The evidence therefore supports a task-specific single-key retrieval signal, not a general
+DiagKLA ranking above IsoKLA.
+
+The noisy-MQAR grid gives a similar result. Uniform process-noise initialization raises DiagKLA
+from $76.2\pm22.3$ to $83.7\pm10.4$, while the best stabilized IsoKLA variant obtains
+$83.0\pm8.4$. These are effectively tied at this resolution. The older trained-gain probe that
+reports large off-key gain and over-writing predates the current initialization and memory
+kernel; it motivates the mechanism test below but should not be treated as a diagnosis of the
+current default.
+
+\subsection{Approximation and calibration}
+
+With predicted diagonal covariance
+$\widehat{\vct{P}}_t=\diag(\widehat{\vct{p}}_t)$, the exact Gaussian measurement update produces
+a dense posterior whose diagonal is
+\begin{equation}
+  p^{\mathrm{exact}}_{t,i}
+  = \widehat p_{t,i}
+  - \frac{\widehat p_{t,i}^2 k_{t,i}^2}
+    {r_t+\sum_j\widehat p_{t,j}k_{t,j}^2}.
+  \label{eq:discussion-exact-posterior-diagonal}
+\end{equation}
+The scan-compatible DiagKLA state instead uses
+\begin{equation}
+  p^{\mathrm{proj}}_{t,i}
+  = \left(\widehat p_{t,i}^{-1}
+    +s\frac{k_{t,i}^2}{r_t}\right)^{-1},
+  \qquad s=d_k \quad\text{by default}.
+  \label{eq:discussion-projected-posterior-diagonal}
+\end{equation}
+Even at $s=1$, Equation~\eqref{eq:discussion-projected-posterior-diagonal} is not the diagonal of
+the exact posterior in Equation~\eqref{eq:discussion-exact-posterior-diagonal}. For $s\ne1$, the
+gain and information update additionally correspond to different measurement scales: the
+current gain retains precision $1/r_t$, while the state used by future gains receives precision
+$s/r_t$. Thus $s=d_k$ is a dimension calibration of a gain-conditioning state, not an exact
+Kalman consequence.
+
+For a spread-out unit key, $\mathbb{E}[k_i^2]=1/d_k$, so $s=d_k$ gives a unit expected
+per-coordinate increment. Averaging these calibrated coordinates recovers the IsoKLA scale,
+\begin{equation}
+  \frac{1}{d_k}\sum_i d_k\frac{k_{t,i}^2}{r_t}
+  = \frac{\lVert\vct{k}_t\rVert_2^2}{r_t}
+  = \frac{1}{r_t}.
+  \label{eq:discussion-diag-iso-average}
+\end{equation}
+Matching mean information does not match covariance or gain because inversion is nonlinear.
+Moreover, for a uniformly distributed unit key,
+\begin{equation}
+  \operatorname{Var}(d_k k_i^2)
+  = \frac{2(d_k-1)}{d_k+2}
+  \longrightarrow 2.
+  \label{eq:discussion-coordinate-information-variance}
+\end{equation}
+The coordinate noise therefore does not vanish with width. DiagKLA can interpret coordinate
+energy fluctuations as persistent uncertainty structure. The projection is also basis
+dependent: $(1,1)/\sqrt{2}$ and $(1,-1)/\sqrt{2}$ are orthogonal but have identical elementwise
+squares and hence identical information increments. Whether the learned key basis aligns this
+diagonal statistic with useful uncertainty is an empirical question.
+
+\subsection{Information scale separates present writing from future protection}
+\label{subsec:discussion-info-scale-temporal}
+
+The role of $s$ is clearest after separating the memory update at token $t$ from the uncertainty
+state passed to later tokens. Define
+\begin{equation}
+  z_t=\sum_i\widehat p_{t,i}k_{t,i}^2,
+  \qquad
+  \beta_t^{\mathrm{eff}}
+  =\vct{k}_t^\top\vct{\kappa}_t
+  =\frac{z_t}{r_t+z_t}.
+  \label{eq:discussion-effective-write}
+\end{equation}
+Writing $\widetilde{\vct{S}}_t=\vct{D}_t\vct{S}_{t-1}$ and
+$\vct{e}_t=\vct{v}_t-\widetilde{\vct{S}}_t^\top\vct{k}_t$, the memory recurrence implies
+\begin{equation}
+  \vct{S}_t
+  =\widetilde{\vct{S}}_t+\vct{\kappa}_t\vct{e}_t^\top,
+  \qquad
+  \vct{v}_t-\vct{S}_t^\top\vct{k}_t
+  =(1-\beta_t^{\mathrm{eff}})\vct{e}_t.
+  \label{eq:discussion-memory-residual}
+\end{equation}
+Thus $\beta_t^{\mathrm{eff}}$ is the fraction of the current residual corrected at its own key.
+The same $\vct{\kappa}_t$ controls both the value write
+$+\vct{\kappa}_t\vct{v}_t^\top$ and the erasure
+$-\vct{\kappa}_t\vct{k}_t^\top\widetilde{\vct{S}}_t$.
+
+To expose causal ordering, temporarily allow a token-specific scale $s_t$. Current DiagKLA first
+computes $\widehat{\vct{p}}_t$ and $\vct{\kappa}_t$ from the incoming state
+$\vct{c}_{t-1}$, and only afterward computes the tracked projected covariance below. In this
+subsection, plain $\vct{p}_t$ denotes that DiagKLA state, not the exact posterior diagonal.
+\begin{equation}
+  p_{t,i}(s_t)
+  =\left(\widehat p_{t,i}^{-1}
+    +s_t\frac{k_{t,i}^2}{r_t}\right)^{-1}
+  =\frac{\widehat p_{t,i}}
+    {1+s_t\widehat p_{t,i}k_{t,i}^2/r_t}.
+  \label{eq:discussion-current-scale-update}
+\end{equation}
+Consequently, for a local intervention that holds the incoming state and token projections fixed,
+\begin{equation}
+  \frac{\partial\vct{\kappa}_t}{\partial s_t}=0,
+  \qquad
+  \frac{\partial\vct{S}_t}{\partial s_t}=0,
+  \qquad
+  \frac{\partial p_{t,i}}{\partial s_t}
+  =-\frac{k_{t,i}^2}{r_t}p_{t,i}^2\leq0.
+  \label{eq:discussion-current-scale-derivatives}
+\end{equation}
+The scale at token $t$ therefore does not write that observation harder or change its same-token
+residual. It only increases the confidence state supplied to the future. In causal order,
+$\vct{c}_{t-1}$ determines $\widehat{\vct{p}}_t$, which determines
+$\vct{\kappa}_t$ and $\vct{S}_t$; $s_t$ then enters $\vct{c}_t$ and can first affect the
+memory gain at token $t+1$.
+
+This token-local statement must not be confused with a comparison between two complete runs that
+use different global values of $s$. Except at the first token, a global $s$ has already changed
+$\vct{c}_{t-1}$ and therefore generally changes the current gain. Conditional on fixed projected
+$\vct{k}$, $\vct{\alpha}$, $\vct{\omega}$, and $r$, its first delayed effect is explicit:
+\begin{align}
+  \frac{\partial z_{t+1}}{\partial s_t}
+  &=-\frac{1}{r_t}\sum_i
+    \alpha_{t+1,i}^2p_{t,i}^2k_{t,i}^2k_{t+1,i}^2\leq0, \\
+  \frac{\partial\beta_{t+1}^{\mathrm{eff}}}{\partial s_t}
+  &=\frac{r_{t+1}}{(r_{t+1}+z_{t+1})^2}
+    \frac{\partial z_{t+1}}{\partial s_t}\leq0.
+  \label{eq:discussion-delayed-scale-effect}
+\end{align}
+More generally, for $u>t$ the channelwise sensitivity propagates as
+\begin{equation}
+  \frac{\partial p_{u,i}}{\partial s_t}
+  =-\frac{k_{t,i}^2}{r_t}p_{t,i}^2
+    \prod_{n=t+1}^{u}
+    \frac{\alpha_{n,i}^2}
+      {(1+s_n\widehat p_{n,i}k_{n,i}^2/r_n)^2}.
+  \label{eq:discussion-scale-sensitivity-propagation}
+\end{equation}
+A larger past scale therefore reduces the later effective correction
+$\vct{k}_u^\top\vct{\kappa}_u$. It need not reduce every component or the norm of an
+anisotropic $\vct{\kappa}_u$: reducing the numerator coordinates also reduces their shared
+denominator. End-to-end trained runs need not be monotone either, because their learned
+projections can compensate for the changed recurrence.
+
+Equations~\eqref{eq:discussion-delayed-scale-effect}--\eqref{eq:discussion-scale-sensitivity-propagation}
+also show what is being protected. Suppression is controlled by elementwise-energy overlap such
+as $\sum_i p_{t,i}^2k_{t,i}^2k_{u,i}^2$, not by the signed directional overlap
+$(\vct{k}_t^\top\vct{k}_u)^2$. At fixed projections, a future key with disjoint coordinate
+support receives no direct effective-gain suppression through this pathway, although the full
+memory can still differ through intervening writes. Dense orthogonal keys can instead have large
+energy overlap, including the maximum compatible with orthogonality in the two-dimensional
+example above. The tracker gives those two keys identical confidence increments and, under a
+symmetric incoming covariance, identical effective-gain suppression. Their signed memory updates
+and residuals need not be identical. Large $s$ can consequently suppress a genuinely new
+orthogonal association rather than selectively preserve only the old one.
+
+Prediction limits the duration of this protection. As $s_t\to\infty$, $p_{t,i}\to0$ wherever
+$k_{t,i}\ne0$, but
+\begin{equation}
+  \widehat p_{t+1,i}=\alpha_{t+1,i}^2p_{t,i}+\omega_{t+1,i}
+  \longrightarrow\omega_{t+1,i}.
+  \label{eq:discussion-process-noise-plasticity-floor}
+\end{equation}
+Positive process noise restores a floor on uncertainty and hence future plasticity; small
+$\alpha$ also rapidly attenuates the confidence sensitivity in
+Equation~\eqref{eq:discussion-scale-sensitivity-propagation} while directly decaying the memory.
+Thus larger $s$ does not store more content or create capacity by itself. It changes the
+retention--plasticity operating point until $\vct{\omega}$ and $\vct{\alpha}$ wash out that
+change. If $\vct{\omega}=0$ and $\vct{\alpha}\simeq1$, an extreme $s$ can instead freeze future
+gains on the affected coordinates.
+
+The different optima for DiagKLA and IsoKLA are consistent with their different recurrences. For
+a spread-out normalized key, the DiagKLA increment in one coordinate has expectation
+$s/(d_kr_t)$, so $s=d_k$ cancels the coordinate dilution without changing the current DiagKLA
+gain locally. IsoKLA has one scalar state and $\lVert\vct{k}_t\rVert_2^2=1$, so its information
+increment is already $s/r_t$ with no $1/d_k$ dilution. Moreover, the current IsoKLA
+implementation uses, locally holding the incoming $\widehat b_t$ fixed,
+\begin{equation}
+  \beta_t^{\mathrm{iso}}(s)
+  =\frac{\widehat b_t}{r_t+s\widehat b_t},
+  \qquad
+  c_t^{\mathrm{iso}}(s)=\widehat b_t^{-1}+\frac{s}{r_t},
+  \qquad
+  \left.\frac{\partial\beta_t^{\mathrm{iso}}}{\partial s}\right|_{\widehat b_t}
+  =-\frac{\widehat b_t^2}{(r_t+s\widehat b_t)^2}<0.
+  \label{eq:discussion-iso-scale}
+\end{equation}
+A token-local increase in $s$ in IsoKLA therefore weakens the current write and increases future
+confidence at the same time. With fixed projections, the lower uncertainty inherited from past
+larger scales reinforces this reduction in the global-$s$ recurrence. At $s=d_k$ these two
+anti-plasticity effects can be excessive, whereas DiagKLA obtains delayed protection without the
+same local write penalty. This gives a mechanistic interpretation of the observed optima $s=d_k$
+and $s=1$, but it is not yet causal evidence that retention alone produces the downstream
+improvements.
+
+A coherent Gaussian observation-precision multiplier has a different meaning. For a local
+intervention that holds the predicted prior $\widehat{\vct{P}}_t$ fixed, increasing precision by
+$s$ means using $r_t^{\mathrm{eff}}=r_t/s$ in both the current gain and posterior. With
+$z_t=\vct{k}_t^\top\widehat{\vct{P}}_t\vct{k}_t$, this gives
+\begin{equation}
+  \vct{\kappa}_t^{\mathrm{coh}}(s)
+  =\frac{s\widehat{\vct{P}}_t\vct{k}_t}{r_t+sz_t},
+  \qquad
+  \beta_t^{\mathrm{coh}}(s)
+  =\frac{sz_t}{r_t+sz_t},
+  \qquad
+  \frac{\partial\beta_t^{\mathrm{coh}}}{\partial s}
+  =\frac{r_tz_t}{(r_t+sz_t)^2}>0.
+  \label{eq:discussion-coherent-scale-gain}
+\end{equation}
+The remaining current residual is then
+$1-\beta_t^{\mathrm{coh}}=r_t/(r_t+sz_t)$, so a more precise observation is assimilated more
+aggressively. At the same time, its exact posterior is
+\begin{equation}
+  \vct{P}_t(s)
+  =\widehat{\vct{P}}_t
+  -\frac{s\widehat{\vct{P}}_t\vct{k}_t\vct{k}_t^\top
+      \widehat{\vct{P}}_t}{r_t+sz_t},
+  \qquad
+  \frac{\partial\,\vct{\ell}^\top\vct{P}_t(s)\vct{\ell}}{\partial s}
+  =-\frac{r_t(\vct{\ell}^\top\widehat{\vct{P}}_t\vct{k}_t)^2}
+    {(r_t+sz_t)^2}\leq0.
+  \label{eq:discussion-coherent-scale-posterior}
+\end{equation}
+Thus coherent higher precision has the two temporally distinct effects expected of a Kalman
+filter: write the observation harder now, then reduce later corrections in covariance-overlapping
+directions. Neither the current DiagKLA split nor Equation~\eqref{eq:discussion-iso-scale} for
+$s\ne1$ has this interpretation. A coherent implementation should use $r_t/s$ once; replacing
+$r_t$ by $r_t/s$ and also retaining a separate factor $s$ in the information update would
+double-count the scale and produce an $s^2$ increment.
+
+These mechanisms can be separated explicitly with a current-write scale $s_{\mathrm{write}}$ and
+a post-write confidence scale $s_{\mathrm{protect}}$:
+\begin{equation}
+  \vct{\kappa}_t(s_{\mathrm{write}})
+  =\frac{s_{\mathrm{write}}\widehat{\vct{p}}_t\odot\vct{k}_t}
+    {r_t+s_{\mathrm{write}}z_t},
+  \qquad
+  c_{t,i}=\widehat p_{t,i}^{-1}
+    +s_{\mathrm{protect}}\frac{k_{t,i}^2}{r_t}.
+  \label{eq:discussion-two-information-scales}
+\end{equation}
+Current DiagKLA is $(s_{\mathrm{write}},s_{\mathrm{protect}})=(1,s)$. Setting both to $s$
+makes the scale consistent within the diagonal precision projection, although that projection
+still is not the exact posterior diagonal. A factorial comparison of $(1,1)$, $(1,d_k)$,
+$(d_k,1)$, and $(d_k,d_k)$ would separate current assimilation from future protection; because
+$s_{\mathrm{write}}=d_k$ may saturate the current correction, a gain-matched intermediate value
+should also be included. Log the same-token $\beta_t^{\mathrm{eff}}$ and residual contraction,
+the next-token and repeated-key gains, write/erase magnitudes, covariance quantiles, and effective
+memory half-life. Repeated-key, replacement, and orthogonal-key tasks can then identify whether
+the benefit comes from retention, impaired rewriting, or diagonal geometry.
+
+A large learned $r_t$ could make the $s=1$ confidence increment too weak, but the preferred
+$s=d_k$ does not by itself diagnose observation noise as too large: increasing $r_t$ also weakens
+the current gain, whereas increasing only $s_{\mathrm{protect}}$ does not. The relevant
+dimensionless quantities are $z_t/r_t$ for the current write and
+$s\widehat p_{t,i}k_{t,i}^2/r_t$ for the confidence update. These, together with
+$\omega_{t,i}/\widehat p_{t,i}$, should be measured before attributing the result to $r_t$.
+Likewise, if $r_t$ is freely learned, a globally coherent $s$ is largely reparameterizable into
+$r_t/s$; the present decoupled scale is not redundant because it changes protection without
+changing that observation's same-token write locally.
+
+\subsection{An exact posterior-diagonal alternative}
+
+Although the full posterior is dense, its diagonal after one measurement can be computed without
+materializing a $d_k\times d_k$ covariance. Define
+\begin{equation}
+  D_t
+  = r_t+\sum_j\widehat p_{t,j}k_{t,j}^2,
+  \qquad
+  q_{t,i}=\widehat p_{t,i}k_{t,i}^2.
+  \label{eq:discussion-exact-diag-denominator}
+\end{equation}
+The denominator $D_t$ is already required for the diagonal Kalman gain. The exact posterior
+diagonal from Equation~\eqref{eq:discussion-exact-posterior-diagonal} can therefore be updated as
+\begin{equation}
+  p^{\mathrm{mom}}_{t,i}
+  = \widehat p_{t,i}
+    \frac{D_t-q_{t,i}}{D_t}
+  = \widehat p_{t,i}
+    \left(1-\kappa_{t,i}k_{t,i}\right),
+  \qquad
+  \kappa_{t,i}=\frac{\widehat p_{t,i}k_{t,i}}{D_t}.
+  \label{eq:discussion-exact-diag-recurrence}
+\end{equation}
+This costs $O(d_k)$ state and arithmetic per token. The multiplicative form in
+Equation~\eqref{eq:discussion-exact-diag-recurrence} is preferable to subtracting two nearly
+equal covariance terms. Since $D_t-q_{t,i}=r_t+\sum_{j\ne i}q_{t,j}>0$, it also makes positivity
+explicit. Equivalently, the marginal information update is
+\begin{equation}
+  \frac{1}{p^{\mathrm{mom}}_{t,i}}
+  = \frac{1}{\widehat p_{t,i}}
+  + \frac{k_{t,i}^2}
+    {r_t+\sum_{j\ne i}\widehat p_{t,j}k_{t,j}^2}.
+  \label{eq:discussion-exact-diag-information}
+\end{equation}
+Unlike the current update, this expression retains the competition from the other key
+coordinates instead of replacing its denominator by $r_t$.
+
+The word ``exact'' applies only to the diagonal of this one posterior when the predicted prior is
+diagonal. The same update creates off-diagonal entries
+\begin{equation}
+  P_{t,ij}
+  = -\frac{\widehat p_{t,i}\widehat p_{t,j}k_{t,i}k_{t,j}}{D_t},
+  \qquad i\ne j.
+  \label{eq:discussion-exact-posterior-offdiag}
+\end{equation}
+These entries affect the next gain. Discarding them and carrying only
+$\vct{p}^{\mathrm{mom}}_t$ is therefore a moment-projected, diagonal assumed-density filter, not
+the exact multi-token Kalman filter. Exact filtering across tokens requires the dense
+$\vct{P}_t$, with $O(d_k^2)$ state and arithmetic per token, as in ExactKLA.
+
+This alternative also changes the parallelization structure. All channels in
+Equation~\eqref{eq:discussion-exact-diag-recurrence} are coupled through $D_t$, so the recurrence
+does not decompose into the independent $2\times2$ M\"obius maps used by the current gain scan.
+The straightforward implementation is a token-sequential $O(Td_k)$ gain recurrence, preferably
+fused in Triton; after the gains are produced, the existing chunked Kalman memory kernel remains
+applicable. Thus the exact posterior-diagonal update saves the dense $O(d_k^2)$ covariance but
+trades away the current logarithmic-depth prefix scan for the gain.
+
+For the moment projection, the coherent scale from
+Subsection~\ref{subsec:discussion-info-scale-temporal} specializes to
+$r_t^{\mathrm{eff}}=r_t/s$ and gives
+\begin{equation}
+  D_t^{(s)}
+  = \frac{r_t}{s}+\sum_j\widehat p_{t,j}k_{t,j}^2,
+  \qquad
+  \kappa_{t,i}^{(s)}
+  = \frac{\widehat p_{t,i}k_{t,i}}{D_t^{(s)}},
+  \qquad
+  p_{t,i}^{(s)}
+  = \widehat p_{t,i}
+    -\frac{\widehat p_{t,i}^2k_{t,i}^2}{D_t^{(s)}}.
+  \label{eq:discussion-exact-diag-scaled}
+\end{equation}
+This is the exact-posterior-diagonal specialization of
+Equations~\eqref{eq:discussion-coherent-scale-gain}--\eqref{eq:discussion-coherent-scale-posterior}.
+A direct ablation should compare the current M\"obius precision scan against this recurrent moment
+projection first with $s=1$, and then, separately, with the coherent calibrated choice
+$r_t^{\mathrm{eff}}=r_t/d_k$.
+
+\paragraph{Is the moment projection likely to be a better mixer?}
+It is a better approximation to the one-step posterior covariance, but it is not necessarily a
+better drop-in strategy for associative memory. Consider the symmetric case
+$\widehat p_{t,i}=\widehat p_t$ and $k_{t,i}^2=1/d_k$, and define the effective write strength
+\begin{equation}
+  \beta_t
+  = \frac{\widehat p_t}{r_t+\widehat p_t}.
+  \label{eq:discussion-symmetric-beta}
+\end{equation}
+The current $s=d_k$ precision projection and the moment projection then give
+\begin{equation}
+  p_t^{\mathrm{proj},d_k}
+  = \widehat p_t(1-\beta_t),
+  \qquad
+  p_t^{\mathrm{mom}}
+  = \widehat p_t\left(1-\frac{\beta_t}{d_k}\right).
+  \label{eq:discussion-proj-versus-moment}
+\end{equation}
+One scalar measurement correctly removes only rank-one uncertainty, so the moment projection
+reduces each marginal variance by only a $\beta_t/d_k$ fraction. The current rule reduces every
+coordinate by a $\beta_t$ fraction, or $d_k$ times as much total trace in this symmetric example.
+It therefore acts as a strong confidence regularizer: future gains are smaller and existing
+associations are overwritten less aggressively. Indeed, the current $s=1$ projection also gives
+smaller posterior variance than the moment projection,
+\begin{equation}
+  p_t^{\mathrm{proj},1}
+  = \frac{\widehat p_t d_k r_t}{d_k r_t+\widehat p_t}
+  < p_t^{\mathrm{mom}}.
+  \label{eq:discussion-proj-one-versus-moment}
+\end{equation}
+Because the empirical information-scale sweep found $s=d_k$ substantially better than $s=1$,
+an unretuned moment projection is likely to retain still more uncertainty, produce larger future
+write/erase gains, and increase interference. It may nevertheless help tasks that require rapid
+adaptation or frequent replacement of old associations. Posterior faithfulness and memory
+quality are therefore distinct hypotheses.
+
+The process-noise scale makes a raw comparison especially unfavorable to the moment variant.
+Prediction injects $O(d_k\omega_t)$ total diagonal uncertainty per token, whereas a rank-one
+moment update removes only $O(1)$ total uncertainty. Near $\alpha_t^2=1$, matching the stationary
+effective gain of the current $s=d_k$ rule requires approximately
+\begin{equation}
+  \omega_t^{\mathrm{mom}}
+  \simeq \frac{\omega_t^{\mathrm{proj}}}{d_k},
+  \label{eq:discussion-moment-omega-calibration}
+\end{equation}
+or, equivalently at the level of the stationary covariance-to-noise ratio, an observation-noise
+scale roughly $d_k$ times larger. Without this recalibration, the current initialization
+$\omega_t\simeq\omega_{\min}+\operatorname{softplus}(0)$ can drive the moment filter toward high
+uncertainty and $\beta_t^{\mathrm{eff}}$ close to one.
+
+The appropriate comparison is therefore four-way:
+\begin{enumerate}
+  \item the production M\"obius projection with $s=d_k$;
+  \item the same projection with $s=1$;
+  \item the recurrent moment projection with the same $\omega/r$ parameterization;
+  \item the recurrent moment projection with $\omega$ initialized and floored at approximately
+    $1/d_k$ of the production scale, or otherwise calibrated to match the initial and stationary
+    $\beta_t^{\mathrm{eff}}$ distribution.
+\end{enumerate}
+The raw comparison measures the behavior of each formula under identical parameters; the
+gain-matched comparison isolates posterior geometry from overwrite temperature. Both should log
+$\beta_t^{\mathrm{eff}}$, covariance and process-noise quantiles, effective memory half-life, and
+write/erase magnitude. Repeated-key and orthogonal-key synthetic tasks should precede language
+model pretraining, because they directly separate rapid rewriting from protection against
+cross-talk. The moment projection should replace the current rule only if it improves these
+matched comparisons enough to compensate for losing the parallel M\"obius gain scan.
+
+\subsection{Anisotropic write direction and initialization}
+
+For a unit key, decompose
+\begin{equation}
+  \beta_t^{\mathrm{eff}}=\vct{k}_t^\top\vct{\kappa}_t,
+  \qquad
+  \vct{\kappa}_{t,\perp}
+  = \vct{\kappa}_t-\beta_t^{\mathrm{eff}}\vct{k}_t,
+  \qquad
+  \vct{k}_t^\top\vct{\kappa}_{t,\perp}=0.
+  \label{eq:discussion-gain-decomposition}
+\end{equation}
+IsoKLA enforces $\vct{\kappa}_{t,\perp}=0$: uncertainty changes the strength of a write while
+preserving the binding direction. DiagKLA can rotate both the write and erase directions away
+from the current key. This can be useful uncertainty preconditioning, or it can write the value
+into unrelated key directions and create cross-talk. Greater covariance expressivity alone does
+not distinguish these interpretations.
+
+The current initialization is also not an exact IsoKLA fallback. Zeroing the output map of the
+process-noise projection makes $\omega_{t,i}$ uniform, but
+\begin{equation}
+  \widehat p_{t,i}=\alpha_{t,i}^2/\mu+\omega_t
+\end{equation}
+is already channel dependent when $\alpha_{t,i}$ is channel dependent. After one observation,
+$d_k k_{t,i}^2/r_t$ further leaves the isotropic subspace. The initialization is a useful
+stabilizer, but the model cannot choose an exact IsoKLA function and add anisotropy only when it
+is beneficial.
+
+\subsection{Decisive ablation}
+
+The cleanest next experiment holds the diagonal information tracker and effective write strength
+fixed while intervening only on the gain direction:
+\begin{equation}
+  \vct{\kappa}_t^{(\eta)}
+  = \beta_t^{\mathrm{eff}}\vct{k}_t
+  +\eta\vct{\kappa}_{t,\perp},
+  \qquad \eta\in\{0,1\}.
+  \label{eq:discussion-gain-direction-ablation}
+\end{equation}
+Here $\eta=0$ removes only the off-key component and $\eta=1$ recovers the current DiagKLA. A
+gain for $\eta=0$ would implicate the off-key direction; parity would show little measurable
+benefit from that direction; a robust gain for $\eta=1$ would provide direct evidence that
+anisotropic writes add useful capacity. The comparison should log $\beta^{\mathrm{eff}}$, gain
+angle, $\vct{p}$ and $\vct{c}$ quantiles, $\omega/r$, and cold-channel fraction on current
+checkpoints.
+
+Two supporting controls are needed:
+\begin{enumerate}
+  \item Compare the projected information state in
+    Equation~\eqref{eq:discussion-projected-posterior-diagonal} with the sequential exact-posterior
+    diagonal in Equation~\eqref{eq:discussion-exact-posterior-diagonal} on a short synthetic task,
+    including orthogonal keys with identical elementwise squares.
+  \item Run a matched three-seed 220M comparison of DiagKLA, IsoKLA, and the stabilized IsoKLA
+    variant with identical world size, data order, and parameter count. Validate the S-NIAH-2
+    advantage across context lengths and needle depths before spending on a new large-scale run.
+\end{enumerate}
+
+A scale point above the current boundary is also warranted. Test $2d_k$ first and add $4d_k$
+only if performance continues to improve. This is an overwrite-temperature diagnostic: larger
+$s$ increases the post-write confidence state. A token-local change does not strengthen that
+token's write, while a global change alters later current writes through their covariance prefix.
+The sweep can locate a better retention--plasticity operating point, but it cannot resolve the
+posterior inconsistency or establish that off-key anisotropy is useful.
 
 \section{Conclusion}
 

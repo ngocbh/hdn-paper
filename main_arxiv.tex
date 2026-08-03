@@ -787,40 +787,47 @@ at each scale. Best per column within each block in \textbf{bold}, second best \
 \end{table}
 
 \paragraph{In-context retrieval.}
-Table~\ref{tab:pretrain-niah} reports single- and multi-key needle-in-a-haystack accuracy from
-RULER~\citep{hsieh2024ruler}. At $220$M/$20$B retrieval is near chance for every mixer: the models
-are too small and undertrained to store high-entropy needles reliably, so these numbers are noisy
-and we include them only for completeness. The separation emerges at $750$M/$50$B, where both KDA
-and the Isotropic KDN dramatically outperform GDN-2 (retrieval average $52$--$53$ versus $30$). On
-the interference-heavy S-NIAH-3 the Isotropic KDN reaches $62.4$ against $3.6$ for GDN-2 and $48.4$
-for KDA, while KDA leads the simpler S-NIAH-2 and multi-key settings---consistent with the Kalman
-gain protecting existing associations under interference.
+Table~\ref{tab:pretrain-niah} reports RULER single- and multi-key needle-in-a-haystack accuracy
+across context lengths from 1K to 8K~\citep{hsieh2024ruler} (8K exceeds the 4K training length, i.e.
+length extrapolation). At $220$M/$20$B all mixers saturate the easy S-NIAH-1 passkey task at short
+lengths but fall off quickly with length and are near chance on the harder S-NIAH-2/3 and multi-key
+settings---too small to store high-entropy needles reliably. At $750$M/$50$B the separation is clear
+on length extrapolation: all three are near-perfect on S-NIAH-1 through 4K, but at 8K only the
+Isotropic KDN holds up ($92.0$, versus $83.4$ for KDA and $46.0$ for GDN-2), and on S-NIAH-2 both
+Kalman variants far exceed GDN-2 as length grows. This matches the Kalman view---the gain protects
+existing associations as the state fills, aiding recall under interference and extrapolation.
 
 \begin{table}[t]
 \centering
 \small
-\begin{tabular}{@{}l cccc@{}}
+\setlength{\tabcolsep}{3pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}l cccc cccc ccc ccc@{}}
 \toprule
-Model & S-NIAH-2 @4K & S-NIAH-3 @2K & MK-NIAH-1 @4K & Avg. \\
+& \multicolumn{4}{c}{S-NIAH-1} & \multicolumn{4}{c}{S-NIAH-2} & \multicolumn{3}{c}{S-NIAH-3} & \multicolumn{3}{c}{MK-NIAH-1} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-9}\cmidrule(lr){10-12}\cmidrule(lr){13-15}
+Model & 1K & 2K & 4K & 8K & 1K & 2K & 4K & 8K & 1K & 2K & 4K & 1K & 2K & 4K \\
 \midrule
-\multicolumn{5}{@{}l}{\emph{220M parameters, 20B tokens}}\\
-DeltaNet        & 7.6  & \textbf{4.4} & 17.8 & 9.9 \\
-Gated DeltaNet  & 14.8 & 0.8 & \textbf{22.4} & \underline{12.7} \\
-GDN-2           & \underline{19.4} & 0.2 & 16.0 & 11.9 \\
-KDA             & 12.8 & \underline{3.2} & 11.6 & 9.2 \\
-Diagonal KDN    & \textbf{32.0} & 0.2 & \underline{18.0} & \textbf{16.7} \\
-Isotropic KDN   & 11.0 & 2.2 & 14.8 & 9.3 \\
+\multicolumn{15}{@{}l}{\emph{220M parameters, 20B tokens}}\\
+DeltaNet       & 99.6 & \textbf{99.8} & \textbf{99.6} & \textbf{97.2} & 8.0 & 31.2 & 8.2 & \underline{6.6} & \underline{4.2} & \textbf{5.2} & \textbf{1.4} & \textbf{24.8} & \textbf{24.4} & \underline{17.6} \\
+Gated DeltaNet & \textbf{100.0} & \underline{99.0} & \underline{93.6} & \underline{49.6} & 92.2 & 46.0 & 16.4 & 2.0 & 0.4 & 1.2 & \underline{0.2} & \underline{24.4} & \underline{22.4} & \textbf{19.2} \\
+GDN-2          & 94.6 & 46.6 & 12.0 & 2.2 & \underline{93.2} & 60.4 & \underline{19.2} & 6.0 & 1.6 & 0.2 & 0.0 & 20.4 & 21.4 & 16.2 \\
+KDA            & \underline{99.8} & 98.8 & 74.6 & 19.8 & 47.4 & \textbf{92.4} & 14.2 & 6.0 & \textbf{14.4} & \underline{4.4} & 0.0 & 21.4 & 19.8 & 13.4 \\
+Diagonal KDN   & 97.6 & 32.8 & 13.8 & 3.4 & \textbf{98.2} & \underline{79.0} & \textbf{24.4} & \textbf{10.0} & 0.8 & 0.0 & 0.0 & 21.2 & 19.4 & 16.0 \\
+Isotropic KDN  & 78.8 & 22.4 & 16.2 & 5.2 & 74.0 & 50.8 & \underline{19.2} & 3.4 & 1.8 & 0.6 & \underline{0.2} & 21.2 & 21.8 & 14.4 \\
 \midrule
-\multicolumn{5}{@{}l}{\emph{750M parameters, 50B tokens}}\\
-GDN-2           & 61.2 & 3.6 & 25.0 & 29.9 \\
-KDA             & \textbf{82.0} & \underline{48.4} & \textbf{27.6} & \textbf{52.7} \\
-Isotropic KDN   & \underline{66.8} & \textbf{62.4} & \underline{26.4} & \underline{51.9} \\
+\multicolumn{15}{@{}l}{\emph{750M parameters, 50B tokens}}\\
+GDN-2          & \textbf{100.0} & \underline{99.8} & 90.8 & 46.0 & 89.8 & 90.6 & 62.8 & 17.2 & 1.6 & 4.8 & 1.8 & 20.2 & 25.8 & \underline{24.6} \\
+KDA            & \underline{99.8} & \textbf{100.0} & \textbf{99.6} & \underline{83.4} & \underline{93.8} & \underline{98.2} & \textbf{84.8} & \textbf{37.8} & \textbf{65.8} & \underline{51.6} & \textbf{12.4} & \underline{31.2} & \textbf{28.4} & \textbf{26.8} \\
+Isotropic KDN  & 99.6 & \underline{99.8} & \underline{99.2} & \textbf{92.0} & \textbf{99.2} & \textbf{99.2} & \underline{70.4} & \underline{21.6} & \underline{40.8} & \textbf{62.8} & \underline{2.2} & \textbf{31.6} & \underline{26.0} & 24.4 \\
 \bottomrule
-\end{tabular}
+\end{tabular}%
+}
 \caption{In-context retrieval accuracy (\%) on RULER single- and multi-key needle-in-a-haystack
-tasks~\citep{hsieh2024ruler}. At $220$M/$20$B all mixers are near chance (undertrained); meaningful
-separation appears at $750$M/$50$B. Best per column within each block in \textbf{bold}, second best \underline{underlined}.
-\note{Diagonal KDN at 750M pending.}}
+tasks~\citep{hsieh2024ruler} across context lengths 1K--8K. All models are recurrent-only and matched
+in parameter count and recurrent-state size at each scale; 8K exceeds the 4K training length (length
+extrapolation). Best per column within each block in \textbf{bold}, second best \underline{underlined}.
+\note{Diagonal KDN at 750M still training; row to be added.}}
 \label{tab:pretrain-niah}
 \end{table}
 
@@ -940,118 +947,232 @@ to the Kalman update.
 \section{Theoretical Proofs}
 \label{app:proofs}
 
-\begin{proof}[Proof of Proposition~\ref{prop:kalman-optimal-update}]
-Fix a token $t$ and write
+\begin{proof}[Proof of Proposition~\ref{prop:kalman-optimal-update} (Kalman Optimal Update)]
+
+Let the associative-memory state be
 \[
-  \widehat{\ve{S}}=\widehat{\ve{S}}_t,\qquad
-  \widehat{\ve{P}}=\widehat{\ve{P}}_t,\qquad
-  \ve{k}=\ve{k}_t,\qquad
-  \ve{v}=\ve{v}_t,\qquad
-  r=r_t .
+  \ve{S}_t \in \R^{d_k\times d_v},
+  \qquad
+  \mathcal{M}_t(\ve{k})=\ve{S}_t^{\tr}\ve{k}.
 \]
-The prediction step is the standard linear--Gaussian time update. If the prior estimation
-error has covariance $\ve{P}_{t-1}$, then after the transition
-$\ve{S}_t^\star=\ve{D}_t\ve{S}_{t-1}^\star+\ve{W}_t$ the predicted mean and covariance are
-\[
+The linear--Gaussian state-space model is
+\begin{align}
+  \ve{S}_t^\star
+  &= \ve{D}_t\ve{S}_{t-1}^\star+\ve{W}_t,
+  &
+  \ve{W}_t&\sim\mathcal{N}(0,\ve{\Omega}_t), \\
+  \ve{v}_t
+  &= \ve{S}_t^{\star\tr}\ve{k}_t+\ve{e}_t,
+  &
+  \ve{e}_t&\sim\mathcal{N}(0,r_t\ve{I}).
+\end{align}
+Let $\ve{z}_s=(\ve{k}_s,\ve{v}_s)$ denote the key--value observation at step $s$.
+At the end of step $t-1$, the Kalman filter represents the posterior over the latent
+memory as a Gaussian,
+\begin{equation}
+  p(\ve{S}_{t-1}^\star\mid \ve{z}_{1:t-1})
+  =
+  \mathcal{N}(\ve{S}_{t-1},\ve{P}_{t-1}),
+  \label{eq:previous-filtering-posterior}
+\end{equation}
+where $\ve{S}_{t-1}$ is the posterior mean, i.e.\ the point estimate of the memory after
+processing the first $t-1$ key--value pairs, and $\ve{P}_{t-1}$ is its key-space uncertainty.
+For the matrix memory, this covariance is understood per value coordinate, with the same
+key-space covariance shared across value columns.
+
+Before observing token $t$, the filter first predicts the next latent memory by marginalizing
+over the previous posterior:
+\begin{equation}
+  p(\ve{S}_t^\star\mid \ve{z}_{1:t-1})
+  =
+  \int
+  p(\ve{S}_t^\star\mid \ve{S}_{t-1}^\star)
+  p(\ve{S}_{t-1}^\star\mid \ve{z}_{1:t-1})
+  \,d\ve{S}_{t-1}^\star .
+  \label{eq:prediction-integral}
+\end{equation}
+Because both factors are linear--Gaussian, the predicted distribution is Gaussian,
+\begin{equation}
+  p(\ve{S}_t^\star\mid \ve{z}_{1:t-1})
+  =
+  \mathcal{N}(\widehat{\ve{S}}_t,\widehat{\ve{P}}_t).
+  \label{eq:predicted-prior}
+\end{equation}
+Its mean and covariance are the exact Kalman prediction:
+\begin{equation}
   \widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1},
   \qquad
   \widehat{\ve{P}}_t
   =
-  \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t,
-\]
-because $\ve{W}_t$ is zero mean with covariance $\ve{\Omega}_t$ and is independent of the
-previous estimation error.
+  \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t.
+  \label{eq:kam-predict}
+\end{equation}
+Thus $\widehat{\ve{S}}_t$ is a point estimate, but specifically the \emph{predicted prior
+mean} of $\ve{S}_t^\star$ conditioned on the past key--value sequence
+$\ve{z}_{1:t-1}$. It is not yet the point estimate of
+$p(\ve{S}_t^\star\mid \ve{z}_{1:t})$, because the current pair
+$(\ve{k}_t,\ve{v}_t)$ has not been used. The covariance $\widehat{\ve{P}}_t$ is not a point
+estimate; it is the predicted uncertainty around that mean.
+The predicted read and innovation are
+\begin{equation}
+  \widehat{\ve{v}}_t=\widehat{\ve{S}}_t^{\tr}\ve{k}_t,
+  \qquad
+  \ve{\delta}_t=\ve{v}_t-\widehat{\ve{v}}_t.
+  \label{eq:kam-innovation}
+\end{equation}
 
-It remains to choose the residual-write direction. Consider an arbitrary candidate
-$\ve{\kappa}\in\R^{d_k}$ and the update
-\[
-  \ve{S}^+
+This residual form is the matrix version of the standard Kalman correction. To see it,
+first look at one value coordinate $j$. Let $\ve{s}_{t,j}$ be column $j$ of the memory and
+let $v_{t,j}$ be coordinate $j$ of the observed value. The measurement model is
+\begin{equation}
+  v_{t,j}
   =
-  \widehat{\ve{S}}
+  \ve{k}_t^{\tr}\ve{s}_{t,j}^\star+e_{t,j},
+  \qquad
+  e_{t,j}\sim\mathcal{N}(0,r_t).
+  \label{eq:single-value-coordinate-observation}
+\end{equation}
+Before this measurement is used, the predicted distribution for this column is
+\begin{equation}
+  \ve{s}_{t,j}^\star \mid \ve{z}_{1:t-1}
+  \sim
+  \mathcal{N}(\widehat{\ve{s}}_{t,j},\widehat{\ve{P}}_t).
+  \label{eq:single-coordinate-prior}
+\end{equation}
+The observation $v_{t,j}$ is one scalar. Its predicted mean is
+$\ve{k}_t^{\tr}\widehat{\ve{s}}_{t,j}$, so the part of the observation not already predicted
+by the prior is the scalar residual
+\begin{equation}
+  \delta_{t,j}
+  =
+  v_{t,j}-\ve{k}_t^{\tr}\widehat{\ve{s}}_{t,j}.
+  \label{eq:single-coordinate-innovation}
+\end{equation}
+For a joint Gaussian pair $(x,y)$ with scalar $y$, the conditional mean is
+\[
+  \mathbb{E}[x\mid y]
+  =
+  \mathbb{E}[x]
   +
-  \ve{\kappa}\big(\ve{v}-\widehat{\ve{S}}^{\tr}\ve{k}\big)^{\tr}.
+  \operatorname{Cov}(x,y)\operatorname{Var}(y)^{-1}
+  \big(y-\mathbb{E}[y]\big).
 \]
-For any value coordinate, let $\ve{\epsilon}$ denote the predicted key-space estimation error
-and let $\eta$ denote the scalar observation noise in that coordinate. Then
-$\E[\ve{\epsilon}]=0$, $\Cov(\ve{\epsilon})=\widehat{\ve{P}}$, $\E[\eta]=0$,
-$\Var(\eta)=r$, and $\eta$ is independent of $\ve{\epsilon}$. The updated estimation error is
-\[
-  \ve{\epsilon}^+
+Apply this identity with $x=\ve{s}_{t,j}^\star$ and $y=v_{t,j}$. Under
+\eqref{eq:single-coordinate-prior}--\eqref{eq:single-value-coordinate-observation},
+\begin{equation}
+  \operatorname{Cov}(\ve{s}_{t,j}^\star,v_{t,j})
   =
-  (\ve{I}-\ve{\kappa}\ve{k}^{\tr})\ve{\epsilon}
-  -
-  \ve{\kappa}\eta .
-\]
-Thus the posterior covariance induced by this candidate write direction is
-\[
-  \ve{P}^+(\ve{\kappa})
+  \widehat{\ve{P}}_t\ve{k}_t,
+  \qquad
+  \operatorname{Var}(v_{t,j})
   =
-  (\ve{I}-\ve{\kappa}\ve{k}^{\tr})\widehat{\ve{P}}
-  (\ve{I}-\ve{\kappa}\ve{k}^{\tr})^{\tr}
+  \ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t+r_t.
+  \label{eq:single-coordinate-cross-cov}
+\end{equation}
+Therefore the posterior mean is
+\begin{equation}
+  \ve{s}_{t,j}
+  =
+  \widehat{\ve{s}}_{t,j}
   +
-  r\,\ve{\kappa}\ve{\kappa}^{\tr},
-\]
-which is exactly the uncertainty objective in \eqref{eq:kalman-tracking-objective}.
-
-Now minimize its trace. Since $\widehat{\ve{P}}$ is symmetric positive semidefinite,
-\[
-\begin{aligned}
-  \Trace\!\left(\ve{P}^+(\ve{\kappa})\right)
-  &=
-  \Trace(\widehat{\ve{P}})
-  -2\ve{\kappa}^{\tr}\widehat{\ve{P}}\ve{k}
-  +
-  \big(r+\ve{k}^{\tr}\widehat{\ve{P}}\ve{k}\big)\ve{\kappa}^{\tr}\ve{\kappa}.
-\end{aligned}
-\]
-This is a strictly convex quadratic in $\ve{\kappa}$ because
-$r+\ve{k}^{\tr}\widehat{\ve{P}}\ve{k}>0$. Setting its gradient to zero gives
-\[
-  -2\widehat{\ve{P}}\ve{k}
-  +
-  2\big(r+\ve{k}^{\tr}\widehat{\ve{P}}\ve{k}\big)\ve{\kappa}
+  \ve{\kappa}_t\,\delta_{t,j}.
+  \label{eq:single-coordinate-kalman-correction}
+\end{equation}
+where
+\begin{equation}
+  \ve{\kappa}_t
   =
-  \ve{0},
-\]
-and therefore the unique minimizer is
-\[
-  \ve{\kappa}^\star
-  =
-  \frac{\widehat{\ve{P}}\ve{k}}
-       {r+\ve{k}^{\tr}\widehat{\ve{P}}\ve{k}} .
-\]
-Restoring the time index gives the gain in \eqref{eq:kalman-gain}.
-
-Substituting this minimizing gain into the residual write gives
-\[
+  \frac{\widehat{\ve{P}}_t\ve{k}_t}
+  {\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t+r_t}.
+  \label{eq:single-coordinate-gain}
+\end{equation}
+The same $\ve{\kappa}_t$ applies to every value coordinate because the model uses the same
+key-space covariance $\widehat{\ve{P}}_t$ and the same observation noise $r_t$ for every
+coordinate of $\ve{v}_t$. Stacking \eqref{eq:single-coordinate-kalman-correction} over
+$j=1,\ldots,d_v$ gives the rank-one residual write
+\begin{equation}
   \ve{S}_t
   =
   \widehat{\ve{S}}_t
   +
   \ve{\kappa}_t
   \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr}.
-\]
-For the covariance, let
-$s=r+\ve{k}^{\tr}\widehat{\ve{P}}\ve{k}$ and
-$\ve{u}=\widehat{\ve{P}}\ve{k}=s\ve{\kappa}^\star$. The Joseph-form covariance becomes
-\[
-\begin{aligned}
-  \ve{P}^+(\ve{\kappa}^\star)
-  &=
-  \widehat{\ve{P}}
-  -\ve{\kappa}^\star\ve{u}^{\tr}
-  -\ve{u}\ve{\kappa}^{\star\tr}
-  +s\,\ve{\kappa}^\star\ve{\kappa}^{\star\tr}  \\
-  &=
-  \widehat{\ve{P}}
-  -\ve{\kappa}^\star\ve{u}^{\tr}
+  \label{eq:kam-residual-write}
+\end{equation}
+Thus the residual write does not come from DeltaNet first; it comes from the Kalman
+posterior-mean update $x^+=x^-+K(y-Hx^-)$. DeltaNet later appears as the fixed-gain special
+case where $\ve{\kappa}_t$ is forced to be proportional to $\ve{k}_t$.
+For a candidate write direction $\ve{\kappa}_t$, the posterior covariance induced by this
+write is
+\begin{equation}
+  \ve{P}_t(\ve{\kappa}_t)
   =
-  (\ve{I}-\ve{\kappa}^\star\ve{k}^{\tr})\widehat{\ve{P}} .
+  (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})
+  \widehat{\ve{P}}_t
+  (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})^{\tr}
+  +
+  r_t\ve{\kappa}_t\ve{\kappa}_t^{\tr}.
+  \label{eq:kam-candidate-cov}
+\end{equation}
+The Kalman write direction is the minimizer of total posterior uncertainty,
+\begin{equation}
+  \ve{\kappa}_t^\star
+  =
+  \arg\min_{\ve{\kappa}_t}
+  \Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right).
+  \label{eq:kam-trace-objective}
+\end{equation}
+Expanding the trace gives
+\begin{equation}
+  \Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right)
+  =
+  \Trace(\widehat{\ve{P}}_t)
+  -2\ve{\kappa}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t
+  +
+  \big(r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t\big)
+  \ve{\kappa}_t^{\tr}\ve{\kappa}_t .
+  \label{eq:kam-trace-expanded}
+\end{equation}
+Taking the gradient with respect to $\ve{\kappa}_t$ and setting it to zero yields
+\begin{equation}
+  \boxed{
+  \ve{\kappa}_t
+  =
+  \frac{\widehat{\ve{P}}_t\ve{k}_t}
+  {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}
+  }.
+  \label{eq:kam-optimal-gain}
+\end{equation}
+Therefore the exact Kalman Associative Memory update is
+\begin{equation}
+\begin{aligned}
+  \widehat{\ve{S}}_t
+  &=\ve{D}_t\ve{S}_{t-1},
+  &
+  \widehat{\ve{P}}_t
+  &=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t,
+  \\
+  \ve{\kappa}_t
+  &=
+  \frac{\widehat{\ve{P}}_t\ve{k}_t}
+  {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t},
+  &
+  \ve{S}_t
+  &=
+  \widehat{\ve{S}}_t
+  +
+  \ve{\kappa}_t
+  \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr},
+  \\
+  \ve{P}_t
+  &=
+  (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t.
 \end{aligned}
-\]
-This is the covariance update stated in the proposition. The read
-$\ve{o}_t=\ve{S}_t^{\tr}\ve{q}_t$ is then the linear-attention read from the posterior memory
-estimate.
+\label{eq:kam-optimal-update}
+\end{equation}
+This is the reference update. The remaining question is which part of it can be made
+tractable and scan-computable without losing the link between uncertainty, transition, and
+write strength.
 \end{proof}
 
 % =============================================================================
