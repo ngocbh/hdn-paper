@@ -56,8 +56,18 @@
 % Todonotes is useful during development; simply uncomment the next line
 %    and comment out the line below the next line to turn off comments
 
-\usepackage{thmtools}
-\usepackage{thm-restate}
+% thmtools/thm-restate clash with the shared theorem counters in command.tex
+% (\newtheorem{theorem}[definition]{...} -> "\c@theorem already defined").
+% thmtools' aliasctr runs \@counteralias{theorem}{definition}, creating
+% \c@theorem; thm-patch then hands the LaTeX 2026-06-01 kernel a *self*-alias
+% \newcounteralias{theorem}{theorem}, whose \@ifdefinable guard rejects the
+% now-existing \c@theorem. Overleaf pins an older kernel, so it builds there.
+% A \RequirePackage[<older>]{latexrelease} rollback does NOT help. Neither
+% package's features (\declaretheorem, restatable, \listoftheorems) is used
+% anywhere in this paper, so the fix is simply to drop them.
+% DO NOT let an Overleaf sync re-add these two lines.
+% \usepackage{thmtools}
+% \usepackage{thm-restate}
 \usepackage{tabu}
 
 \definecolor{huskypurple}{HTML}{4B2E83}
