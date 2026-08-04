@@ -46,6 +46,7 @@ This is a scan-compatible diagonal-information approximation, not an exact diago
 posterior.
 
 \section{The Scale Symmetry}
+\label{sec:discussion-scale-symmetry}
 
 For any constant $\lambda>0$, consider
 \begin{equation}
@@ -294,29 +295,77 @@ diagonal statistic with useful uncertainty is an empirical question.
 \label{subsec:discussion-info-scale-temporal}
 
 The role of $s$ is clearest after separating the memory update at token $t$ from the uncertainty
-state passed to later tokens. Define
+state passed to later tokens. Define the key-weighted predicted variance and the
+\emph{effective write strength}
 \begin{equation}
   z_t=\sum_i\widehat p_{t,i}k_{t,i}^2,
   \qquad
   \beta_t^{\mathrm{eff}}
-  =\vct{k}_t^\top\vct{\kappa}_t
-  =\frac{z_t}{r_t+z_t}.
+  =\vct{k}_t^\top\vct{\kappa}_t.
   \label{eq:discussion-effective-write}
 \end{equation}
-Writing $\widetilde{\vct{S}}_t=\vct{D}_t\vct{S}_{t-1}$ and
-$\vct{e}_t=\vct{v}_t-\widetilde{\vct{S}}_t^\top\vct{k}_t$, the memory recurrence implies
+Contracting the diagonal gain with its own key evaluates $\beta_t^{\mathrm{eff}}$ in closed form,
+\begin{equation}
+  \beta_t^{\mathrm{eff}}
+  =\sum_i k_{t,i}
+    \frac{\widehat p_{t,i}k_{t,i}}
+      {r_t+\sum_j\widehat p_{t,j}k_{t,j}^2}
+  =\frac{\sum_i\widehat p_{t,i}k_{t,i}^2}{r_t+z_t}
+  =\frac{z_t}{r_t+z_t},
+  \qquad
+  1-\beta_t^{\mathrm{eff}}=\frac{r_t}{r_t+z_t}.
+  \label{eq:discussion-effective-write-closed}
+\end{equation}
+Positive variances and observation noise give $z_t\geq0$ and $r_t>0$, hence
+$\beta_t^{\mathrm{eff}}\in[0,1)$.
+
+\paragraph{Residual contraction.}
+Write $\widetilde{\vct{S}}_t=\vct{D}_t\vct{S}_{t-1}$ for the decayed memory and
+$\vct{e}_t=\vct{v}_t-\widetilde{\vct{S}}_t^\top\vct{k}_t$ for the prediction error that the delta
+rule corrects, so that the memory recurrence is the rank-one update
 \begin{equation}
   \vct{S}_t
-  =\widetilde{\vct{S}}_t+\vct{\kappa}_t\vct{e}_t^\top,
-  \qquad
-  \vct{v}_t-\vct{S}_t^\top\vct{k}_t
-  =(1-\beta_t^{\mathrm{eff}})\vct{e}_t.
-  \label{eq:discussion-memory-residual}
+  =\widetilde{\vct{S}}_t+\vct{\kappa}_t\vct{e}_t^\top.
+  \label{eq:discussion-memory-rank-one}
 \end{equation}
+Transposing Equation~\eqref{eq:discussion-memory-rank-one} gives
+$\vct{S}_t^\top=\widetilde{\vct{S}}_t^\top+\vct{e}_t\vct{\kappa}_t^\top$. Reading the updated
+memory at the same key, the scalar $\vct{\kappa}_t^\top\vct{k}_t=\beta_t^{\mathrm{eff}}$ factors
+out of the rank-one term:
+\begin{align}
+  \vct{S}_t^\top\vct{k}_t
+  &=\widetilde{\vct{S}}_t^\top\vct{k}_t
+    +\vct{e}_t\left(\vct{\kappa}_t^\top\vct{k}_t\right)
+  =\widetilde{\vct{S}}_t^\top\vct{k}_t
+    +\beta_t^{\mathrm{eff}}\vct{e}_t,
+  \label{eq:discussion-memory-readout}
+  \\
+  \vct{v}_t-\vct{S}_t^\top\vct{k}_t
+  &=\bigl(\underbrace{\vct{v}_t-\widetilde{\vct{S}}_t^\top\vct{k}_t}_{=\,\vct{e}_t}\bigr)
+    -\beta_t^{\mathrm{eff}}\vct{e}_t
+  =\left(1-\beta_t^{\mathrm{eff}}\right)\vct{e}_t
+  =\frac{r_t}{r_t+z_t}\,\vct{e}_t.
+  \label{eq:discussion-memory-residual}
+\end{align}
 Thus $\beta_t^{\mathrm{eff}}$ is the fraction of the current residual corrected at its own key.
-The same $\vct{\kappa}_t$ controls both the value write
-$+\vct{\kappa}_t\vct{v}_t^\top$ and the erasure
-$-\vct{\kappa}_t\vct{k}_t^\top\widetilde{\vct{S}}_t$.
+Equation~\eqref{eq:discussion-memory-residual} is the delta-rule instance of the standard Kalman
+innovation contraction $\vct{I}-\vct{K}_t\vct{H}_t$, which for the scalar-key observation
+$\vct{H}_t=\vct{k}_t^\top$ collapses to the scalar $1-\vct{k}_t^\top\vct{\kappa}_t$. Vanilla
+DeltaNet is the special case $\vct{\kappa}_t=\beta_t\vct{k}_t$ with
+$\lVert\vct{k}_t\rVert_2=1$, which recovers $\beta_t^{\mathrm{eff}}=\beta_t$; here the same
+quantity is instead an emergent function $z_t/(r_t+z_t)$ of the uncertainty state.
+
+Two properties of Equation~\eqref{eq:discussion-memory-residual} are used below. First, the same
+$\vct{\kappa}_t$ controls both the value write $+\vct{\kappa}_t\vct{v}_t^\top$ and the erasure
+$-\vct{\kappa}_t\vct{k}_t^\top\widetilde{\vct{S}}_t$, so a gain that assimilates the current
+observation more strongly necessarily also erases more of what the memory already held at that
+key. Second, the contraction depends on $\vct{\kappa}_t$ only through its component along
+$\vct{k}_t$: any off-key part $\vct{\kappa}_{t,\perp}$ satisfies
+$\vct{k}_t^\top\vct{\kappa}_{t,\perp}=0$ and leaves
+Equation~\eqref{eq:discussion-memory-residual} unchanged while still perturbing the readout at
+other keys. The same-token residual is therefore blind to exactly the degree of freedom that
+distinguishes DiagKLA from IsoKLA, which is what
+Equation~\eqref{eq:discussion-gain-direction-ablation} is designed to isolate.
 
 To expose causal ordering, temporarily allow a token-specific scale $s_t$. Current DiagKLA first
 computes $\widehat{\vct{p}}_t$ and $\vct{\kappa}_t$ from the incoming state
@@ -702,6 +751,143 @@ token's write, while a global change alters later current writes through their c
 The sweep can locate a better retention--plasticity operating point, but it cannot resolve the
 posterior inconsistency or establish that off-key anisotropy is useful.
 
+\section{The Zero-Process-Noise Limit}
+\label{sec:discussion-zero-process-noise}
+
+Because $\vct{\omega}$ carries part of the covariance-scale symmetry of
+Section~\ref{sec:discussion-scale-symmetry} and is what makes the information prediction
+intractable in closed form, it is natural to ask whether the degenerate choice
+$\vct{\omega}_t\equiv0$ is preferable. It is not. The limit buys a cheaper scan, does not improve
+the fidelity of the diagonal approximation at all, and removes the plasticity floor that makes
+the layer a memory rather than an estimator.
+
+\subsection{It does not restore exactness}
+
+Prediction never creates off-diagonal covariance, at any $\vct{\omega}$. With
+$\vct{D}_t=\diag(\vct{\alpha}_t)$ and $\vct{\Omega}_t=\diag(\vct{\omega}_t)$,
+\begin{equation}
+  \widehat P_{t,ij}
+  = \alpha_{t,i}\alpha_{t,j}P_{t-1,ij}
+    +\omega_{t,i}\delta_{ij},
+  \label{eq:discussion-predict-preserves-pattern}
+\end{equation}
+so the predict step rescales the existing sparsity pattern and adds only to the diagonal. The
+measurement is the sole source of off-diagonal mass, and by
+Equation~\eqref{eq:discussion-exact-posterior-offdiag} it contributes
+$P_{t,ij}=-\widehat p_{t,i}\widehat p_{t,j}k_{t,i}k_{t,j}/D_t$, which vanishes for every
+$i\ne j$ if and only if $k_{t,i}k_{t,j}=0$. The exactness condition for the diagonal family is
+therefore a condition on the keys alone,
+\begin{equation}
+  \vct{P}_t\ \text{diagonal for all }t
+  \iff
+  \text{every }\vct{k}_t\ \text{is supported on a single coordinate},
+  \label{eq:discussion-diagonal-exactness-condition}
+\end{equation}
+and process noise does not appear in it. Setting $\vct{\omega}_t=0$ leaves the approximation
+error of the diagonal state exactly where it was.
+
+What the limit does make exact is the \emph{information} prediction: for invertible
+$\vct{D}_t$ it becomes the conjugation
+$\widehat{\vct{C}}_t=\vct{D}_t^{-\top}\vct{C}_{t-1}\vct{D}_t^{-1}$ rather than an inverse of a
+sum. That is a statement about the parameterization of an already-diagonal state, not about how
+faithfully that state represents the true posterior. The two senses of ``exact'' should not be
+conflated.
+
+\subsection{What the limit does buy}
+
+The per-channel information map is linear fractional, with matrix
+\begin{equation}
+  \vct{M}_t
+  =\begin{pmatrix}
+    1+u_{t,i}\omega_{t,i} & u_{t,i}\alpha_{t,i}^2\\[2pt]
+    \omega_{t,i} & \alpha_{t,i}^2
+  \end{pmatrix},
+  \qquad
+  u_{t,i}=s\frac{k_{t,i}^2}{r_t},
+  \label{eq:discussion-mobius-matrix}
+\end{equation}
+composed along the sequence by $2\times2$ products, which is what makes the gain scan
+logarithmic depth. At $\omega_{t,i}=0$ the lower-left entry vanishes, $\vct{M}_t$ becomes upper
+triangular, and the M\"obius scan degenerates to the affine recurrence
+\begin{equation}
+  c_{t,i}=\frac{c_{t-1,i}}{\alpha_{t,i}^2}+s\frac{k_{t,i}^2}{r_t},
+  \label{eq:discussion-affine-info-recurrence}
+\end{equation}
+the ordinary decay-accumulate scan of gated linear attention. This is a real implementation
+saving, and it is the only advantage of the limit.
+
+\subsection{Covariance windup}
+
+A Kalman filter without process noise is recursive least squares, and it inherits the classical
+covariance windup of that estimator: information only accumulates, so the gain decays to zero and
+the layer stops writing. By Equation~\eqref{eq:discussion-memory-residual} a vanishing
+$\beta_t^{\mathrm{eff}}$ leaves the residual untouched,
+$\vct{v}_t-\vct{S}_t^\top\vct{k}_t\to\vct{e}_t$, so the write becomes a no-op rather than merely
+a weak one. There are two regimes.
+\begin{itemize}
+  \item $\alpha<1$. Measurement only decreases variance, so
+    $p_{t,i}\leq\widehat p_{t,i}=\alpha_{t,i}^2p_{t-1,i}$ and hence
+    $p_{t,i}\leq\alpha^{2t}p_{0,i}$. The gain dies geometrically while $\vct{D}_t$ is
+    simultaneously draining $\vct{S}_t$: the memory empties and cannot be refilled. This is the
+    degenerate corner.
+  \item $\alpha=1$. For spread-out unit keys, $\mathbb{E}[k_i^2]=1/d_k$ gives
+    $c_{t,i}=\mu+ts/(d_kr)$ and therefore
+    \begin{equation}
+      \beta_t^{\mathrm{eff}}
+      =\frac{d_k}{d_k(1+\mu r)+st}
+      \xrightarrow[\ t\ \text{large}\ ]{}\frac{d_k}{st}.
+      \label{eq:discussion-rls-gain-decay}
+    \end{equation}
+    At the default $s=d_k$ this is $\beta_t^{\mathrm{eff}}\simeq1/t$, about $2\times10^{-4}$ by
+    token $4096$. Larger $s$ freezes the memory proportionally faster, with no floor to stop it.
+\end{itemize}
+
+\subsection{The plasticity floor set by process noise}
+
+Positive process noise is precisely what prevents this. With $\alpha\simeq1$, $s=d_k$, and
+spread-out unit keys, the tracked variance obeys $p_t=\widehat p_t/(1+\widehat p_t/r)$ and
+$\widehat p_{t+1}=p_t+\omega$, whose fixed point solves
+$\widehat p_\infty^2-\omega\widehat p_\infty-\omega r=0$:
+\begin{equation}
+  \widehat p_\infty
+  =\frac{\omega+\sqrt{\omega^2+4\omega r}}{2}
+  =\Theta\!\left(\sqrt{\omega r}\right)
+  \ \ (\omega\ll r),
+  \qquad
+  \beta_\infty^{\mathrm{eff}}
+  =\frac{\widehat p_\infty}{r+\widehat p_\infty}.
+  \label{eq:discussion-stationary-plasticity-floor}
+\end{equation}
+The uncertainty floor is the geometric mean of process and observation noise. It therefore
+degrades gracefully rather than abruptly, but it vanishes continuously as $\omega\to0$,
+recovering the windup above. Equation~\eqref{eq:discussion-stationary-plasticity-floor} is the
+stationary counterpart of Equation~\eqref{eq:discussion-process-noise-plasticity-floor}, which
+states the same protection only in the $s\to\infty$ limit at a single token. At the current
+initialization---$\omega_{\min}=r_{\min}=0.05$ with zeroed output maps, giving
+$\omega\simeq r\simeq0.74$---it evaluates to $\widehat p_\infty\simeq1.20$ and
+$\beta_\infty^{\mathrm{eff}}\simeq0.62$, a healthy retention--plasticity operating point rather
+than a frozen one.
+
+\subsection{Two things the limit does not do}
+
+It does not remove the scale symmetry. Section~\ref{sec:discussion-scale-symmetry} survives with
+one fewer parameter: $\vct{p}_t'=\lambda\vct{p}_t$, $r_t'=\lambda r_t$, $\mu'=\mu/\lambda$ still
+leaves $\vct{\kappa}_t$ invariant. The gauge choice $r\equiv1$, $\mu\equiv1$ is still required
+and is still the recommended fix.
+
+It is also not the intervention that produced the noisy-MQAR improvement. That result came from
+zeroing the \emph{output map} of the process-noise projection, which makes $\omega_{t,i}$ uniform
+across channels at $\omega_{\min}+\operatorname{softplus}(0)\simeq0.74$---isotropic and large,
+not small. Setting $\vct{\omega}=0$ is the opposite intervention, and conflating the two reads
+that result backwards. The parameterization
+$\omega_{t,i}=\omega_{\min}+\operatorname{softplus}(f_\omega(\vct{x}_t))$ with $\omega_{\min}>0$
+makes the limit unreachable by design.
+
+The zero-process-noise filter is the correct estimator only when the associations are fixed for
+the whole context and nothing must be overwritten, which is exactly the regime in which recursive
+least squares is optimal. For a streaming memory it is the degenerate corner that $\omega_{\min}$
+exists to exclude.
+
 \section{Conclusion}
 
 The diagonal KDN has a genuine common-scale non-identifiability in
@@ -709,5 +895,16 @@ $(\vct{\omega},r,\mu)$, but the completed noisy-MQAR experiments show that rando
 anisotropy is the dominant observed instability. The appropriate design is therefore
 twofold: start the gain isotropically, and fix a covariance unit---preferably $r=1$ and
 $\mu=1$---so the model learns only uncertainty ratios that affect its predictions.
+
+Process noise should be constrained by that gauge, not removed by it. Section
+\ref{sec:discussion-zero-process-noise} shows that $\vct{\omega}$ is not merely the third carrier
+of the scale symmetry: it sets the stationary plasticity floor
+$\Theta(\sqrt{\omega r})$, and without it the layer degenerates into recursive least squares with
+a gain that decays as $d_k/(st)$. The fidelity of the diagonal approximation, meanwhile, is
+governed by key geometry through
+Equation~\eqref{eq:discussion-diagonal-exactness-condition} and is unaffected by $\vct{\omega}$
+either way. Fixing $r$ and $\mu$ while keeping a positive, isotropically initialized
+$\vct{\omega}$ is therefore the design that removes the flat direction without removing the
+mechanism.
 
 \end{document}
