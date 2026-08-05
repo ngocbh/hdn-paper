@@ -541,6 +541,92 @@ Likewise, if $r_t$ is freely learned, a globally coherent $s$ is largely reparam
 $r_t/s$; the present decoupled scale is not redundant because it changes protection without
 changing that observation's same-token write locally.
 
+\subsection{The delta-rule limit and hard writes}
+\label{subsec:discussion-delta-rule-limit}
+
+Equation~\eqref{eq:discussion-memory-residual} specializes cleanly to vanilla DeltaNet, which is
+the case $\vct{D}_t=\vct{I}$ and $\vct{\kappa}_t=\beta_t\vct{k}_t$ with
+$\lVert\vct{k}_t\rVert_2=1$, hence $\beta_t^{\mathrm{eff}}=\beta_t$. Reading the updated memory at
+the key just written is then a convex interpolation between the old readout and the new value,
+\begin{equation}
+  \vct{S}_t^\top\vct{k}_t
+  =(1-\beta_t)\vct{S}_{t-1}^\top\vct{k}_t+\beta_t\vct{v}_t.
+  \label{eq:discussion-deltanet-interpolation}
+\end{equation}
+So $\beta_t$ is literally an overwrite fraction: $\beta_t=0$ ignores the token, $\beta_t=1$
+replaces it, and intermediate values blend. The quantity $\beta_t^{\mathrm{eff}}$ generalizes
+exactly this scalar.
+
+\paragraph{The hard write $\beta_t=1$.}
+At $\beta_t=1$ the residual in Equation~\eqref{eq:discussion-memory-residual} vanishes
+identically, so the value is recovered exactly whatever the memory previously held:
+\begin{equation}
+  \vct{S}_t^\top\vct{k}_t=\vct{v}_t,
+  \qquad
+  \vct{S}_t
+  =\left(\vct{I}-\vct{k}_t\vct{k}_t^\top\right)\vct{S}_{t-1}
+   +\vct{k}_t\vct{v}_t^\top.
+  \label{eq:discussion-deltanet-hard-write}
+\end{equation}
+Because $\lVert\vct{k}_t\rVert_2=1$, the matrix $\vct{I}-\vct{k}_t\vct{k}_t^\top$ is idempotent:
+it is the orthogonal projector onto $\vct{k}_t^\perp$. A hard write therefore does not attenuate
+the old content along $\vct{k}_t$; it annihilates it and writes $\vct{v}_t$ into the vacated
+direction.
+
+Equation~\eqref{eq:discussion-deltanet-hard-write} is the Frobenius projection of
+$\vct{S}_{t-1}$ onto the affine set $\{\vct{S}:\vct{S}^\top\vct{k}_t=\vct{v}_t\}$, that is, a
+single Kaczmarz step, and general $\beta_t$ is the relaxed variant. This also fixes the stability
+range: the spectrum of $\vct{I}-\beta_t\vct{k}_t\vct{k}_t^\top$ is $\{1^{(d_k-1)},1-\beta_t\}$, so
+the map is non-expansive exactly for $\beta_t\in[0,2]$, with $\beta_t=1$ the clean projection and
+$\beta_t=2$ a Householder reflection.
+
+\paragraph{Cross-talk is the price.}
+Exact recall at $\vct{k}_t$ is bought by perturbing every non-orthogonal key. Applying
+Equation~\eqref{eq:discussion-deltanet-hard-write} to an earlier key $\vct{k}_u$ gives
+\begin{equation}
+  \vct{S}_t^\top\vct{k}_u
+  =\vct{S}_{t-1}^\top\vct{k}_u
+   +\langle\vct{k}_t,\vct{k}_u\rangle\,\vct{e}_t,
+  \label{eq:discussion-deltanet-crosstalk}
+\end{equation}
+a rank-one corruption in the innovation, scaled by the \emph{signed} inner product and vanishing
+if and only if $\vct{k}_t\perp\vct{k}_u$. Lossless storage of $d_k$ associations therefore
+requires an orthogonal key set and degrades with the off-diagonal mass of the key Gram matrix.
+
+This sharpens the contrast drawn above. DeltaNet's readout corruption is governed by the signed
+overlap $\langle\vct{k}_t,\vct{k}_u\rangle$, whereas DiagKLA's confidence suppression in
+Equations~\eqref{eq:discussion-delayed-scale-effect}--\eqref{eq:discussion-scale-sensitivity-propagation}
+is governed by the unsigned elementwise energy $\sum_ip_{t,i}^2k_{t,i}^2k_{u,i}^2$. The pair
+$(1,1)/\sqrt{2}$ and $(1,-1)/\sqrt{2}$ separates the two: DeltaNet writes one without disturbing
+the readout of the other, while DiagKLA assigns them identical confidence increments and
+identical effective-gain suppression.
+
+\paragraph{What a hard write means for the filter.}
+Since $\beta_t^{\mathrm{eff}}=z_t/(r_t+z_t)$, the value $\beta_t^{\mathrm{eff}}=1$ requires
+$r_t=0$ or $z_t\to\infty$. A DeltaNet hard write is thus the noiseless-observation,
+uninformative-prior limit of the filter: the observation is trusted completely and the prior
+carries no information, while $\beta_t<1$ corresponds to $r_t>0$. DeltaNet's learned $\beta_t$ is
+in this sense a free reparameterization of $z_t/(r_t+z_t)$ that skips the uncertainty state
+entirely, which is precisely the design choice KLA is contesting.
+
+The consequence is a capability difference, not merely a parameterization difference. Because
+DeltaNet projects $\beta_t$ directly from the input, token $10^4$ can overwrite as hard as token
+$10$. In KLA the same quantity is derived from an accumulating state, and by
+Section~\ref{sec:discussion-zero-process-noise} that state is monotone in the absence of process
+noise: at $\vct{\omega}=0$ the effective write strength can only decrease, so a late hard write is
+unreachable regardless of what the projections learn. Positive $\vct{\omega}$ is what buys back
+DeltaNet's ability to overwrite late in a sequence.
+
+Even with $\vct{\omega}>0$ the current model does not operate near a hard write. The stationary
+point of Equation~\eqref{eq:discussion-stationary-plasticity-floor} at the present initialization
+is $\beta_\infty^{\mathrm{eff}}\simeq0.62$, a permanent partial-blend regime; reaching
+$\beta^{\mathrm{eff}}\simeq1$ requires $z_t\gg r_t$, hence either $r_t\to r_{\min}$ or a large
+$\vct{\omega}$. The gauge of Section~\ref{sec:discussion-scale-symmetry} does not restrict this:
+choosing $\lambda=1/r$ maps any learned-$r$ model to an equivalent one with $r\equiv1$ and
+$\vct{\omega}\mapsto\vct{\omega}/r$, so fixing the covariance unit relocates the scale into
+$\vct{\omega}$ rather than capping the reachable overwrite strength. At $r\equiv1$, for instance,
+$\beta_\infty^{\mathrm{eff}}\simeq0.95$ corresponds to $\omega\simeq18$.
+
 \subsection{An exact posterior-diagonal alternative}
 
 Although the full posterior is dense, its diagonal after one measurement can be computed without
@@ -823,24 +909,57 @@ covariance windup of that estimator: information only accumulates, so the gain d
 the layer stops writing. By Equation~\eqref{eq:discussion-memory-residual} a vanishing
 $\beta_t^{\mathrm{eff}}$ leaves the residual untouched,
 $\vct{v}_t-\vct{S}_t^\top\vct{k}_t\to\vct{e}_t$, so the write becomes a no-op rather than merely
-a weak one. There are two regimes.
-\begin{itemize}
-  \item $\alpha<1$. Measurement only decreases variance, so
-    $p_{t,i}\leq\widehat p_{t,i}=\alpha_{t,i}^2p_{t-1,i}$ and hence
-    $p_{t,i}\leq\alpha^{2t}p_{0,i}$. The gain dies geometrically while $\vct{D}_t$ is
-    simultaneously draining $\vct{S}_t$: the memory empties and cannot be refilled. This is the
-    degenerate corner.
-  \item $\alpha=1$. For spread-out unit keys, $\mathbb{E}[k_i^2]=1/d_k$ gives
-    $c_{t,i}=\mu+ts/(d_kr)$ and therefore
-    \begin{equation}
-      \beta_t^{\mathrm{eff}}
-      =\frac{d_k}{d_k(1+\mu r)+st}
-      \xrightarrow[\ t\ \text{large}\ ]{}\frac{d_k}{st}.
-      \label{eq:discussion-rls-gain-decay}
-    \end{equation}
-    At the default $s=d_k$ this is $\beta_t^{\mathrm{eff}}\simeq1/t$, about $2\times10^{-4}$ by
-    token $4096$. Larger $s$ freezes the memory proportionally faster, with no floor to stop it.
-\end{itemize}
+a weak one.
+
+The mechanism is a monotonicity. Written as a product, one step of the tracked recursion is
+\begin{equation}
+  p_{t,i}
+  =\underbrace{\alpha_{t,i}^2}_{\leq1}\;p_{t-1,i}\cdot
+   \underbrace{\frac{1}{1+s\,\widehat p_{t,i}k_{t,i}^2/r_t}}_{\leq1},
+  \label{eq:discussion-covariance-monotonicity}
+\end{equation}
+a product of two factors each at most one, with no third factor. Uncertainty can therefore never
+grow: $\vct{\omega}$ is the only term in the entire recursion capable of increasing $\vct{p}$.
+The same statement holds for the dense filter in the Loewner order, since
+$\widehat{\vct{P}}_t=\vct{D}_t\vct{P}_{t-1}\vct{D}_t^\top\preceq\vct{P}_{t-1}$ and the measurement
+is a rank-one positive-semidefinite downdate, and it holds for all three trackers considered
+here: the $s$-scaled projection of
+Equation~\eqref{eq:discussion-projected-posterior-diagonal}, its $s=1$ case, and the moment
+projection of Equation~\eqref{eq:discussion-exact-diag-recurrence}, whose factor
+$1-\kappa_{t,i}k_{t,i}$ lies in $[0,1)$.
+
+In this implementation the transition is moreover strictly contracting. It is produced as
+$\alpha=\exp(-\exp(A_{\log})\operatorname{softplus}(\cdot))$, whose exponent is strictly negative,
+so $\alpha_{t,i}\in(0,1)$ always and the harmonic $\alpha=1$ regime of recursive least squares is
+never actually reached. Ignoring measurements, which only accelerate the decay,
+$p_{t,i}/p_{0,i}=\alpha^{2t}\simeq e^{-2t(1-\alpha)}$, so uncertainty survives a context of
+length $T$ only in channels satisfying
+\begin{equation}
+  1-\alpha_{t,i}\;\lesssim\;\frac{1}{2T}.
+  \label{eq:discussion-alpha-survival-bound}
+\end{equation}
+At $T=4096$ this demands $\alpha>1-1.2\times10^{-4}$: a channel at $\alpha=0.99$ retains
+$p_T/p_0\sim10^{-36}$, and one at $\alpha=0.999$ retains $3\times10^{-4}$. Because $\vct{D}_t$ is
+simultaneously draining $\vct{S}_t$, the memory empties and cannot be refilled. The idealized
+$\alpha=1$ case is much milder but still terminal: with $\mathbb{E}[k_i^2]=1/d_k$ it gives
+$c_{t,i}=\mu+ts/(d_kr)$ and hence
+\begin{equation}
+  \beta_t^{\mathrm{eff}}
+  =\frac{d_k}{d_k(1+\mu r)+st}
+  \xrightarrow[\ t\ \text{large}\ ]{}\frac{d_k}{st},
+  \label{eq:discussion-rls-gain-decay}
+\end{equation}
+which at the default $s=d_k$ is $\beta_t^{\mathrm{eff}}\simeq1/t$, about $2\times10^{-4}$ by token
+$4096$. Larger $s$ freezes the memory proportionally faster, with no floor to stop it.
+
+None of this is a numerical defect. The recursion is the exact filter for the generative model
+$\vct{S}_t=\vct{D}_t\vct{S}_{t-1}+\mathcal{N}(0,\vct{\Omega}_t)$, and setting
+$\vct{\Omega}_t=0$ asserts that the memory never changes except by a decay already known to the
+model. Under that assumption every token is evidence about a single unknown initial condition, so
+a correct posterior must concentrate and a correct filter must stop updating. Recursive least
+squares converging is the right answer to the question posed; the question is simply the wrong
+one for an associative memory, in which unpredictable new content is exactly what
+$\vct{\Omega}_t$ represents.
 
 \subsection{The plasticity floor set by process noise}
 
