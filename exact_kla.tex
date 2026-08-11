@@ -1,0 +1,716 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,microtype}
+\usepackage[colorlinks=true,linkcolor=blue!50!black]{hyperref}
+
+\title{Exact KLA with Diagonal Dynamics: Objective and a Chunkwise Algorithm}
+\author{}
+\date{August 11, 2026}
+
+\newcommand{\ve}[1]{\boldsymbol{#1}}
+\newcommand{\tr}{\mathsf{T}}
+\newcommand{\diag}{\operatorname{diag}}
+
+\begin{document}
+\maketitle
+
+\section{Objective}
+
+The objective is to compute the Kalman gains of the exact Kalman Delta Network without a
+token-by-token dense covariance recurrence. We use the notation of the Exact Kalman Delta
+Network formulation in the main paper. In particular,
+\begin{equation}
+  \ve{D}_t=\diag(\ve{\alpha}_t),
+  \qquad
+  \ve{\Omega}_t=\diag(\ve{\omega}_t),
+\end{equation}
+and ``diagonal'' refers only to the transition and process-noise covariance. The posterior
+covariance \(\ve{P}_t\) remains dense.
+
+Throughout this note, \(r_t\) denotes the effective observation-noise variance that appears in
+the Kalman recurrence. The current implementation optionally parameterizes a raw variance and
+passes \(r_t^{\mathrm{raw}}/d_k\) to the filter when \texttt{dk\_calibration=True}; in that case all
+formulas below use \(r_t=r_t^{\mathrm{raw}}/d_k\).
+
+Given \(\ve{S}_{t-1}\) and \(\ve{P}_{t-1}\), ExactKLA runs the recurrence
+\begin{equation}
+\begin{aligned}
+  \text{predict:}\quad
+  \widehat{\ve{S}}_t
+    &= \ve{D}_t\ve{S}_{t-1},
+  &
+  \widehat{\ve{P}}_t
+    &= \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t,
+  \\[3pt]
+  \text{gain:}\quad
+  \ve{\kappa}_t
+    &= \frac{\widehat{\ve{P}}_t\ve{k}_t}
+      {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t},
+  \\[3pt]
+  \text{update:}\quad
+  \ve{S}_t
+    &= \widehat{\ve{S}}_t
+      +\ve{\kappa}_t
+       \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr},
+  &
+  \ve{P}_t
+    &= (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t,
+  \\[3pt]
+  \text{read:}\quad
+  \ve{o}_t
+    &= \ve{S}_t^{\tr}\ve{q}_t.
+\end{aligned}
+\end{equation}
+The layer is initialized with \(\ve{S}_0=\ve{0}\) and
+\(\ve{P}_0=\mu^{-1}\ve{I}\). At later chunk boundaries, \(\ve{P}_0\) denotes the dense posterior
+covariance passed from the preceding chunk.
+
+Equivalently, the covariance update can be written
+\begin{equation}
+  \ve{P}_t
+  = \widehat{\ve{P}}_t
+    -\frac{\widehat{\ve{P}}_t\ve{k}_t\ve{k}_t^{\tr}
+      \widehat{\ve{P}}_t}
+    {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}.
+\end{equation}
+This costs \(O(d_k^2)\) arithmetic per token and has a length-\(T\) sequential dependency. We
+seek an algebraically equivalent chunk algorithm that retains the dense covariance at chunk
+boundaries but computes all gains within a chunk using matrix multiplications and triangular
+solves.
+
+\section{Proposed Chunkwise Innovation Factorization}
+
+Consider a chunk of length \(C\). The compact factorization assumes every entry of
+\(\ve{\alpha}_t\) is strictly positive, as in the model's exponential/sigmoid gate
+parameterization; the tokenwise ExactKLA recurrence itself does not require this assumption.
+Define the elementwise cumulative transition and the covariance
+contributed by process noise since the chunk boundary:
+\begin{align}
+  \ve{f}_t
+    &= \bigodot_{u=1}^t \ve{\alpha}_u,
+  & \ve{f}_0&=\ve{1}, \\
+  \ve{z}_t
+    &= \ve{\alpha}_t^2\odot\ve{z}_{t-1}+\ve{\omega}_t,
+  & \ve{z}_0&=\ve{0}.
+\end{align}
+The vector \(\ve{z}_t\) is a chunk-local bookkeeping variable. It is the diagonal covariance
+contributed by all process-noise terms injected since the beginning of the current chunk, after
+each term has been propagated through the later diagonal transitions. Explicitly,
+\begin{equation}
+  \ve{z}_t
+  =
+  \sum_{s=1}^t
+  \left(
+    \bigodot_{u=s+1}^t \ve{\alpha}_u^2
+  \right)
+  \odot\ve{\omega}_s,
+\end{equation}
+where the empty product for \(s=t\) is \(\ve{1}\). Thus \(\ve{\omega}_s\) is added at position
+\(s\), then attenuated by every transition from \(s+1\) through \(t\). The variable
+\(\ve{z}_t\) is not an additional ExactKLA model state and is reset to \(\ve{0}\) at every chunk
+boundary; uncertainty inherited from earlier chunks is already contained in the dense boundary
+covariance \(\ve{P}_0\).
+
+For the covariance derivation, fix a value coordinate \(i\). Following the main paper, let
+\(\ve{S}_t^\star\) denote the random latent associative map and let
+\(\ve{S}_{t,i}^\star\in\mathbb{R}^{d_k}\) denote its \(i\)-th column. In contrast,
+\(\ve{S}_t\) without a star is the filter's posterior-mean estimate. Let \(v_{t,i}\) denote
+coordinate \(i\) of the observed value vector \(\ve{v}_t\). The corresponding scalar observation
+model is
+\begin{equation}
+  v_{t,i}
+  = \ve{k}_t^{\tr}\ve{S}_{t,i}^\star+e_{t,i},
+  \qquad
+  \operatorname{Var}(e_{t,i})=r_t.
+\end{equation}
+The key-space covariance \(\ve{P}_t\) and gain \(\ve{\kappa}_t\) are shared across all value
+coordinates \(i\). We therefore derive them using one fixed coordinate and suppress \(i\) wherever
+the result does not depend on it. Before conditioning on any value observation inside the chunk,
+the marginal covariance at position \(t\) is
+\begin{equation}
+  \ve{\Sigma}_t
+  = \diag(\ve{f}_t)\ve{P}_0\diag(\ve{f}_t)
+    +\diag(\ve{z}_t).
+\end{equation}
+Introduce two vectors per token,
+\begin{align}
+  \ve{h}_t
+    &= \ve{f}_t\odot\ve{k}_t, \\
+  \ve{w}_t
+    &= \ve{P}_0\ve{h}_t
+      +\left(\ve{z}_t\oslash\ve{f}_t\right)\odot\ve{k}_t,
+\end{align}
+where \(\oslash\) denotes elementwise division. For \(t\ge s\), diagonal dynamics give
+\begin{equation}
+  \operatorname{Cov}(\ve{S}_{t,i}^\star,v_{s,i})
+  = \ve{f}_t\odot\ve{w}_s,
+\end{equation}
+where covariance between a vector and a scalar is the vector
+\begin{equation}
+  \operatorname{Cov}(\ve{S}_{t,i}^\star,v_{s,i})
+  =
+  \mathbb{E}\!\left[
+    (\ve{S}_{t,i}^\star-\mathbb{E}\ve{S}_{t,i}^\star)
+    (v_{s,i}-\mathbb{E}v_{s,i})
+  \right]
+  \in\mathbb{R}^{d_k}.
+\end{equation}
+Indeed, using the scalar observation model and independence of \(e_{s,i}\),
+\begin{equation}
+  \operatorname{Cov}(\ve{S}_{t,i}^\star,v_{s,i})
+  = \operatorname{Cov}(\ve{S}_{t,i}^\star,\ve{S}_{s,i}^\star)\ve{k}_s
+  = \ve{f}_t\odot\ve{w}_s.
+\end{equation}
+Consequently, for \(t>s\),
+\begin{equation}
+  \operatorname{Cov}(v_{t,i},v_{s,i})
+  = \ve{h}_t^{\tr}\ve{w}_s.
+\end{equation}
+
+Let \(\ve{H},\ve{W}\in\mathbb{R}^{C\times d_k}\) contain \(\ve{h}_t^{\tr}\) and
+\(\ve{w}_t^{\tr}\) as rows. Construct the symmetric covariance of the chunk's scalar
+observations \((v_{1,i},\ldots,v_{C,i})\),
+\(\ve{G}\in\mathbb{R}^{C\times C}\) from
+\begin{equation}
+  G_{ts}
+  =
+  \begin{cases}
+    \ve{h}_t^{\tr}\ve{w}_s, & t>s,\\
+    \ve{h}_t^{\tr}\ve{w}_t+r_t, & t=s,\\
+    G_{st}, & t<s.
+  \end{cases}
+\end{equation}
+Thus its lower triangle is obtained from the matrix product \(\ve{H}\ve{W}^{\tr}\). Compute the
+unit-lower-triangular factorization
+\begin{equation}
+  \ve{G}=\ve{L}\ve{R}\ve{L}^{\tr}
+\end{equation}
+and solve
+\begin{equation}
+  \ve{E}=\ve{L}^{-1}\ve{W}.
+\end{equation}
+Here \(\ve{R}\) is diagonal; a distinct symbol is used because \(\ve{D}_t\) already denotes the
+memory transition. The entries \(R_{tt}\) are the sequential innovation variances. The proposed formula
+for all exact gains in the chunk is
+\begin{equation}
+  \boxed{
+    \ve{\kappa}_t
+    = \frac{\ve{f}_t\odot\ve{e}_t}{R_{tt}},
+  }
+\end{equation}
+where \(\ve{e}_t^{\tr}\) is row \(t\) of \(\ve{E}\).
+
+Finally, the dense posterior covariance passed to the next chunk is
+\begin{equation}
+  \ve{P}_C
+  = \ve{\Sigma}_C
+    -\diag(\ve{f}_C)\ve{E}^{\tr}\ve{R}^{-1}\ve{E}
+      \diag(\ve{f}_C).
+\end{equation}
+For implementation, it is preferable not to form \(\ve{L}\), \(\ve{R}\), or \(\ve{E}\)
+explicitly. Let
+\begin{equation}
+  \ve{G}=\ve{C}\ve{C}^{\tr},
+  \qquad
+  \ve{Y}=\ve{C}^{-1}\ve{W},
+\end{equation}
+where \(\ve{C}\) is the lower Cholesky factor, and let \(\ve{y}_t^{\tr}\) be row \(t\) of
+\(\ve{Y}\). The equivalent formulas are
+\begin{equation}
+  \boxed{
+    \ve{\kappa}_t
+    = \frac{\ve{f}_t\odot\ve{y}_t}{C_{tt}},
+    \qquad
+    \ve{P}_C
+    = \ve{\Sigma}_C
+      -\diag(\ve{f}_C)\ve{Y}^{\tr}\ve{Y}\diag(\ve{f}_C).
+  }
+\end{equation}
+This form uses one triangular solve, divides by one Cholesky pivot rather than an innovation
+variance, and expresses the boundary update as a Gram matrix multiplication.
+This formulation is intended to replace the tokenwise covariance update only within each chunk.
+Chunks remain sequential through the dense boundary covariance \(\ve{P}_0\). Verification of the
+gain identity, numerical behavior, and hardware cost is deliberately left for the next stage.
+
+\section{Proposed Implementation Plan}
+
+Development should follow a correctness ladder. The production ExactKLA implementation remains
+unchanged until the chunk algorithm is correct, differentiable, and faster than the current exact
+gain kernel. Initial development therefore lives under
+\texttt{sandboxes/exact\_kla\_innovation/}; only the final verified implementation is moved into
+\texttt{lit\_gpt/kla\_ops/}.
+
+\subsection{Stage 1: Freeze the Recurrence Oracle and Baseline}
+
+Use \texttt{naive\_recurrent\_exact\_kla} in
+\texttt{lit\_gpt/kla\_ops/exact\_naive.py} as the FP64 correctness oracle. Add a small test driver
+that returns both the gain sequence and the final dense covariance, without changing its
+recurrence. Before implementing the new algorithm, benchmark the current
+\texttt{triton\_fused} ExactKLA path at its currently supported \(d_k=64\), sequence lengths
+\(T\in\{512,2048,4096\}\), and several realistic batch--head products. The current fused backend
+does not support \(d_k=128\), so use the recurrent ExactKLA path as the correctness and performance
+baseline there. Record gain-only, recurrence-core, and full-mixer forward latency,
+forward--backward latency, peak memory, and kernel-launch count. Report matched DiagKLA measurements
+at both \(d_k=64\) and the production \(d_k=128\) geometry.
+
+\subsection{Stage 2: Implement the Chunked FP64 Reference}
+
+Implement a pure-PyTorch function
+\texttt{exact\_kla\_gains\_innovation\_ref} in the sandbox. For each chunk it performs the
+following operations:
+\begin{enumerate}
+  \item Compute \(\ve{f}_t\) and \(\ve{z}_t\) for every position in the chunk.
+  \item Form \(\ve{H}\) and \(\ve{W}\), then construct the lower triangle of
+        \(\ve{G}\) from \(\ve{H}\ve{W}^{\tr}\), add \(r_t\) to the diagonal, and copy by symmetry.
+  \item Compute the Cholesky factor \(\ve{C}\ve{C}^{\tr}=\ve{G}\).
+  \item Solve \(\ve{C}\ve{Y}=\ve{W}\), emit
+        \(\ve{\kappa}_t=(\ve{f}_t\odot\ve{y}_t)/C_{tt}\), and compute
+        \(\ve{P}_C=\ve{\Sigma}_C-\diag(\ve{f}_C)\ve{Y}^{\tr}\ve{Y}\diag(\ve{f}_C)\).
+  \item Pass \(\ve{P}_C\) to the next chunk and repeat until the sequence is complete.
+\end{enumerate}
+The reference uses FP64 and no diagonal jitter. If \(\ve{G}\) is not positive definite, the test
+must fail rather than silently changing the filter.
+
+Forward tests compare every \(\ve{\kappa}_t\) and every chunk-boundary covariance against the
+tokenwise oracle. Run with \texttt{dk\_calibration} both enabled and disabled, passing the same
+effective noise to both algorithms. Cover random positive-definite and highly anisotropic
+\(\ve{P}_0\), \(\ve{\alpha}\) near zero and one, tiny and large \(r_t\) and \(\ve{\omega}_t\),
+repeated and nearly collinear keys, multiple batch--head layouts, chunk sizes
+\(1,2,4,8,16,32,64,128\), final partial chunks, and \(d_k\in\{64,128\}\). Check maximum absolute
+and relative error, covariance symmetry and positive semidefiniteness, the normalized Cholesky
+residual, minimum Cholesky pivot, and minimum innovation variance. The ordinary-scale FP64 target
+is maximum absolute error below \(10^{-10}\); scaled stress cases use combined absolute and relative
+tolerances.
+
+\subsection{Stage 3: Verify Differentiation}
+
+Differentiate a scalar loss depending on both the full gain sequence and \(\ve{P}_T\). Compare
+the chunk reference with the recurrent oracle separately for gradients with respect to
+\(\ve{k}\), \(\ve{\alpha}\), \(\ve{\omega}\), effective \(r\), and the initial covariance \(\ve{P}_0\).
+Run PyTorch \texttt{gradcheck} on small FP64 cases, then run larger direct gradient comparisons.
+Also test the chain-rule gradients of the production parameterization with respect to raw \(r\)
+and \(\mu\). Next, feed the gains through the existing independent-gain Kalman memory kernel and
+compare complete \((\ve{o},\ve{S}_T,\ve{P}_T)\) outputs and gradients with respect to
+\(\ve{q},\ve{k},\ve{v},\ve{\alpha},\ve{\omega},r,\mu\), and supported initial states. Finally,
+compare full-layer input and parameter gradients against recurrent mode. No performance
+implementation begins until each gradient passes independently.
+
+\subsection{Stage 4: Build and Profile a Tensorized GPU Prototype}
+
+Implement a batched PyTorch CUDA prototype using matrix multiplication, batched Cholesky, and
+triangular solves. Keep chunks sequential, but batch every
+head and sequence in the local batch. Profile the following regions separately:
+\begin{enumerate}
+  \item construction of \(\ve{f},\ve{z},\ve{H},\ve{W}\);
+  \item construction of \(\ve{G}\);
+  \item Cholesky/\(LDL^{\tr}\) factorization;
+  \item triangular solve and gain emission;
+  \item the rank-\(C\) boundary covariance update.
+\end{enumerate}
+Sweep \(C\in\{16,32,64,128\}\). At \(d_k=64\), use interleaved CUDA-event timing against the
+current \texttt{triton\_fused} composition
+(\texttt{gain\_recurrent} plus \texttt{chunk\_kalman}); at \(d_k=128\), compare against recurrent
+ExactKLA until a fused incumbent exists. Record achieved FLOP/s, factorization occupancy, dependent launch count,
+and CUDA-graph/fusion opportunities. The generic prototype is a decomposition and roofline probe,
+not a strict go/no-go gate: if launch overhead or the small-matrix solver dominates, implement one
+bounded custom microkernel prototype before deciding whether the design is viable.
+
+\subsection{Stage 5: Implement the GPU Forward Path}
+
+Use optimized GEMM primitives for large matrix products and write custom kernels only for operations
+that the profile shows are limiting. Tensor-core acceleration is contingent on a later TF32/BF16
+accuracy experiment. The intended decomposition is:
+\begin{enumerate}
+  \item a fused chunk-preparation kernel for \(\ve{f}\), \(\ve{z}\), and elementwise scaling;
+  \item grouped GEMMs for \(\ve{P}_0\ve{H}^{\tr}\), \(\ve{H}\ve{W}^{\tr}\), and the boundary
+        covariance downdate;
+  \item a batched blocked Cholesky or \(LDL^{\tr}\) kernel for small \(C\times C\) matrices;
+  \item a fused triangular-solve and gain-emission kernel.
+\end{enumerate}
+The direct boundary formula subtracts two positive-semidefinite matrices and may lose symmetry or
+positive semidefiniteness through cancellation. Prototype both this formula and a square-root/QR
+boundary update that propagates a covariance factor rather than forming the downdate by subtraction.
+Neither path may silently clamp eigenvalues. Record symmetry error, smallest eigenvalue, and the
+difference from the recurrent Joseph-form update after every chunk.
+Compute \(\ve{P}_0\), \(\ve{G}\), Cholesky, triangular solves, and the covariance downdate using
+IEEE FP32 initially, with TF32 disabled for these operations. Cast only the emitted gain to the
+layer's contract dtype. Compare every forward component against the FP64 reference and recurrent
+FP32 implementation over \(T\in\{512,2048,4096\}\). Before implementation, freeze quantitative
+tolerances for gain, layer output, every gradient, symmetry, and minimum eigenvalue using the
+current recurrent FP32 path. TF32 or BF16 tensor-core inputs are later opt-in experiments, not
+assumed-safe defaults.
+
+\subsection{Stage 6: Implement the Backward Path}
+
+First use automatic differentiation through the chunked PyTorch implementation as the gradient
+oracle. The optimized backward should checkpoint only chunk-boundary covariances and recompute
+\(\ve{f},\ve{z},\ve{H},\ve{W},\ve{G},\ve{C},\ve{Y}\) within each chunk. Process chunks in reverse
+order while carrying the adjoint of the boundary covariance. Explicitly compare three storage
+policies: stash every \(O((T/C)d_k^2)\) boundary covariance, hierarchical boundary checkpointing,
+and re-forward from the initial covariance. Report bytes per layer and across the full model for
+\(d_k=64\) and \(128\), and stress Cholesky gradients near repeated or small pivots. Validate each
+input gradient separately against the FP64 oracle before measuring speed or memory.
+
+\subsection{Stage 7: Numerical-Stability Alternative}
+
+The compact representation contains \(\ve{z}_t\oslash\ve{f}_t\), which can overflow when a long
+chunk has very small cumulative decay. Implement the division-free cross-covariance recurrence as
+an independent reference path:
+\begin{equation}
+  \ve{b}_{s,s}=\ve{\Sigma}_s\ve{k}_s,
+  \qquad
+  \ve{b}_{t,s}=\ve{\alpha}_t\odot\ve{b}_{t-1,s},
+  \qquad
+  G_{ts}=\ve{k}_t^{\tr}\ve{b}_{t,s}\quad(t>s),
+  \qquad
+  G_{tt}=\ve{k}_t^{\tr}\ve{b}_{t,t}+r_t,
+\end{equation}
+with the upper triangle supplied by symmetry.
+After factoring \(\ve{G}=\ve{L}\ve{R}\ve{L}^{\tr}\), compute gains without \(\ve{W}\) from
+\begin{equation}
+  \ve{\kappa}_t
+  = \frac{1}{R_{tt}}
+    \sum_{s=1}^t(L^{-1})_{ts}\ve{b}_{t,s}.
+\end{equation}
+For the boundary covariance, stack \(\ve{B}_C=[\ve{b}_{C,1},\ldots,\ve{b}_{C,C}]\) and use
+\begin{equation}
+  \ve{P}_C
+  =\ve{\Sigma}_C
+   -\ve{B}_C\ve{G}^{-1}\ve{B}_C^{\tr}.
+\end{equation}
+Use this complete \(O(C^2d_k)\) path to determine safe chunk lengths for the compact path. Compute
+a log-prefix range bound before forming \(\ve{z}_t\oslash\ve{f}_t\), including subnormal and
+heterogeneous gate tests. The FP64 reference uses no repair. For production FP32, specify and test
+an explicit failure policy: retry with the most accurate available reductions, then fall back to a
+numerically safer exact path. Any jitter, clipping, projection, or renormalization must be reported
+as a numerical modification and gated against the recurrent oracle.
+
+\subsection{Stage 8: Acceptance and Integration}
+
+Introduce the implementation first as a distinct constructor mode
+\texttt{mode=innovation\_chunk} in \texttt{lit\_gpt/exact\_kla.py}; retain
+\texttt{mode=recurrent} and \texttt{mode=triton\_fused} as explicit fallbacks rather than adding an
+implicit environment override. The gain/op API preserves input layouts, effective-noise
+calibration, optional initial \(\ve{P}_0\), and optional final \(\ve{P}_T\). Test these op-level
+state contracts with arbitrary positive-definite \(\ve{P}_0\). The mixer layer preserves its
+existing training-only, no-cache interface and initializes \(\ve{P}_0=\mu^{-1}\ve{I}\). Integration
+proceeds only after all of the following conditions hold:
+\begin{enumerate}
+  \item FP64 forward and gradient tests match the recurrent oracle.
+  \item FP32 stress tests remain stable for the training ranges of \(\ve{\alpha}\),
+        \(\ve{\omega}\), and \(r\).
+  \item Gain-only latency is reported against \texttt{gain\_recurrent}; recurrence-core and full
+        mixer latency are reported separately. The primary research target is full-mixer parity
+        with the current DiagKLA implementation on H200:
+        ExactKLA forward and forward--backward latency must each be no more than \(1.1\times\) the
+        corresponding DiagKLA latency at the same batch size, sequence length, head count, and
+        \(d_k\). At the existing \(T\approx2048\), \(d_k=64\) benchmark point, this requires
+        approximately an \(8.3\times\) forward speedup and a \(4.3\times\) forward--backward speedup
+        over the current ExactKLA backend. Beating the current ExactKLA backend by a smaller margin
+        is an intermediate milestone, not the final acceptance criterion. Report separate pass/fail
+        rows for the matched synthetic \(d_k=64\) geometry and the selected production 220M and 750M
+        local-batch/head geometries at \(d_k=128\); parity must hold at both head dimensions.
+  \item Peak training memory is measured and documented for both checkpointed and stashed factors.
+  \item Interleaved benchmarks report performance relative to both current ExactKLA and DiagKLA.
+\end{enumerate}
+Retain the recurrent and current fused constructor modes until the new path has passed end-to-end
+layer tests and a short training smoke test.
+
+\appendix
+
+\section{Derivation of the Exact Chunk Algorithm}
+
+This appendix proves that the chunkwise innovation factorization produces exactly the same gains
+and chunk-boundary covariance as the tokenwise ExactKLA recurrence. All equalities in this appendix
+are algebraic equalities in exact arithmetic.
+
+\subsection{Conditioning at the Chunk Boundary}
+
+Fix a chunk containing positions \(1,\ldots,C\), and let \(\mathcal{F}_0\) denote all observations
+before the chunk. For one value coordinate \(i\), define the latent key-space state
+\begin{equation}
+  \ve{x}_t := \ve{S}_{t,i}^\star\in\mathbb{R}^{d_k}.
+\end{equation}
+Conditioned on \(\mathcal{F}_0\), the chunk-entry state has mean \(\ve{S}_{0,i}\) and covariance
+\begin{equation}
+  \operatorname{Cov}(\ve{x}_0\mid\mathcal{F}_0)=\ve{P}_0.
+\end{equation}
+Inside the chunk, the latent dynamics and scalar observation are
+\begin{align}
+  \ve{x}_t
+    &= \ve{D}_t\ve{x}_{t-1}+\ve{\epsilon}_t,
+  & \operatorname{Cov}(\ve{\epsilon}_t)&=\ve{\Omega}_t,
+  \\
+  v_{t,i}
+    &= \ve{k}_t^{\tr}\ve{x}_t+e_{t,i},
+  & \operatorname{Var}(e_{t,i})&=r_t.
+\end{align}
+The process noises, observation noises, and chunk-entry state are mutually independent after
+conditioning on \(\mathcal{F}_0\). We suppress this conditioning below. Means do not affect any
+covariance calculation, so all latent states and observations may equivalently be centered.
+
+For \(t\ge s\), define the cumulative transition
+\begin{equation}
+  \ve{\Phi}_{t:s}
+  := \ve{D}_t\ve{D}_{t-1}\cdots\ve{D}_s,
+  \qquad
+  \ve{\Phi}_{t:t+1}:=\ve{I}.
+\end{equation}
+Because every \(\ve{D}_t=\diag(\ve{\alpha}_t)\) is diagonal, these matrices commute and
+\begin{equation}
+  \ve{\Phi}_{t:1}=\diag(\ve{f}_t),
+  \qquad
+  \ve{f}_t=\bigodot_{u=1}^t\ve{\alpha}_u.
+\end{equation}
+
+\subsection{Unconditioned Covariance Within a Chunk}
+
+Here ``unconditioned'' means that we condition on \(\mathcal{F}_0\), but not yet on observations
+\(v_{1,i},\ldots,v_{t,i}\) from the current chunk. Unrolling the dynamics gives
+\begin{equation}
+  \ve{x}_t
+  = \ve{\Phi}_{t:1}\ve{x}_0
+    +\sum_{s=1}^t\ve{\Phi}_{t:s+1}\ve{\epsilon}_s.
+\end{equation}
+Independence of the process-noise terms therefore gives
+\begin{equation}
+\begin{aligned}
+  \ve{\Sigma}_t
+  := \operatorname{Cov}(\ve{x}_t)
+  &= \ve{\Phi}_{t:1}\ve{P}_0\ve{\Phi}_{t:1}^{\tr}
+    +\sum_{s=1}^t
+      \ve{\Phi}_{t:s+1}\ve{\Omega}_s\ve{\Phi}_{t:s+1}^{\tr} \\
+  &= \diag(\ve{f}_t)\ve{P}_0\diag(\ve{f}_t)
+    +\diag(\ve{z}_t),
+\end{aligned}
+\end{equation}
+where
+\begin{equation}
+  \ve{z}_t
+  = \sum_{s=1}^t
+    \left(\bigodot_{u=s+1}^t\ve{\alpha}_u^2\right)\odot\ve{\omega}_s.
+\end{equation}
+Separating the last term of this sum proves the recurrence
+\begin{equation}
+  \ve{z}_t
+  = \ve{\alpha}_t^2\odot\ve{z}_{t-1}+\ve{\omega}_t,
+  \qquad \ve{z}_0=\ve{0}.
+\end{equation}
+
+For \(t\ge s\), split the state at position \(s\):
+\begin{equation}
+  \ve{x}_t
+  = \ve{\Phi}_{t:s+1}\ve{x}_s
+    +\sum_{u=s+1}^t\ve{\Phi}_{t:u+1}\ve{\epsilon}_u.
+\end{equation}
+The second term is independent of \(\ve{x}_s\), hence
+\begin{equation}
+  \operatorname{Cov}(\ve{x}_t,\ve{x}_s)
+  = \ve{\Phi}_{t:s+1}\ve{\Sigma}_s.
+\end{equation}
+Since the entries of \(\ve{\alpha}_t\) are positive, elementwise division by \(\ve{f}_s\) is
+well-defined and
+\begin{equation}
+  \ve{\Phi}_{t:s+1}
+  = \diag(\ve{f}_t\oslash\ve{f}_s).
+\end{equation}
+
+\subsection{Compact Cross-Covariance Factors}
+
+Define
+\begin{equation}
+  \ve{h}_s=\ve{f}_s\odot\ve{k}_s,
+  \qquad
+  \ve{w}_s
+  =\ve{P}_0\ve{h}_s
+   +(\ve{z}_s\oslash\ve{f}_s)\odot\ve{k}_s.
+\end{equation}
+First observe that
+\begin{equation}
+\begin{aligned}
+  \ve{\Sigma}_s\ve{k}_s
+  &= \diag(\ve{f}_s)\ve{P}_0\diag(\ve{f}_s)\ve{k}_s
+    +\diag(\ve{z}_s)\ve{k}_s \\
+  &= \ve{f}_s\odot
+    \left[
+      \ve{P}_0\ve{h}_s
+      +(\ve{z}_s\oslash\ve{f}_s)\odot\ve{k}_s
+    \right] \\
+  &= \ve{f}_s\odot\ve{w}_s.
+\end{aligned}
+\end{equation}
+The observation noise \(e_{s,i}\) is independent of \(\ve{x}_t\), so for \(t\ge s\),
+\begin{equation}
+\begin{aligned}
+  \operatorname{Cov}(\ve{x}_t,v_{s,i})
+  &= \operatorname{Cov}(\ve{x}_t,\ve{x}_s)\ve{k}_s \\
+  &= \diag(\ve{f}_t\oslash\ve{f}_s)\ve{\Sigma}_s\ve{k}_s \\
+  &= \diag(\ve{f}_t\oslash\ve{f}_s)
+     (\ve{f}_s\odot\ve{w}_s) \\
+  &= \ve{f}_t\odot\ve{w}_s.
+\end{aligned}
+\end{equation}
+Applying the observation map at position \(t\) yields, for \(t>s\),
+\begin{equation}
+  \operatorname{Cov}(v_{t,i},v_{s,i})
+  = \ve{k}_t^{\tr}(\ve{f}_t\odot\ve{w}_s)
+  = \ve{h}_t^{\tr}\ve{w}_s.
+\end{equation}
+On the diagonal, the independent observation noise contributes \(r_t\):
+\begin{equation}
+  \operatorname{Var}(v_{t,i})
+  = \ve{h}_t^{\tr}\ve{w}_t+r_t.
+\end{equation}
+Consequently, if \(\ve{H}\) and \(\ve{W}\) stack \(\ve{h}_t^{\tr}\) and
+\(\ve{w}_t^{\tr}\), the lower triangle of the joint observation covariance \(\ve{G}\) is the
+lower triangle of \(\ve{H}\ve{W}^{\tr}\), with \(r_t\) added to its diagonal. Symmetry supplies
+the upper triangle.
+
+\subsection{The LDL Factorization Produces Kalman Innovations}
+
+Let the centered observation vector for coordinate \(i\) be
+\begin{equation}
+  \widetilde{\ve{v}}_i
+  = [\widetilde v_{1,i},\ldots,\widetilde v_{C,i}]^{\tr},
+  \qquad
+  \operatorname{Cov}(\widetilde{\ve{v}}_i)=\ve{G}.
+\end{equation}
+Because \(r_t>0\), \(\ve{G}\) is positive definite. It therefore has the unique factorization
+\begin{equation}
+  \ve{G}=\ve{L}\ve{R}\ve{L}^{\tr},
+\end{equation}
+where \(\ve{L}\) is unit lower triangular and \(\ve{R}\) is positive diagonal. Define
+\begin{equation}
+  \ve{\xi}_i:=\ve{L}^{-1}\widetilde{\ve{v}}_i.
+\end{equation}
+Then
+\begin{equation}
+  \operatorname{Cov}(\ve{\xi}_i)
+  = \ve{L}^{-1}\ve{G}\ve{L}^{-\tr}
+  = \ve{R}.
+\end{equation}
+Thus \(\xi_{t,i}\) are mutually uncorrelated innovations and
+\(R_{tt}=\operatorname{Var}(\xi_{t,i})\). Since \(\ve{L}^{-1}\) is lower triangular,
+\(\xi_{t,i}\) depends only on observations through position \(t\). It is exactly the innovation
+obtained by sequentially conditioning \(v_{t,i}\) on
+\(v_{1,i},\ldots,v_{t-1,i}\).
+
+Let
+\begin{equation}
+  \ve{E}:=\ve{L}^{-1}\ve{W},
+\end{equation}
+and let \(\ve{e}_t^{\tr}\) be row \(t\) of \(\ve{E}\). The covariance between the state at
+position \(t\) and its innovation is
+\begin{equation}
+\begin{aligned}
+  \operatorname{Cov}(\ve{x}_t,\xi_{t,i})
+  &= \sum_{s=1}^t (L^{-1})_{ts}
+     \operatorname{Cov}(\ve{x}_t,v_{s,i}) \\
+  &= \sum_{s=1}^t (L^{-1})_{ts}(\ve{f}_t\odot\ve{w}_s) \\
+  &= \ve{f}_t\odot
+     \left(\sum_{s=1}^t(L^{-1})_{ts}\ve{w}_s\right) \\
+  &= \ve{f}_t\odot\ve{e}_t.
+\end{aligned}
+\end{equation}
+The Gaussian conditioning coefficient for innovation \(\xi_{t,i}\) is therefore
+\begin{equation}
+  \boxed{
+  \ve{\kappa}_t
+  = \frac{\operatorname{Cov}(\ve{x}_t,\xi_{t,i})}
+         {\operatorname{Var}(\xi_{t,i})}
+  = \frac{\ve{f}_t\odot\ve{e}_t}{R_{tt}}.
+  }
+\end{equation}
+The sequential Kalman filter is precisely the innovations algorithm for this linear--Gaussian
+model. Hence this coefficient equals
+\begin{equation}
+  \ve{\kappa}_t
+  = \frac{\widehat{\ve{P}}_t\ve{k}_t}
+         {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}
+\end{equation}
+from the tokenwise ExactKLA recurrence.
+
+\subsection{Exact Dense Covariance at the Next Chunk Boundary}
+
+At position \(C\), the covariance with every innovation can be stacked as
+\begin{equation}
+\begin{aligned}
+  \operatorname{Cov}(\ve{x}_C,\ve{\xi}_i)
+  &=
+  \begin{bmatrix}
+    \ve{f}_C\odot\ve{e}_1 & \cdots & \ve{f}_C\odot\ve{e}_C
+  \end{bmatrix} \\
+  &= \diag(\ve{f}_C)\ve{E}^{\tr}.
+\end{aligned}
+\end{equation}
+Conditioning a jointly Gaussian state on the full innovation vector gives
+\begin{equation}
+\begin{aligned}
+  \ve{P}_C
+  &= \ve{\Sigma}_C
+    -\operatorname{Cov}(\ve{x}_C,\ve{\xi}_i)
+     \operatorname{Cov}(\ve{\xi}_i)^{-1}
+     \operatorname{Cov}(\ve{\xi}_i,\ve{x}_C) \\
+  &= \ve{\Sigma}_C
+    -\diag(\ve{f}_C)\ve{E}^{\tr}\ve{R}^{-1}\ve{E}
+     \diag(\ve{f}_C).
+\end{aligned}
+\end{equation}
+This is the same posterior covariance obtained after \(C\) sequential Riccati updates because
+conditioning a joint Gaussian distribution sequentially or jointly gives the same posterior.
+
+\subsection{Equivalence Across the Full Sequence}
+
+The first chunk begins with the same prior \(\ve{P}_0=\mu^{-1}\ve{I}\) as tokenwise ExactKLA.
+The derivation above shows that it produces the same gain at every token and the same posterior
+covariance at its boundary. Using that covariance as the prior for the next chunk repeats the same
+argument. Induction over chunks therefore proves that the chunk algorithm and tokenwise ExactKLA
+produce identical gains \(\ve{\kappa}_1,\ldots,\ve{\kappa}_T\) and identical boundary
+covariances. Applying these gains to the ExactKLA memory recurrence consequently produces the same
+\(\ve{S}_t\) and reads \(\ve{o}_t\).
+
+\subsection{Recovering LDL Factors from Cholesky}
+
+An implementation may use a Cholesky factorization
+\begin{equation}
+  \ve{G}=\ve{C}\ve{C}^{\tr}
+\end{equation}
+instead of a direct \(LDL^{\tr}\) routine. Let
+\begin{equation}
+  \ve{J}:=\diag(C_{11},\ldots,C_{CC}).
+\end{equation}
+Then
+\begin{equation}
+  \ve{L}=\ve{C}\ve{J}^{-1},
+  \qquad
+  \ve{R}=\ve{J}^2
+\end{equation}
+gives a unit-lower-triangular \(\ve{L}\) and satisfies
+\begin{equation}
+  \ve{L}\ve{R}\ve{L}^{\tr}
+  = \ve{C}\ve{J}^{-1}\ve{J}^2\ve{J}^{-1}\ve{C}^{\tr}
+  = \ve{C}\ve{C}^{\tr}
+  = \ve{G}.
+\end{equation}
+In components, \(R_{tt}=C_{tt}^2\) and \(L_{ts}=C_{ts}/C_{ss}\), exactly as used in the proposed
+innovation derivation. Let \(\ve{Y}=\ve{C}^{-1}\ve{W}\). Since
+\(\ve{L}^{-1}=\ve{J}\ve{C}^{-1}\),
+\begin{equation}
+  \ve{E}=\ve{L}^{-1}\ve{W}=\ve{J}\ve{Y}.
+\end{equation}
+Therefore row \(t\) satisfies \(\ve{e}_t=C_{tt}\ve{y}_t\), and
+\begin{equation}
+  \frac{\ve{f}_t\odot\ve{e}_t}{R_{tt}}
+  =\frac{\ve{f}_t\odot\ve{y}_t}{C_{tt}}.
+\end{equation}
+Similarly,
+\begin{equation}
+  \ve{E}^{\tr}\ve{R}^{-1}\ve{E}
+  =\ve{Y}^{\tr}\ve{J}\ve{J}^{-2}\ve{J}\ve{Y}
+  =\ve{Y}^{\tr}\ve{Y}.
+\end{equation}
+This proves the direct Cholesky formulas used by the proposed implementation and avoids explicitly
+forming the unit-lower factor or squaring and subsequently dividing by small Cholesky pivots.
+
+\end{document}
