@@ -673,6 +673,147 @@ choices are:
   diagonal vector.
 \end{enumerate}
 
+\section{Interlude: why softmax attention needs the $1/\sqrt{d_k}$ scale}
+\label{sec:attention-sqrt-dk}
+
+The calibration in the next section standardizes a key coordinate before using it. That is the
+same operation that produces the familiar $1/\sqrt{d_k}$ factor in softmax attention, so it is
+worth deriving there first, where the failure mode is easy to quantify. The conclusion of this
+section is that $\sqrt{d_k}$ is not a tuning constant: it is the unique power of $d_k$ that makes
+the attention logit an \emph{intensive} quantity, one whose distribution does not change as the
+head dimension grows.
+
+\subsection*{The logit is extensive in $d_k$}
+
+Softmax attention scores a query $\ve{q}\in\R^{d_k}$ against keys
+$\ve{k}_1,\ldots,\ve{k}_T\in\R^{d_k}$ through the inner product
+\[
+  s_j=\ve{q}^{\tr}\ve{k}_j=\sum_{i=1}^{d_k}q_ik_{j,i},
+\]
+and normalizes $\ve{s}$ with a softmax. At initialization the coordinates of $\ve{q}$ and
+$\ve{k}_j$ are well modeled as independent, zero-mean, unit-variance: this is what a normalization
+layer followed by a standard random projection produces. Then $\mathbb{E}[q_ik_{j,i}]=0$ and
+$\operatorname{Var}(q_ik_{j,i})=\mathbb{E}[q_i^2]\mathbb{E}[k_{j,i}^2]=1$, so summing $d_k$
+independent terms gives
+\begin{equation}
+  \mathbb{E}[s_j]=0,
+  \qquad
+  \operatorname{Var}(s_j)=d_k,
+  \qquad
+  s_j=\Theta(\sqrt{d_k}).
+  \label{eq:logit-variance}
+\end{equation}
+The logit is therefore \emph{extensive}: it grows with the representation dimension. Nothing about
+the modeling problem changed when $d_k$ grew from $64$ to $128$, but the scale of the quantity fed
+to the softmax did.
+
+\subsection*{What goes wrong: saturation and a vanishing softmax Jacobian}
+
+The softmax is not scale-free. Writing $\ve{p}=\mathrm{softmax}(\ve{s})$, its Jacobian is
+\begin{equation}
+  \frac{\partial p_a}{\partial s_b}=p_a(\delta_{ab}-p_b),
+  \label{eq:softmax-jacobian}
+\end{equation}
+which vanishes in both saturated limits: as $\ve{p}$ approaches a one-hot vector, every entry of
+\eqref{eq:softmax-jacobian} tends to zero. Large logit spread therefore does not merely make the
+attention pattern peaked at initialization, it removes the gradient that would let the pattern
+change.
+
+The two-key case makes the rate explicit. For distinct keys the gap $\Delta=s_1-s_2$ has
+conditional variance $2\|\ve{q}\|^2\approx 2d_k$, so $|\Delta|=\Theta(\sqrt{2d_k})$, and the
+gradient scale through the softmax is
+\begin{equation}
+  p(1-p)=\sigma(\Delta)\sigma(-\Delta)\le e^{-|\Delta|},
+  \qquad
+  \sigma(x)=\frac{1}{1+e^{-x}}.
+  \label{eq:two-key-gradient}
+\end{equation}
+The suppression is exponential in $\sqrt{d_k}$:
+
+\begin{center}
+\begin{tabular}{rccc}
+\hline
+ & \multicolumn{2}{c}{unscaled $\ve{q}^{\tr}\ve{k}$} & scaled $\ve{q}^{\tr}\ve{k}/\sqrt{d_k}$ \\
+$d_k$ & typical $|\Delta|$ & $p(1-p)$ & typical $|\Delta|$, $p(1-p)$ \\
+\hline
+$16$  & $5.7$  & $3.5\times10^{-3}$ & $1.41$, $\;0.158$ \\
+$64$  & $11.3$ & $1.2\times10^{-5}$ & $1.41$, $\;0.158$ \\
+$128$ & $16.0$ & $1.1\times10^{-7}$ & $1.41$, $\;0.158$ \\
+\hline
+\end{tabular}
+\end{center}
+
+\noindent
+The scaled column is constant in $d_k$; that invariance is the entire point. With $T$ keys the same
+effect appears as attention-entropy collapse: for logits of standard deviation $\sigma$ the largest
+gap grows like $\sigma\sqrt{2\log T}$, so the attention distribution concentrates on one key as soon
+as $\sigma\gg 1/\sqrt{2\log T}$.
+
+\subsection*{Why the exponent is exactly $1/2$}
+
+Consider the family $s^{(\gamma)}=d_k^{-\gamma}\,\ve{q}^{\tr}\ve{k}$. From
+\eqref{eq:logit-variance},
+\[
+  \operatorname{Var}\!\left(s^{(\gamma)}\right)=d_k^{1-2\gamma}.
+\]
+Three regimes follow, and only one is usable:
+\begin{enumerate}[leftmargin=1.6em,itemsep=3pt]
+  \item $\gamma<\tfrac12$: the variance diverges with $d_k$. The softmax saturates, the Jacobian
+  \eqref{eq:softmax-jacobian} collapses, and wider heads train worse than narrow ones.
+
+  \item $\gamma>\tfrac12$: the variance vanishes with $d_k$. The softmax tends to the uniform
+  distribution, attention degenerates to unweighted mean pooling, and the gradient reaching
+  $\ve{q}$ and $\ve{k}$ is suppressed by the same factor.
+
+  \item $\gamma=\tfrac12$: the variance is $1$ for every $d_k$. The logit distribution, the
+  effective softmax temperature, and hence the usable learning rate are all independent of head
+  dimension.
+\end{enumerate}
+So $1/\sqrt{d_k}$ is the unique scale under which one hyperparameter setting transfers across head
+widths. Dividing by $d_k$ is not a safe ``more conservative'' choice; it fails in the opposite
+direction.
+
+\subsection*{The same statement as coordinate standardization}
+
+Dividing the score by $\sqrt{d_k}$ can be moved onto the key. Under $\ell_2$ normalization of
+$\ve{q}$ and $\ve{k}$ --- the convention used by the mixers in this work --- the raw score is
+$\cos\theta$, whose variance for independent directions is $1/d_k$ rather than $d_k$. The
+standardizing correction is then a \emph{multiplication}:
+\begin{equation}
+  \sqrt{d_k}\,\ve{q}^{\tr}\ve{k}
+  =\ve{q}^{\tr}\widetilde{\ve{k}},
+  \qquad
+  \widetilde{\ve{k}}=\sqrt{d_k}\,\ve{k},
+  \qquad
+  \mathbb{E}\big[\widetilde k_i^{\,2}\big]\approx 1.
+  \label{eq:standardized-key}
+\end{equation}
+Both conventions express one requirement: standardize the per-coordinate contribution so that the
+sum over $d_k$ coordinates is $O(1)$. The unnormalized convention divides the sum; the normalized
+convention rescales the coordinate. The object $\widetilde{\ve{k}}=\sqrt{d_k}\,\ve{k}$ in
+\eqref{eq:standardized-key} is exactly the standardized coordinate used in the next section.
+
+This also explains why the calibrated filter carries $d_k$ where attention carries $\sqrt{d_k}$.
+The attention score is \emph{linear} in the key, so standardization contributes one factor of
+$\sqrt{d_k}$. The Fisher information $\widetilde{\ve{k}}\widetilde{\ve{k}}^{\tr}/r_t$ is
+\emph{quadratic} in the key, so the same standardization contributes two, giving the per-channel
+increment $d_kk_{t,i}^2/r_t$ of \eqref{eq:calibrated-diag-update}. The two constants are the same
+argument applied to a linear and a quadratic functional of the same standardized key.
+
+\subsection*{Scope of the argument}
+
+Equation~\eqref{eq:logit-variance} assumes $\ve{q}$ and $\ve{k}$ are independent, which holds at
+initialization but not after training: both are learned functions of the same input, and an
+attention head that has learned to retrieve produces aligned pairs. For aligned $\ve{q},\ve{k}$ the
+inner product is $\Theta(\|\ve{q}\|\|\ve{k}\|)=\Theta(d_k)$, and the $1/\sqrt{d_k}$ scale still
+leaves a residual $\Theta(\sqrt{d_k})$ growth. This is the known origin of logit growth and
+attention-entropy collapse late in training, and the reason two later corrections exist: the
+maximal-update parameterization ($\mu$P) scales attention logits by $1/d_k$ rather than
+$1/\sqrt{d_k}$ precisely because it assumes the correlated regime, and QK-normalization projects
+$\ve{q},\ve{k}$ to the sphere and reintroduces an explicit learned temperature. The
+$1/\sqrt{d_k}$ factor should therefore be read as the correct \emph{initialization-time}
+standardization, not as a scale invariant that training preserves.
+
 \section{Calibrated diagonal information update}
 
 If we choose a diagonal vector state, we need to replace the dense Fisher matrix

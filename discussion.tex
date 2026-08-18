@@ -291,6 +291,283 @@ dependent: $(1,1)/\sqrt{2}$ and $(1,-1)/\sqrt{2}$ are orthogonal but have identi
 squares and hence identical information increments. Whether the learned key basis aligns this
 diagonal statistic with useful uncertainty is an empirical question.
 
+\subsection{From exact Gaussian filtering to an online variational M\"obius state}
+\label{subsec:discussion-projection-derivation}
+
+At $s=1$, the projected rule is exactly a mean-field variational-inference update, not merely a
+Gaussian-inspired heuristic. Each token defines a dense Gaussian filtering posterior, and that
+posterior is projected onto a diagonal Gaussian family by minimizing the reverse KL divergence.
+Repeating this projection after every token gives an online variational filter. The production
+factor $s=d_k$ is a separate calibration applied after this variational derivation; it is not the
+optimum of the same variational objective.
+
+To make the variational step explicit, use the memory notation of the main paper. Let
+$\vct{S}_t^\star\in\mathbb{R}^{d_k\times d_v}$ be the random latent associative memory and let
+$\vct{S}_t$ be its posterior-mean estimate. Fix a value coordinate $j$, and denote column $j$ of
+these matrices by $\vct{s}_{t,j}^\star$ and $\vct{s}_{t,j}$, respectively. Thus the latent vector
+in the following scalar observation model is not a new state: it is one column of
+$\vct{S}_t^\star$. Its predicted model is
+\begin{equation}
+  \vct{s}_{t,j}^\star\mid\mathcal{F}_{t-1}
+  \sim\mathcal{N}(\widehat{\vct{s}}_{t,j},\widehat{\vct{P}}_t),
+  \qquad
+  v_{t,j}=\vct{k}_t^\top\vct{s}_{t,j}^\star+e_{t,j},
+  \qquad
+  e_{t,j}\sim\mathcal{N}(0,r_t),
+  \label{eq:discussion-scalar-observation-model}
+\end{equation}
+where $\widehat{\vct{s}}_{t,j}$ is column $j$ of the predicted mean
+$\widehat{\vct{S}}_t$. Let $\pi_{t,j}$ denote the exact one-step posterior density of
+$\vct{s}_{t,j}^\star$ after observing $v_{t,j}$. Its negative log density, evaluated at a possible
+column value $\vct{s}$, has quadratic part
+\begin{equation}
+  -\log \pi_{t,j}(\vct{s})
+  =\frac{1}{2}(\vct{s}-\widehat{\vct{s}}_{t,j})^\top
+    \widehat{\vct{P}}_t^{-1}
+    (\vct{s}-\widehat{\vct{s}}_{t,j})
+  +\frac{(v_{t,j}-\vct{k}_t^\top\vct{s})^2}{2r_t}
+  +\mathrm{const}.
+  \label{eq:discussion-posterior-objective}
+\end{equation}
+Its Hessian gives the exact posterior information matrix
+\begin{equation}
+  \vct{C}_t^\star
+  =(\vct{P}_t^\star)^{-1}
+  =\widehat{\vct{P}}_t^{-1}
+  +\frac{1}{r_t}\vct{k}_t\vct{k}_t^\top.
+  \label{eq:discussion-exact-information-update}
+\end{equation}
+Applying the Woodbury identity to Equation~\eqref{eq:discussion-exact-information-update}
+recovers Equation~\eqref{eq:discussion-exact-posterior-diagonal}. Its mean is
+\begin{equation}
+  \vct{s}_{t,j}
+  =\widehat{\vct{s}}_{t,j}
+  +\vct{\kappa}_t
+    \left(v_{t,j}-\vct{k}_t^\top\widehat{\vct{s}}_{t,j}\right),
+  \label{eq:discussion-single-column-mean-update}
+\end{equation}
+which is column $j$ of the matrix update for $\vct{S}_t$ in the setup section. Thus
+$\vct{S}_t$ is the point estimate (posterior mean), whereas $\vct{P}_t^\star$ describes the
+uncertainty around each of its columns. Although this one-step posterior is analytically
+tractable, carrying its dense covariance would destroy the independent per-coordinate state used
+by the associative scan. Variational inference enters here as a structured computational
+approximation.
+
+Choose the mean-field Gaussian family for this memory column,
+\begin{equation}
+  \mathcal{Q}
+  =\left\{
+    q_{t,j}(\vct{s})
+    =\mathcal{N}\!\left(\vct{\mu}_{t,j},\diag(\vct{p}_t)\right)
+    :\vct{p}_t>0
+  \right\}.
+  \label{eq:discussion-mean-field-family}
+\end{equation}
+For the one-token model in Equation~\eqref{eq:discussion-scalar-observation-model}, its ELBO is
+\begin{equation}
+  \mathcal{L}_{t,j}(q_{t,j})
+  =\mathbb{E}_{q_{t,j}}\!\left[
+    \log p(v_{t,j}\mid\vct{s}_{t,j}^\star)
+  \right]
+  -\operatorname{KL}\!\left(
+    q_{t,j}(\vct{s}_{t,j}^\star)\,\|\,
+    p(\vct{s}_{t,j}^\star\mid\mathcal{F}_{t-1})
+  \right).
+  \label{eq:discussion-one-step-elbo}
+\end{equation}
+The standard variational identity gives
+\begin{equation}
+  \log p(v_{t,j}\mid\mathcal{F}_{t-1})
+  =\mathcal{L}_{t,j}(q_{t,j})
+  +\operatorname{KL}(q_{t,j}\,\|\,\pi_{t,j}).
+  \label{eq:discussion-elbo-kl-identity}
+\end{equation}
+Therefore the variational update can be written equivalently as
+\begin{equation}
+  q_{t,j}^{\mathrm{VI}}
+  =\arg\max_{q_{t,j}\in\mathcal{Q}}\mathcal{L}_{t,j}(q_{t,j})
+  =\arg\min_{q_{t,j}\in\mathcal{Q}}
+    \operatorname{KL}(q_{t,j}\,\|\,\pi_{t,j}).
+  \label{eq:discussion-online-vi-objective}
+\end{equation}
+Because the target $\pi_{t,j}=\mathcal{N}(\vct{s}_{t,j},\vct{P}_t^\star)$ is Gaussian, this KL
+reduces, up to terms independent of $\vct{\mu}_{t,j}$ and $\vct{p}_t$, to
+\begin{equation}
+  \operatorname{KL}(q_{t,j}\,\|\,\pi_{t,j})
+  =\frac{1}{2}(\vct{\mu}_{t,j}-\vct{s}_{t,j})^\top\vct{C}_t^\star
+    (\vct{\mu}_{t,j}-\vct{s}_{t,j})
+  +\frac{1}{2}\sum_i
+    \left(C_{t,ii}^\star p_{t,i}-\log p_{t,i}\right)
+  +\mathrm{const}.
+  \label{eq:discussion-reverse-kl-objective}
+\end{equation}
+Since $\vct{C}_t^\star$ is positive definite, the mean optimum is the exact filtering mean,
+$\vct{\mu}_{t,j}=\vct{s}_{t,j}$. The variance objective separates over key coordinates $i$, and
+\begin{equation}
+  \frac{\partial}{\partial p_{t,i}}
+  \operatorname{KL}(q_{t,j}\,\|\,\pi_{t,j})
+  =\frac{1}{2}\left(C_{t,ii}^\star-\frac{1}{p_{t,i}}\right),
+  \qquad
+  \frac{\partial^2}{\partial p_{t,i}^2}
+  \operatorname{KL}(q_{t,j}\,\|\,\pi_{t,j})
+  =\frac{1}{2p_{t,i}^2}>0.
+  \label{eq:discussion-reverse-kl-coordinate-derivative}
+\end{equation}
+The positive second derivative shows that the stationary point is the unique minimum. Setting the
+first derivative to zero gives $C_{t,ii}^\star=1/p_{t,i}$ and hence
+\begin{equation}
+  p_{t,i}^{\mathrm{rev}}
+  =\frac{1}{C_{t,ii}^\star}
+  =\left(\widehat p_{t,i}^{-1}+\frac{k_{t,i}^2}{r_t}\right)^{-1}.
+  \label{eq:discussion-reverse-kl-projection}
+\end{equation}
+The final equality follows directly from the diagonal of the exact information update,
+$C_{t,ii}^\star=\widehat p_{t,i}^{-1}+k_{t,i}^2/r_t$.
+Thus Equation~\eqref{eq:discussion-projected-posterior-diagonal} at $s=1$ is exactly the
+reverse-KL mean-field variational optimum: diagonalize the posterior precision and then invert.
+Using the previous diagonal approximation to form the next predictive prior and repeating this
+ELBO optimization token by token gives online mean-field variational inference. It is a
+reverse-KL project-after-each-token filter, rather than a single batch approximation to the full
+latent trajectory.
+
+For comparison, the forward-KL, or moment, projection onto the same diagonal family satisfies
+\begin{equation}
+  \arg\min_{\vct{p}>0}
+  \operatorname{KL}(\pi_{t,j}\,\|\,q_{t,j})
+  \quad\Longrightarrow\quad
+  p_{t,i}=P_{t,ii}^\star=p^{\mathrm{exact}}_{t,i}.
+  \label{eq:discussion-forward-kl-projection}
+\end{equation}
+This inclusive-KL projection matches the exact marginal variances, but it is not the
+ELBO/reverse-KL variational objective above. The two projections differ because diagonalization
+and inversion do not commute,
+\begin{equation}
+  \frac{1}{C_{t,ii}^\star}
+  \ne
+  \left[(\vct{C}_t^\star)^{-1}\right]_{ii}
+  =P_{t,ii}^\star
+  \qquad\text{in general}.
+  \label{eq:discussion-projection-inversion-noncommute}
+\end{equation}
+For a Gaussian posterior these two quantities have different meanings:
+\begin{equation}
+  \frac{1}{C_{t,ii}^\star}
+  =\operatorname{Var}_{\pi_{t,j}}
+    \!\left((\vct{s}_{t,j}^\star)_i
+      \mid(\vct{s}_{t,j}^\star)_{-i}\right),
+  \qquad
+  P_{t,ii}^\star
+  =\operatorname{Var}_{\pi_{t,j}}
+    \!\left((\vct{s}_{t,j}^\star)_i\right).
+  \label{eq:discussion-conditional-versus-marginal-variance}
+\end{equation}
+The reverse-KL diagonal approximation therefore carries conditional variances, as if the other
+coordinates were known, rather than their larger marginal variances. This is why it is generally
+overconfident when the exact posterior contains cross-coordinate correlations.
+Indeed, Equation~\eqref{eq:discussion-exact-diag-information} shows that marginalizing the other
+coordinates replaces $r_t$ in Equation~\eqref{eq:discussion-reverse-kl-projection} by
+$r_t+\sum_{\ell\ne i}\widehat p_{t,\ell}k_{t,\ell}^2$. Consequently
+$p^{\mathrm{rev}}_{t,i}\leq p^{\mathrm{exact}}_{t,i}$, with equality if $k_{t,i}=0$ or if the
+other coordinates contribute no key-weighted uncertainty. The selected projection is therefore
+systematically no less confident than the exact marginal.
+
+The computational payoff of this mean-field variational family appears after returning to
+information variables. Define
+\begin{equation}
+  c_{t-1,i}=p_{t-1,i}^{-1},
+  \qquad
+  u_{t,i}=s\frac{k_{t,i}^2}{r_t}.
+  \label{eq:discussion-projected-info-increment}
+\end{equation}
+Diagonal prediction followed by the projected measurement update gives
+\begin{align}
+  \widehat c_{t,i}
+  &=\frac{c_{t-1,i}}
+    {\alpha_{t,i}^2+\omega_{t,i}c_{t-1,i}}, \\
+  c_{t,i}
+  &=\widehat c_{t,i}+u_{t,i}
+  =\frac{(1+u_{t,i}\omega_{t,i})c_{t-1,i}
+      +u_{t,i}\alpha_{t,i}^2}
+    {\omega_{t,i}c_{t-1,i}+\alpha_{t,i}^2}.
+  \label{eq:discussion-projected-info-mobius}
+\end{align}
+Each token therefore supplies an input-only $2\times2$ matrix
+\begin{equation}
+  \vct{M}_{t,i}
+  =\begin{pmatrix}
+    1+u_{t,i}\omega_{t,i} & u_{t,i}\alpha_{t,i}^2\\[2pt]
+    \omega_{t,i} & \alpha_{t,i}^2
+  \end{pmatrix},
+  \qquad
+  u_{t,i}=s\frac{k_{t,i}^2}{r_t}.
+  \label{eq:discussion-mobius-matrix}
+\end{equation}
+M\"obius maps compose by matrix multiplication, so the prefix product
+$\vct{M}_{t,i}\cdots\vct{M}_{1,i}$ supplies every information state by an associative scan,
+independently for each channel. The production kernel implements this as chunk-local map
+composition, a short carry scan, and a chunk-local emit pass. The cross-channel sum in the current gain is
+evaluated only after the exclusive information prefixes are available, so it is a token-local
+reduction rather than part of the recurrence. By contrast, the moment projection makes each
+coordinate's information increment depend on all the other predicted variances, as in
+Equation~\eqref{eq:discussion-exact-diag-information}; it retains $O(d_k)$ state but loses these
+independent input-only M\"obius maps.
+
+The variational optimum above has $s=1$. Production deliberately departs from that optimum and
+uses $s=d_k$ as a width calibration. The keys are $\ell_2$ normalized, so
+\begin{equation}
+  \frac{1}{d_k}\sum_i k_{t,i}^2=\frac{1}{d_k},
+  \qquad
+  \mathbb{E}[k_{t,i}^2]=\frac{1}{d_k}
+  \quad\text{for exchangeable coordinates}.
+  \label{eq:discussion-normalized-key-coordinate-scale}
+\end{equation}
+The literal projection therefore adds only $1/(d_kr_t)$ information to a typical coordinate.
+Standardizing a coordinate to unit second moment,
+$\widetilde k_{t,i}=\sqrt{d_k}\,k_{t,i}$, gives
+\begin{equation}
+  u_{t,i}=\frac{\widetilde k_{t,i}^2}{r_t}
+  =d_k\frac{k_{t,i}^2}{r_t},
+  \label{eq:discussion-standardized-coordinate-update}
+\end{equation}
+which is precisely $s=d_k$. Equivalently, in the symmetric case
+$\widehat p_{t,i}=\widehat p_t$ and $k_{t,i}^2=1/d_k$,
+\begin{equation}
+  p^{\mathrm{proj},s}_{t,i}
+  =\frac{\widehat p_t}{1+(s/d_k)\widehat p_t/r_t}.
+  \label{eq:discussion-symmetric-projected-scale}
+\end{equation}
+Matching the scalar normalized-key update
+$(\widehat p_t^{-1}+r_t^{-1})^{-1}$ selects $s=d_k$. This is the same mean-scale matching stated
+in Equation~\eqref{eq:discussion-diag-iso-average}, now expressed as a feature standardization and
+a covariance-timescale match.
+
+This calibration is not variational inference for the original observation model. At $s=d_k$,
+the total added diagonal precision is $d_k/r_t$, whereas the trace of the exact rank-one increment
+is only $1/r_t$. One could obtain the scaled precision from the power-posterior ELBO for memory
+column $j$,
+\begin{equation}
+  \mathcal{L}_{t,j}^{(s)}(q_{t,j})
+  =s\,\mathbb{E}_{q_{t,j}}\!\left[
+    \log p(v_{t,j}\mid\vct{s}_{t,j}^\star)
+  \right]
+  -\operatorname{KL}\!\left(
+    q_{t,j}(\vct{s}_{t,j}^\star)\,\|\,
+    p(\vct{s}_{t,j}^\star\mid\mathcal{F}_{t-1})
+  \right),
+  \label{eq:discussion-power-posterior-elbo}
+\end{equation}
+which is equivalent to replacing $r_t$ by $r_t/s$. Such a coherent tempered variational update
+would use $r_t/s$ in both the current gain and the posterior covariance. DiagKLA instead keeps
+$r_t$ in the current gain and applies $s$ only to the information state passed forward.
+
+The production formulation should therefore be read as two distinct operations: (i) at $s=1$,
+a reverse-KL mean-field variational projection that preserves a positive $O(d_k)$ state and an
+associative gain scan; and (ii) after that derivation, a $d_k$ coordinate calibration that makes
+the future-confidence timescale independent of head width. The resulting state is a calibrated
+gain-conditioning state, not the ordinary-ELBO covariance---or exact covariance---of one coherent
+linear-Gaussian model. Equation~\eqref{eq:discussion-split-variational-objective} below gives a
+generalized variational objective for this deliberate separation.
+
 \subsection{Information scale separates present writing from future protection}
 \label{subsec:discussion-info-scale-temporal}
 
@@ -450,8 +727,8 @@ retention--plasticity operating point until $\vct{\omega}$ and $\vct{\alpha}$ wa
 change. If $\vct{\omega}=0$ and $\vct{\alpha}\simeq1$, an extreme $s$ can instead freeze future
 gains on the affected coordinates.
 
-The different optima for DiagKLA and IsoKLA are consistent with their different recurrences. For
-a spread-out normalized key, the DiagKLA increment in one coordinate has expectation
+The different scale sensitivities of DiagKLA and IsoKLA are consistent with their different
+recurrences. For a spread-out normalized key, the DiagKLA increment in one coordinate has expectation
 $s/(d_kr_t)$, so $s=d_k$ cancels the coordinate dilution without changing the current DiagKLA
 gain locally. IsoKLA has one scalar state and $\lVert\vct{k}_t\rVert_2^2=1$, so its information
 increment is already $s/r_t$ with no $1/d_k$ dilution. Moreover, the current IsoKLA
@@ -470,9 +747,10 @@ A token-local increase in $s$ in IsoKLA therefore weakens the current write and 
 confidence at the same time. With fixed projections, the lower uncertainty inherited from past
 larger scales reinforces this reduction in the global-$s$ recurrence. At $s=d_k$ these two
 anti-plasticity effects can be excessive, whereas DiagKLA obtains delayed protection without the
-same local write penalty. This gives a mechanistic interpretation of the observed optima $s=d_k$
-and $s=1$, but it is not yet causal evidence that retention alone produces the downstream
-improvements.
+same local write penalty. This gives a mechanistic interpretation of why the production defaults
+$s=d_k$ and $s=1$ behave differently. The corrected 220M sweeps do not establish unique optima:
+general quality is nearly flat across scales, while larger $s$ trades toward stronger long-context
+retention. This is not yet causal evidence that retention alone produces the downstream differences.
 
 A coherent Gaussian observation-precision multiplier has a different meaning. For a local
 intervention that holds the predicted prior $\widehat{\vct{P}}_t$ fixed, increasing precision by
@@ -523,7 +801,106 @@ a post-write confidence scale $s_{\mathrm{protect}}$:
 \end{equation}
 Current DiagKLA is $(s_{\mathrm{write}},s_{\mathrm{protect}})=(1,s)$. Setting both to $s$
 makes the scale consistent within the diagonal precision projection, although that projection
-still is not the exact posterior diagonal. A factorial comparison of $(1,1)$, $(1,d_k)$,
+still is not the exact posterior diagonal.
+
+\paragraph{A split variational objective.}
+The two-scale rule is the stationary point of a single generalized variational free energy. For
+the mean-field family in Equation~\eqref{eq:discussion-mean-field-family}, write
+$q_{t,j}=\mathcal{N}(\vct{\mu}_{t,j},\diag(\vct{p}_t))$ and let the predicted prior be
+$\widehat\pi_{t,j}=\mathcal{N}(\widehat{\vct{s}}_{t,j},\widehat{\vct{P}}_t)$. Define
+\begin{align}
+  \mathcal{J}_{t,j}^{\mathrm{split}}
+    (q_{t,j};s_{\mathrm{write}},s_{\mathrm{protect}})
+  &=\operatorname{KL}(q_{t,j}\,\|\,\widehat\pi_{t,j})
+    +\frac{s_{\mathrm{write}}}{2r_t}
+      \left(v_{t,j}-\vct{k}_t^\top\vct{\mu}_{t,j}\right)^2 \notag\\
+  &\quad
+    +\frac{s_{\mathrm{protect}}}{2r_t}
+      \vct{k}_t^\top\diag(\vct{p}_t)\vct{k}_t.
+  \label{eq:discussion-split-variational-objective}
+\end{align}
+The first data term penalizes error at the posterior mean and therefore controls current
+assimilation. The second penalizes predictive variance and therefore controls how much confidence
+is passed to later tokens. For diagonal
+$\widehat{\vct{P}}_t=\diag(\widehat{\vct{p}}_t)$, differentiating
+Equation~\eqref{eq:discussion-split-variational-objective} gives the unique optimum
+\begin{align}
+  \vct{\mu}_{t,j}^{\star}
+  &=\widehat{\vct{s}}_{t,j}
+    +\frac{s_{\mathrm{write}}\widehat{\vct{P}}_t\vct{k}_t}
+      {r_t+s_{\mathrm{write}}z_t}
+    \left(v_{t,j}-\vct{k}_t^\top\widehat{\vct{s}}_{t,j}\right),
+  \label{eq:discussion-split-variational-mean}\\
+  (p_{t,i}^{\star})^{-1}
+  &=\widehat p_{t,i}^{-1}
+    +s_{\mathrm{protect}}\frac{k_{t,i}^2}{r_t}.
+  \label{eq:discussion-split-variational-variance}
+\end{align}
+The mean coefficient in Equation~\eqref{eq:discussion-split-variational-mean} is exactly the
+gain in Equation~\eqref{eq:discussion-two-information-scales}, and
+Equation~\eqref{eq:discussion-split-variational-variance} is its protection update. Current
+DiagKLA is therefore the optimizer of
+$\mathcal{J}^{\mathrm{split}}(q_{t,j};1,s)$.
+
+The connection to the power-posterior ELBO in
+Equation~\eqref{eq:discussion-power-posterior-elbo} follows by expanding its expected Gaussian
+negative log likelihood. Define
+\begin{equation}
+  R_{t,j}
+  =\left(v_{t,j}-\vct{k}_t^\top\vct{\mu}_{t,j}\right)^2,
+  \qquad
+  V_t=\vct{k}_t^\top\diag(\vct{p}_t)\vct{k}_t.
+  \label{eq:discussion-mean-variance-loss-terms}
+\end{equation}
+Then
+\begin{equation}
+  \mathbb{E}_{q_{t,j}}
+  \!\left[\left(v_{t,j}-\vct{k}_t^\top\vct{s}_{t,j}^\star\right)^2\right]
+  =R_{t,j}+V_t.
+  \label{eq:discussion-mean-variance-loss-decomposition}
+\end{equation}
+Consequently, the negative power ELBO is
+\begin{equation}
+  -\mathcal{L}_{t,j}^{(s)}(q_{t,j})
+  =\operatorname{KL}(q_{t,j}\,\|\,\widehat\pi_{t,j})
+   +\frac{s}{2r_t}(R_{t,j}+V_t)
+   +\frac{s}{2}\log(2\pi r_t).
+  \label{eq:discussion-negative-power-elbo-expanded}
+\end{equation}
+Remove only the Gaussian normalizer, which is independent of $q_{t,j}$ for fixed $r_t$, by
+defining
+\begin{equation}
+  \overline{\mathcal{J}}_{t,j}^{(s)}(q_{t,j})
+  =-\mathcal{L}_{t,j}^{(s)}(q_{t,j})
+   -\frac{s}{2}\log(2\pi r_t).
+  \label{eq:discussion-negative-power-elbo-q-objective}
+\end{equation}
+Equation~\eqref{eq:discussion-split-variational-objective} can then be written exactly as
+\begin{equation}
+  \mathcal{J}_{t,j}^{\mathrm{split}}
+    (q_{t,j};s_{\mathrm{write}},s_{\mathrm{protect}})
+  =\overline{\mathcal{J}}_{t,j}^{(s_{\mathrm{write}})}(q_{t,j})
+   +\frac{s_{\mathrm{protect}}-s_{\mathrm{write}}}{2r_t}V_t.
+  \label{eq:discussion-split-versus-power-elbo}
+\end{equation}
+Thus equal scales recover the power-posterior variational objective up to its $q$-independent
+normalizer. Current DiagKLA has the particularly simple form
+\begin{equation}
+  \mathcal{J}_{t,j}^{\mathrm{split}}(q_{t,j};1,s)
+  =\overline{\mathcal{J}}_{t,j}^{(1)}(q_{t,j})
+   +\frac{s-1}{2r_t}V_t.
+  \label{eq:discussion-current-diagkla-variational-objective}
+\end{equation}
+It is ordinary mean-field variational inference plus an additional predictive-variance penalty:
+the extra term increases future protection without strengthening the current mean update. A
+single Gaussian likelihood must weight $R_{t,j}$ and $V_t$ equally, so unequal scales do not
+define the ELBO of one coherent observation model. They instead define a convex,
+decision-oriented mean--uncertainty objective with separate costs for present assimilation and
+future protection. If $r_t$ is optimized through this objective rather than held fixed during the
+variational update, its Gaussian normalizer in
+Equation~\eqref{eq:discussion-negative-power-elbo-expanded} must be retained.
+
+A factorial comparison of $(1,1)$, $(1,d_k)$,
 $(d_k,1)$, and $(d_k,d_k)$ would separate current assimilation from future protection; because
 $s_{\mathrm{write}}=d_k$ may saturate the current correction, a gain-matched intermediate value
 should also be included. Log the same-token $\beta_t^{\mathrm{eff}}$ and residual contraction,
@@ -537,9 +914,18 @@ the current gain, whereas increasing only $s_{\mathrm{protect}}$ does not. The r
 dimensionless quantities are $z_t/r_t$ for the current write and
 $s\widehat p_{t,i}k_{t,i}^2/r_t$ for the confidence update. These, together with
 $\omega_{t,i}/\widehat p_{t,i}$, should be measured before attributing the result to $r_t$.
-Likewise, if $r_t$ is freely learned, a globally coherent $s$ is largely reparameterizable into
-$r_t/s$; the present decoupled scale is not redundant because it changes protection without
-changing that observation's same-token write locally.
+More generally, if $r_t$ is freely learned, the triplet
+$(r_t,s_{\mathrm{write}},s_{\mathrm{protect}})$ is overparameterized: the updates depend only on
+\begin{equation}
+  r_t^{\mathrm{write}}=\frac{r_t}{s_{\mathrm{write}}},
+  \qquad
+  \rho_t=\frac{s_{\mathrm{protect}}}{s_{\mathrm{write}}}.
+  \label{eq:discussion-write-protect-identifiable-parameters}
+\end{equation}
+Here $r_t^{\mathrm{write}}$ sets current assimilation and $\rho_t$ is the identifiable
+protection-to-write ratio. The present decoupled scale is not redundant: current DiagKLA fixes
+$s_{\mathrm{write}}=1$ and uses $\rho_t=s$ to change future protection without changing that
+observation's same-token write locally.
 
 \subsection{An exact posterior-diagonal alternative}
 
@@ -620,9 +1006,143 @@ A direct ablation should compare the current M\"obius precision scan against thi
 projection first with $s=1$, and then, separately, with the coherent calibrated choice
 $r_t^{\mathrm{eff}}=r_t/d_k$.
 
-\paragraph{Is the moment projection likely to be a better mixer?}
-It is a better approximation to the one-step posterior covariance, but it is not necessarily a
-better drop-in strategy for associative memory. Consider the symmetric case
+\subsection{A tighter one-step approximation that preserves the scan}
+\label{subsec:discussion-process-floor-approximation}
+
+Yes, there is a better approximation in either of two relevant senses. If only one-step posterior
+fidelity matters, the moment projection above exactly matches the marginal variances. If the
+independent scan is a hard constraint, the process-noise-floor rule below is pointwise no worse
+than the $s=1$ and $s=d_k$ rules, and generically better, in conditional one-step
+marginal-variance error at the cost of a token-local reduction.
+
+Equation~\eqref{eq:discussion-exact-diag-information} is the forward-KL moment projection of this
+one-step posterior: it matches every exact marginal variance. Its obstacle is not arithmetic cost
+but scan structure, because the update for coordinate $i$ depends on the recurrent uncertainty in
+every coordinate $j\ne i$. If the independent $2\times2$ M\"obius scan is a hard constraint, a
+pointwise no-worse approximation can nevertheless retain the part of this cross-coordinate
+interference that is known before the scan, with strict improvement under the conditions below.
+
+In particular, the prediction step and nonnegative process noise imply
+\begin{equation}
+  \widehat p_{t,j}
+  =\alpha_{t,j}^2p_{t-1,j}+\omega_{t,j}
+  \geq \omega_{t,j}.
+  \label{eq:discussion-predicted-variance-floor}
+\end{equation}
+Define the token-local process-noise energy outside coordinate $i$ by
+\begin{equation}
+  L_t^{\omega}=\sum_j\omega_{t,j}k_{t,j}^2,
+  \qquad
+  L_{t,-i}^{\omega}=L_t^{\omega}-\omega_{t,i}k_{t,i}^2,
+  \label{eq:discussion-process-floor-energy}
+\end{equation}
+and use the information increment
+\begin{equation}
+  u_{t,i}^{\mathrm{floor}}
+  =\frac{k_{t,i}^2}{r_t+L_{t,-i}^{\omega}},
+  \qquad
+  p_{t,i}^{\mathrm{floor}}
+  =\left(\widehat p_{t,i}^{-1}+u_{t,i}^{\mathrm{floor}}\right)^{-1}.
+  \label{eq:discussion-process-floor-update}
+\end{equation}
+Compared with the $s=1$ reverse-KL rule, this update no longer pretends that the other key
+coordinates have zero uncertainty: it accounts for the uncertainty injected at the current
+prediction step. It becomes the exact moment projection whenever
+$\widehat p_{t,j}=\omega_{t,j}$ for every active $j\ne i$, for example when there is no carried
+uncertainty in those coordinates.
+
+The improvement is pointwise, not merely heuristic. Let
+\begin{equation}
+  S_{t,-i}=\sum_{j\ne i}\widehat p_{t,j}k_{t,j}^2,
+  \qquad
+  u_{t,i}^{\mathrm{mom}}=\frac{k_{t,i}^2}{r_t+S_{t,-i}},
+  \qquad
+  u_{t,i}^{\mathrm{rev}}=\frac{k_{t,i}^2}{r_t}.
+  \label{eq:discussion-floor-comparison-increments}
+\end{equation}
+Equations~\eqref{eq:discussion-predicted-variance-floor}--
+\eqref{eq:discussion-process-floor-energy} give
+$0\leq L_{t,-i}^{\omega}\leq S_{t,-i}$. Hence, for $d_k\geq1$,
+\begin{equation}
+  d_k\frac{k_{t,i}^2}{r_t}
+  \geq u_{t,i}^{\mathrm{rev}}
+  \geq u_{t,i}^{\mathrm{floor}}
+  \geq u_{t,i}^{\mathrm{mom}},
+  \qquad
+  p_{t,i}^{\mathrm{proj},d_k}
+  \leq p_{t,i}^{\mathrm{rev}}
+  \leq p_{t,i}^{\mathrm{floor}}
+  \leq p_{t,i}^{\mathrm{mom}}.
+  \label{eq:discussion-floor-ordering}
+\end{equation}
+Thus, holding the incoming $\widehat{\vct{p}}_t$ fixed,
+$p_{t,i}^{\mathrm{floor}}$ is always at least as close in absolute variance to the exact one-step
+marginal as either the $s=1$ rule or the production $s=d_k$ rule. The improvement over $s=1$ is
+strict when $k_{t,i}\ne0$ and
+$L_{t,-i}^{\omega}>0$. This ordering concerns posterior fidelity only; it does not imply that the
+less confident state is a better associative-memory controller, nor does it directly order the
+trajectories produced after the different states are fed into later predictions.
+
+Crucially, $L_t^{\omega}$ is a current-token reduction: it depends only on
+$(\vct{\omega}_t,\vct{k}_t)$ and not on a recurrent state. Substituting
+$u_{t,i}^{\mathrm{floor}}$ for $u_{t,i}$ in Equation~\eqref{eq:discussion-mobius-matrix} gives
+\begin{equation}
+  \vct{M}_{t,i}^{\mathrm{floor}}
+  =\begin{pmatrix}
+    1+u_{t,i}^{\mathrm{floor}}\omega_{t,i}
+      &u_{t,i}^{\mathrm{floor}}\alpha_{t,i}^2\\[2pt]
+    \omega_{t,i}&\alpha_{t,i}^2
+  \end{pmatrix}.
+  \label{eq:discussion-floor-mobius-matrix}
+\end{equation}
+The mathematical prefix-scan and carry structure is therefore unchanged. An implementation still
+has to modify the token-map builder and its backward pass: it must either store $L_t^{\omega}$ or
+recompute one $O(d_k)$ cross-coordinate reduction wherever token maps are reconstructed, and the
+backward acquires coupled gradients through that reduction. In finite precision,
+$L_{t,-i}^{\omega}$ should be evaluated as
+$\max\{L_t^{\omega}-\omega_{t,i}k_{t,i}^2,0\}$ to preserve the analytic nonnegativity when a key is
+nearly one-hot.
+
+There is also a sharp reason not to expect an exact marginal update from any independent
+input-only scan. Holding the current-token projections fixed, for $j\ne i$
+Equation~\eqref{eq:discussion-exact-diag-information} has
+\begin{equation}
+  \frac{\partial (p_{t,i}^{\mathrm{mom}})^{-1}}
+    {\partial p_{t-1,j}}
+  =-\frac{k_{t,i}^2\alpha_{t,j}^2k_{t,j}^2}
+    {(r_t+S_{t,-i})^2},
+  \label{eq:discussion-moment-cross-jacobian}
+\end{equation}
+which is nonzero precisely when $k_{t,i}k_{t,j}\alpha_{t,j}\ne0$. By contrast, a per-coordinate map
+$c_{t,i}=F_{t,i}(c_{t-1,i};\vct{x}_t)$ whose coefficients depend only on the current token has
+zero derivative with respect to $p_{t-1,j}$. Therefore no single independent raw-input
+$2\times2$ M\"obius scan can reproduce the exact transition for arbitrary prior diagonal states
+when $k_{t,i}k_{t,j}\alpha_{t,j}\ne0$.
+Equation~\eqref{eq:discussion-process-floor-update} is a principled compromise: it uses the
+simple, universally valid current-step lower bound on the omitted interference that requires no
+recurrent state, while preserving the production scan.
+
+For direct fidelity to Equation~\eqref{eq:discussion-exact-posterior-diagonal}, the rule should use
+$r_t$ as written and no $d_k$ multiplier. If stronger protection is useful for the mixer, introduce
+it explicitly rather than calling it a covariance approximation,
+\begin{equation}
+  c_{t,i}
+  =\widehat p_{t,i}^{-1}
+   +g_{\mathrm{protect}}u_{t,i}^{\mathrm{floor}}.
+  \label{eq:discussion-floor-protection-scale}
+\end{equation}
+Here $g_{\mathrm{protect}}=1$ is the posterior-fidelity candidate, while
+$g_{\mathrm{protect}}>1$ is a retention calibration analogous to the current
+$s_{\mathrm{protect}}$. To preserve the input-only scan, $g_{\mathrm{protect}}$ must be constant or
+a function only of the current token, not of a recurrent statistic. Once
+$g_{\mathrm{protect}}\ne1$, the ordering in Equation~\eqref{eq:discussion-floor-ordering} need not
+hold.
+
+\subsection{Posterior fidelity is not mixer quality}
+
+The moment projection is exact for the one-step posterior diagonal, and the process-floor rule is
+a tighter conditional one-step marginal approximation than the current rule, but neither is
+necessarily a better drop-in strategy for associative memory. Consider the symmetric case
 $\widehat p_{t,i}=\widehat p_t$ and $k_{t,i}^2=1/d_k$, and define the effective write strength
 \begin{equation}
   \beta_t
@@ -647,45 +1167,57 @@ smaller posterior variance than the moment projection,
 \begin{equation}
   p_t^{\mathrm{proj},1}
   = \frac{\widehat p_t d_k r_t}{d_k r_t+\widehat p_t}
-  < p_t^{\mathrm{mom}}.
+  \leq p_t^{\mathrm{mom}},
   \label{eq:discussion-proj-one-versus-moment}
 \end{equation}
-Because the empirical information-scale sweep found $s=d_k$ substantially better than $s=1$,
-an unretuned moment projection is likely to retain still more uncertainty, produce larger future
-write/erase gains, and increase interference. It may nevertheless help tasks that require rapid
-adaptation or frequent replacement of old associations. Posterior faithfulness and memory
-quality are therefore distinct hypotheses.
+with strict inequality for $d_k>1$.
+The corrected information-scale sweep found standard-suite quality nearly flat and some
+long-context recall improved at larger $s$; it did not establish $d_k$ as a unique optimum.
+For $d_k>1$, even the $s=1$ projection retains less variance than the moment projection, so an
+unretuned moment variant is likely to produce larger future write/erase gains and more
+interference. It may nevertheless help tasks that require rapid adaptation or frequent replacement
+of old associations. Posterior faithfulness and memory quality are therefore distinct hypotheses.
 
 The process-noise scale makes a raw comparison especially unfavorable to the moment variant.
 Prediction injects $O(d_k\omega_t)$ total diagonal uncertainty per token, whereas a rank-one
 moment update removes only $O(1)$ total uncertainty. Near $\alpha_t^2=1$, matching the stationary
-effective gain of the current $s=d_k$ rule requires approximately
+effective gain of the current $s=d_k$ rule requires approximately, when the retention-loss term
+proportional to $1-\alpha_t^2$ is negligible,
 \begin{equation}
   \omega_t^{\mathrm{mom}}
   \simeq \frac{\omega_t^{\mathrm{proj}}}{d_k},
   \label{eq:discussion-moment-omega-calibration}
 \end{equation}
-or, equivalently at the level of the stationary covariance-to-noise ratio, an observation-noise
-scale roughly $d_k$ times larger. Without this recalibration, the current initialization
+or, at fixed process-noise scale and matching the stationary covariance-to-noise ratio, an
+observation-noise scale roughly $d_k$ times larger. Without this recalibration, the current initialization
 $\omega_t\simeq\omega_{\min}+\operatorname{softplus}(0)$ can drive the moment filter toward high
 uncertainty and $\beta_t^{\mathrm{eff}}$ close to one.
 
-The appropriate comparison is therefore four-way:
+The appropriate comparison is therefore seven-way:
 \begin{enumerate}
   \item the production M\"obius projection with $s=d_k$;
   \item the same projection with $s=1$;
-  \item the recurrent moment projection with the same $\omega/r$ parameterization;
+  \item the process-floor approximation with $g_{\mathrm{protect}}=1$;
+  \item the process-floor approximation with a fixed $g_{\mathrm{protect}}$ chosen offline to match
+    the production next-token gain or memory-half-life distribution;
+  \item the recurrent moment projection with the same $\omega/r$ parameterization and
+    $r_t^{\mathrm{eff}}=r_t$;
+  \item the recurrent moment projection with the coherent likelihood scale
+    $r_t^{\mathrm{eff}}=r_t/d_k$ in both its same-token gain and posterior update;
   \item the recurrent moment projection with $\omega$ initialized and floored at approximately
     $1/d_k$ of the production scale, or otherwise calibrated to match the initial and stationary
     $\beta_t^{\mathrm{eff}}$ distribution.
 \end{enumerate}
-The raw comparison measures the behavior of each formula under identical parameters; the
-gain-matched comparison isolates posterior geometry from overwrite temperature. Both should log
+The raw comparisons measure the behavior of each formula under identical parameters; the
+gain- or half-life-matched comparisons isolate posterior geometry from overwrite temperature.
+All variants should log
 $\beta_t^{\mathrm{eff}}$, covariance and process-noise quantiles, effective memory half-life, and
 write/erase magnitude. Repeated-key and orthogonal-key synthetic tasks should precede language
 model pretraining, because they directly separate rapid rewriting from protection against
-cross-talk. The moment projection should replace the current rule only if it improves these
-matched comparisons enough to compensate for losing the parallel M\"obius gain scan.
+cross-talk. Among covariance approximations, the process-floor rule is the first candidate to test
+because it improves the conditional one-step marginal approximation without losing the parallel
+M\"obius gain scan. The moment projection should replace it only if the matched comparison
+justifies the additional recurrent gain computation.
 
 \subsection{Anisotropic write direction and initialization}
 
@@ -736,20 +1268,25 @@ checkpoints.
 Two supporting controls are needed:
 \begin{enumerate}
   \item Compare the projected information state in
-    Equation~\eqref{eq:discussion-projected-posterior-diagonal} with the sequential exact-posterior
-    diagonal in Equation~\eqref{eq:discussion-exact-posterior-diagonal} on a short synthetic task,
-    including orthogonal keys with identical elementwise squares.
+    Equation~\eqref{eq:discussion-projected-posterior-diagonal}, its $s=1$ version, and the
+    process-floor state in Equation~\eqref{eq:discussion-process-floor-update} with both the
+    sequential moment-projected oracle in
+    Equation~\eqref{eq:discussion-exact-posterior-diagonal} and the dense ExactKLA covariance
+    diagonal on a short synthetic task, including orthogonal keys with identical elementwise
+    squares.
   \item Run a matched three-seed 220M comparison of DiagKLA, IsoKLA, and the stabilized IsoKLA
     variant with identical world size, data order, and parameter count. Validate the S-NIAH-2
     advantage across context lengths and needle depths before spending on a new large-scale run.
 \end{enumerate}
 
-A scale point above the current boundary is also warranted. Test $2d_k$ first and add $4d_k$
-only if performance continues to improve. This is an overwrite-temperature diagnostic: larger
-$s$ increases the post-write confidence state. A token-local change does not strengthen that
-token's write, while a global change alters later current writes through their covariance prefix.
-The sweep can locate a better retention--plasticity operating point, but it cannot resolve the
-posterior inconsistency or establish that off-key anisotropy is useful.
+The immediate scale control is to complete the full long-context grid for the existing $s=d_k$
+checkpoint and compare it with the completed $s=4d_k$ arm; the currently comparable cells do not
+resolve their ordering. Only if $4d_k$ wins consistently is a point above that boundary warranted.
+This is an overwrite-temperature diagnostic: larger $s$ increases the post-write confidence
+state. A token-local change does not strengthen that token's write, while a global change alters
+later current writes through their covariance prefix. The sweep can locate a better
+retention--plasticity operating point, but it cannot resolve the posterior inconsistency or
+establish that off-key anisotropy is useful.
 
 \section{The Zero-Process-Noise Limit}
 \label{sec:discussion-zero-process-noise}
@@ -795,19 +1332,10 @@ conflated.
 
 \subsection{What the limit does buy}
 
-The per-channel information map is linear fractional, with matrix
-\begin{equation}
-  \vct{M}_t
-  =\begin{pmatrix}
-    1+u_{t,i}\omega_{t,i} & u_{t,i}\alpha_{t,i}^2\\[2pt]
-    \omega_{t,i} & \alpha_{t,i}^2
-  \end{pmatrix},
-  \qquad
-  u_{t,i}=s\frac{k_{t,i}^2}{r_t},
-  \label{eq:discussion-mobius-matrix}
-\end{equation}
-composed along the sequence by $2\times2$ products, which is what makes the gain scan
-logarithmic depth. At $\omega_{t,i}=0$ the lower-left entry vanishes, $\vct{M}_t$ becomes upper
+The general per-channel information map in
+Equation~\eqref{eq:discussion-projected-info-mobius} is represented by the matrix in
+Equation~\eqref{eq:discussion-mobius-matrix}; its $2\times2$ products admit a logarithmic-depth
+prefix scan. At $\omega_{t,i}=0$ the lower-left entry vanishes, $\vct{M}_{t,i}$ becomes upper
 triangular, and the M\"obius scan degenerates to the affine recurrence
 \begin{equation}
   c_{t,i}=\frac{c_{t-1,i}}{\alpha_{t,i}^2}+s\frac{k_{t,i}^2}{r_t},
