@@ -496,10 +496,7 @@ DeltaNet, Gated DeltaNet, and KDA are obtained by choosing different process mod
 Thus the three models share the same measurement model and residual write; they differ only
 in how the memory is predicted before the write. Relative to the Kalman optimal update, they
 freeze the uncertainty dynamics and replace the adaptive gain with the fixed first-order
-direction $\beta_t \ve{k}_t$. This does not require assuming $\ve{\Omega}_t=0$; rather, the delta-rule
-approximation ignores the covariance prediction
-$\widehat{\ve{P}}_t=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t$ altogether, so the gain no longer depends on the
-process model $\ve{D}_t$ or the drift uncertainty $\ve{\Omega}_t$.
+direction $\beta_t \ve{k}_t$.
 
 
 % =============================================================================
@@ -859,63 +856,60 @@ approximation.
 \section{Experiments}
 \label{sec:experiments}
 
-\subsection{Synthetic Experiments}
-\label{sec:synthetic-experiments}
+\subsection{Experimental Setup}
+\label{sec:experimental-setup}
 
-We evaluate Kalman Delta Networks on the synthetic multi-query associative-recall test used by
-Kimi Linear~\citep{kimiteam2025kimilinear}. This task isolates binding and retrieval under
-many interleaved updates. Following their setup, all synthetic runs use a small language
-model with $2$ layers, $2$ attention heads, and head dimension $128$. We train
-for at most $20{,}000$ steps and select the best training curve over the learning-rate grid
-$\{5\times 10^{-5}, 10^{-4}, 5\times 10^{-4}, 10^{-3}\}$. We report two views of the same
-protocol: peak accuracy as the sequence length increases from $256$ to $2048$ tokens, and
-convergence speed at a fixed context length of $1024$ tokens.
+We exactly reproduce the $1.3$B/$100$B training setup of
+GDN-2~\citep{hatamizadeh2026gdn2} and extend the same controlled protocol to smaller scales. Our
+goal is to isolate the effectiveness of different token mixers in recurrent-only and hybrid
+settings, rather than to search for a new architecture. Within each comparison, we therefore hold
+the data, surrounding backbone, optimization recipe, and evaluation protocol fixed while matching
+model capacity.
 
-\paragraph{Multi-query associative recall.}
-Multi-query associative recall (MQAR) tests whether the model can bind multiple keys to
-their values and retrieve several queried values at the end of the context. A typical input
-contains interleaved key--value pairs, then a separator, then query keys; for example,
-\[
-  \texttt{A 1 C 3 B 0 M 8 G 5 E 4 <sep> B G},
-\]
-with target outputs
-\[
-  \texttt{0 5}
-\]
-at the query positions. This task directly probes interference in fixed-size associative
-memory: the model must retain the relevant bindings while ignoring unrelated pairs.
+\paragraph{Pretraining and evaluation datasets.}
+We pretrain all models from scratch on FineWeb-Edu~\citep{penedo2024fineweb} at three scales:
+$220$M parameters on $20$B tokens, $750$M parameters on $50$B tokens, and $1.3$B parameters on
+$100$B tokens. We evaluate language modeling with perplexity on WikiText and LAMBADA, and zero-shot
+reasoning with LAMBADA, PIQA, HellaSwag, WinoGrande, ARC-easy, and ARC-challenge. We evaluate
+in-context retrieval on the single- and multi-key needle-in-a-haystack tasks from
+RULER~\citep{hsieh2024ruler}.
+
+\paragraph{Model architectures.}
+We study both recurrent-only and hybrid architectures. At each scale, all recurrent-only models
+use the same backbone; only the token mixer and the feed-forward width required to match parameter
+count vary. Recurrent-state size is additionally matched at $220$M and $750$M. At $1.3$B/$100$B,
+we evaluate a hybrid architecture that alternates nine recurrent mixer layers with nine
+sliding-window-attention (SWA) layers using a $2$K window. For hybrid GDN-2, KDA, and Isotropic
+KDN, we calibrate the feed-forward widths to match non-embedding parameter count within $0.03\%$.
+
+\paragraph{Baselines.}
+We compare with DeltaNet~\citep{schlag2021linear}, Gated DeltaNet~\citep{yang2024gdn},
+GDN-2~\citep{hatamizadeh2026gdn2}, KDA~\citep{kimiteam2025kimilinear}, and the SISO and MIMO
+variants of Mamba-3~\citep{lahoti2026mamba3}. Our models are the Isotropic and Diagonal Kalman
+Delta Networks developed above. The available baselines differ by scale, as reported in the result
+tables; the hybrid comparison includes GDN-2, KDA, and Isotropic KDN.
+
+\paragraph{Implementation details.}
+We use the same training recipe as GDN-2~\citep{hatamizadeh2026gdn2} for all models: AdamW with a
+peak learning rate of $4\times10^{-4}$, $\beta=(0.9,0.95)$, weight decay $0.1$, gradient clipping
+at $1.0$, and a cosine schedule with a $1\%$ token-budget warm-up ($0.2$B/$0.5$B/$1$B tokens at
+the three scales). All runs use a global
+batch of $0.5$M tokens, a sequence length of $4$K, and the same data seed within each comparison.
+We evaluate zero-shot performance with the standard harness for recurrent language models. For
+RULER, we fit essay contexts in $25$-word rather than $500$-word increments, draw a deterministic
+random window from each essay rather than using its fixed opening prefix, and seed all keys, values,
+and needle depths so every model receives the same $500$ samples per cell.
 
 
-\subsection{Pretraining Experiments}
-\label{sec:pretraining-experiments}
-
-\paragraph{Setup.}
-Beyond the synthetic probes, we pretrain Kalman Delta Networks and competing linear-attention
-mixers from scratch on FineWeb-Edu at three scales: a $220$M-parameter model trained on $20$B
-tokens, used for a controlled mixer ablation, a $750$M-parameter model trained on $50$B
-tokens, and a $1.3$B-parameter model trained on $100$B tokens. At each scale all recurrent-only
-mixers share the same backbone, optimizer, corpus, and data seed, and are matched both in parameter
-count---the feed-forward width is calibrated per mixer---and in recurrent-state size, so that
-measured differences isolate the update rule rather than model capacity. At $1.3$B/$100$B we also
-evaluate a hybrid layout that alternates nine recurrent mixer layers with nine sliding-window
-attention (SWA) layers using a $2$K window. We compare GDN-2, KDA, and the Isotropic KDN in this
-layout and calibrate their feed-forward widths to match non-embedding parameter count within
-$0.03\%$. Hybrid GDN-2 and Isotropic KDN use 32 GPUs, whereas KDA uses 16 GPUs with two-step
-gradient accumulation to preserve the global batch; its streaming-data rank sharding therefore
-differs, so comparisons involving hybrid KDA are observational. We train with AdamW (peak learning
-rate $4\times10^{-4}$, $\beta=(0.9,0.95)$, weight
-decay $0.1$), gradient clipping at $1.0$, a cosine schedule with a $1\%$ token-budget warm-up
-($0.2$B/$0.5$B/$1$B tokens at the three scales), a global batch of $0.5$M tokens, and a sequence
-length of $4$K. We compare against
-DeltaNet~\citep{schlag2021linear}, Gated DeltaNet~\citep{yang2024gdn},
-GDN-2~\citep{hatamizadeh2026gdn2}, and KDA~\citep{kimiteam2025kimilinear}; the Kalman Delta
-Networks are the Isotropic and Diagonal variants developed above. We evaluate zero-shot with the
-standard harness for recurrent language models and report in-context retrieval on RULER.
+% =============================================================================
+\subsection{Experimental Results}
+\label{sec:experimental-results}
 
 \paragraph{Language modeling and commonsense reasoning.}
 Table~\ref{tab:pretrain-lm} reports WikiText and LAMBADA perplexity, zero-shot LAMBADA accuracy,
-and the commonsense suite (PIQA, HellaSwag, WinoGrande, ARC-easy, ARC-challenge). Because the
-recurrent-state size is matched, gains reflect a stronger update rule rather than a larger memory.
+and the commonsense suite (PIQA, HellaSwag, WinoGrande, ARC-easy, ARC-challenge). In the
+state-matched $220$M and $750$M comparisons, gains reflect a stronger update rule rather than a
+larger recurrent memory.
 At $220$M/$20$B the two KDN variants and KDA form a clear top group, improving average accuracy
 over GDN-2, Gated DeltaNet, and DeltaNet by roughly two points, with the Isotropic KDN attaining
 the best perplexity and the best average. At $750$M/$50$B, the Diagonal KDN leads LAMBADA perplexity
@@ -923,7 +917,9 @@ and accuracy, WinoGrande, ARC-easy, and the average; Mamba-3 (MIMO) leads HellaS
 and the Isotropic KDN leads WikiText, while KDA and both KDN variants tie on PIQA. The Diagonal KDN
 has the best average ($54.97$), followed closely by the Isotropic KDN ($54.41$) and Mamba-3 (MIMO;
 $54.39$), then KDA ($53.87$), Mamba-3 (SISO; $52.93$), and GDN-2 ($51.45$).
-At $1.3$B/$100$B all three uncertainty-gated mixers beat GDN-2 on \emph{every} column --- average
+At $1.3$B/$100$B, Mamba-3 (SISO) improves WikiText perplexity over GDN-2 ($15.94$ versus $16.15$)
+but is slightly lower on average accuracy ($58.20$ versus $58.51$). All three uncertainty-gated
+mixers beat GDN-2 on \emph{every} column --- average
 accuracy rises from $58.51$ to $60.06$--$60.35$ and WikiText perplexity falls from $16.15$ to
 $15.02$--$15.40$ --- but they no longer separate from each other: the three averages span
 $0.29$ points ($60.06$ / $60.28$ / $60.35$) against per-task standard errors of $0.5$--$1.4$ points,
@@ -968,6 +964,7 @@ Diagonal KDN    & \underline{18.64} & \textbf{14.15} & \textbf{45.66} & \textbf{
 \midrule
 \multicolumn{10}{@{}l}{\emph{Recurrent-only, 1.3B parameters, 100B tokens}}\\
 GDN-2           & 16.15 & 11.29 & 49.45 & 72.63 & 57.80 & 59.19 & 72.73 & 39.25 & 58.51 \\
+Mamba-3 (SISO)  & 15.94 & 11.98 & 47.45 & 73.61 & 59.39 & 57.77 & 72.64 & 38.31 & 58.20 \\
 KDA             & 15.40 & \underline{10.09} & \textbf{51.15} & \textbf{74.16} & \textbf{60.61} & \underline{60.54} & \underline{73.48} & \underline{41.72} & \underline{60.28} \\
 Isotropic KDN   & \underline{15.30} & \textbf{9.98} & \underline{50.96} & 73.23 & 60.23 & \textbf{61.33} & \textbf{74.71} & 41.64 & \textbf{60.35} \\
 Diagonal KDN    & \textbf{15.02} & 10.60 & 49.91 & \underline{73.88} & \underline{60.29} & 60.14 & 73.32 & \textbf{42.83} & 60.06 \\
