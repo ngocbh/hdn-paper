@@ -19,7 +19,6 @@
 \newcommand{\Mdom}{M}
 \newcommand{\Cret}{C}
 \newcommand{\RunDiagnostics}[4]{%
-  \clearpage
   {\large\bfseries #1: #3}\par
   \vspace{2pt}
   {\footnotesize #4\par}
@@ -55,15 +54,16 @@ current-code H200 probes.  The primary comparison is a nominally matched 750M fa
 trained with information scales
 $s\in\{1,\sqrt{128},128,512\}$.  A complementary $4\times4$ crossed experiment
 holds each trained checkpoint fixed and changes runtime $s$ over the same four values.
-The learned gain direction is remarkably stable: nominal trained gain anisotropy stays
+The trained-checkpoint gain direction is remarkably stable: nominal gain anisotropy stays
 near $0.64$ even though canonical initialization controls range from $0.53$ to $0.32$.
 Covariance geometry is not scale-invariant.  Nominal posterior anisotropy rises from
 $0.641$ to $0.795$, while normalized posterior effective rank falls from $0.721$ to
 $0.522$.  In the fixed-weight intervention, changing $s$ from $1$ to $512$ increases
 posterior anisotropy in every checkpoint by $0.166$--$0.212$ and reduces posterior
 covariance by $87.3\%$--$88.9\%$.  The same intervention rotates the gain only modestly
-but strongly reduces its channel-wise magnitude.  DiagKLA therefore learns a robustly
-anisotropic gain direction, while \code{info\_scale} primarily controls how strongly
+but strongly reduces the mean channelwise coefficient $\overline\beta_{\rm ch}$.  Trained
+DiagKLA therefore exhibits a robustly anisotropic gain direction, while
+\code{info\_scale} primarily controls how strongly
 the measurement update contracts and concentrates uncertainty across channels.
 These diagnostics establish state geometry, not a causal effect on language-model loss.
 \end{abstract}
@@ -83,13 +83,15 @@ This report addresses three questions.
 
 The answer to the first question is yes under the measured token stream.  Posterior
 covariance anisotropy is $0.64$--$0.79$ in the four nominal arms, with normalized
-effective rank $0.72$--$0.52$.  This concentration is not explained by widespread dead
-channels: the trained nominal cold-channel fraction is only $2.8\%$--$4.3\%$.
+effective rank $0.72$--$0.52$.  It is accompanied by only a $2.8\%$--$4.3\%$ relative
+lower tail in $\beta_{\rm ch}$ under the cold-channel threshold; that diagnostic does not
+exclude a few hot channels or uniform absolute shrinkage.
 The answer to the second question is that increasing $s$ makes the measurement term
 dominate the information update, sharply contracts $p$, increases covariance spread and
-anisotropy, and decreases effective rank.  It also reduces mean channel gain, but changes
-gain direction much less.  The crossed grid makes these runtime effects visible at fixed
-weights.  Cross-checkpoint trends additionally show learned compensation, but those
+anisotropy, and decreases effective rank.  It also reduces the mean channelwise gain
+coefficient, but changes gain direction much less.  The crossed grid makes these runtime
+effects visible at fixed weights.  Cross-checkpoint trends are additionally consistent with
+learned compensation, but those
 trends are descriptive because the checkpoints were trained independently.
 
 \paragraph{Scope of ``effect.''}
@@ -97,8 +99,9 @@ The crossed rows identify the total-network effect of a runtime scale interventi
 recurrent layer is changed, which in turn changes downstream hidden states, keys, gates,
 and covariance.  They are not isolated one-layer derivatives.  We do not isotropize a
 trained covariance while preserving its trace, nor evaluate downstream loss after such an
-intervention.  Consequently this report shows how anisotropy changes the filtering and
-write geometry, but does not claim that anisotropy itself causes an accuracy improvement.
+intervention.  Consequently this report shows how scale interventions covary with anisotropy
+and filtering/write geometry, but does not claim that anisotropy itself causes an accuracy
+improvement.
 
 \section{Experimental design and provenance}
 
@@ -160,8 +163,10 @@ Weights are evaluated in FP32 storage with CUDA BF16 autocast and inference mode
 exclusive production M\"obius state reconstructs the covariance trajectory.  Full-tensor
 checks enforce finite and physical values, the production relation
 $\kappa=\beta_{\mathrm{ch}}\odot k$, the exact scale route, and agreement between gain- and
-state-derived predicted covariance.  Each run seals its summary, NPZ arrays, six plots, exact
-source closure, environment, checkpoint identity, and token identity with SHA-256 hashes.
+state-derived predicted covariance.  Each nominal run seals its summary, NPZ arrays, six
+plots, exact source closure, environment, checkpoint identity, and token identity.  Each
+crossed cell seals its summary, trained NPZ, completion record, and the same provenance
+classes without per-cell plots.  All artifact identities use SHA-256 hashes.
 
 The scientific captures ran in H200 jobs 1705842 (eleven nominal runs) and 1706000
 (sixteen crossed cells).  The final audit validated 11 completed nominal transactions,
@@ -222,8 +227,9 @@ Table~\ref{tab:nominal-vars} reports pooled trained-checkpoint trajectory means.
 across-row differences include training adaptation and are not a causal training-scale
 effect.  Increasing nominal $s$ is associated with lower $\alpha$, lower process uncertainty
 $\omega$, higher observation noise $r$, smaller $\widehat p$ and $p$, and much larger
-information $c$.  Mean channel gain and effective write strength also fall.  The learned
-checkpoints therefore compensate for scale, but do not cancel its covariance contraction.
+information $c$.  Mean channelwise gain coefficient and effective write strength also fall.
+The joint pattern is consistent with partial learned compensation, but does not cancel the
+covariance contraction associated with scale.
 
 \begin{table}[htbp]
 \centering
@@ -260,7 +266,7 @@ checkpoints are descriptive because each point comes from independently trained 
 \label{fig:nominal-means}
 \end{figure}
 
-\subsection{Covariance geometry and learned anisotropy}
+\subsection{Covariance geometry in trained checkpoints}
 
 Table~\ref{tab:nominal-geometry} separates predicted from posterior geometry.  Predicted
 anisotropy changes only modestly across $s$, from $0.650$ to about $0.680$, whereas posterior
@@ -287,20 +293,22 @@ $512$        & 0.637 & 0.319 & 0.680 & 0.795 & 0.522 & 0.565 & 0.435 & 0.029 \\
 \end{tabular}
 \end{table}
 
-Training largely erases the scale dependence of gain direction: trained $\Akap$ spans
-only $0.637$--$0.650$, while the controls fall monotonically from $0.527$ to $0.319$.
-Training also raises posterior anisotropy relative to its control by $0.089$, $0.190$,
-$0.189$, and $0.138$ for increasing scale.  This supports learned channel selectivity,
+Relative to the canonical controls, trained checkpoints exhibit far less scale dependence
+in gain direction: trained $\Akap$ spans only $0.637$--$0.650$, while the controls fall
+monotonically from $0.527$ to $0.319$.  The trained-minus-control posterior-anisotropy
+differences are $0.089$, $0.190$, $0.189$, and $0.138$ for increasing scale.  This is
+consistent with learned channel selectivity,
 although the controls are not exact replays of historical initialization.
 
 \subsection{Depth dependence}
 
-The depth profiles distinguish gain direction from covariance accumulation.  From the first
+The depth profiles distinguish gain direction from covariance depth structure.  From the first
 to final layer, posterior anisotropy changes $0.700\rightarrow0.737$ at $s=128$ and
 $0.740\rightarrow0.788$ at $s=512$.  It is almost flat at $\sqrt{128}$ and slightly decreases
-at $s=1$.  Gain anisotropy remains much flatter.  High-scale covariance concentration
-therefore accumulates through recurrent state updates rather than arising solely from a
-single gain projection.
+at $s=1$.  Gain anisotropy remains much flatter.  Deeper layers therefore exhibit stronger
+high-scale covariance concentration.  Each layer owns a separate recurrent covariance state,
+so this profile reflects layer-specific dynamics connected by hidden activations, not one
+covariance state accumulating across layers.
 
 \begin{table}[htbp]
 \centering
@@ -338,7 +346,7 @@ rises $1.038\rightarrow1.475$, and normalized effective rank falls
 $0.730\rightarrow0.493$.
 
 These directions hold in every row (Table~\ref{tab:crossed-rows}).  In contrast, gain
-anisotropy rises only $0.025$--$0.036$, while mean channel gain falls by
+anisotropy rises only $0.025$--$0.036$, while the mean channelwise gain coefficient falls by
 $0.369$--$0.591$.  Runtime scale therefore has a strong effect on covariance magnitude and
 channel concentration, but only a modest effect on the angle of the gain relative to the key.
 
@@ -435,24 +443,25 @@ size, and training tokens all change together, so this is not an identified size
 
 Three observations fit one coherent picture.
 \begin{enumerate}
-  \item \textbf{Training learns directional selectivity.}  Trained gain anisotropy converges
-  near $0.64$ across the four nominal scales, far above the high-scale initialization
-  controls.  The gain is therefore not well summarized as a scalar multiple of the key.
+  \item \textbf{Trained checkpoints exhibit directional selectivity.}  Gain anisotropy lies
+  near $0.64$ across the four nominal scales, far above the high-scale canonical controls.
+  The gain is therefore not well summarized as a scalar multiple of the key.
   \item \textbf{Scale controls uncertainty concentration more than gain angle.}  At fixed
   weights, increasing $s$ adds channel-wise measurement information proportional to $k_i^2$.
-  The posterior becomes smaller, more unequal across channels, and lower rank.  Mean gain
-  falls strongly, while its off-key fraction changes only slightly.
-  \item \textbf{High-scale concentration accumulates with depth.}  The deeper layers of the
-  $s=128$ and $s=512$ checkpoints show increasing posterior anisotropy, whereas low-scale
-  profiles are nearly flat.  The covariance state carries channel-specific evidence across
-  tokens and layers rather than merely reflecting one instantaneous key.
+  The posterior becomes smaller, more unequal across channels, and lower rank.  The mean
+  channelwise gain coefficient falls strongly, while the gain's off-key fraction changes only
+  slightly.
+  \item \textbf{High-scale concentration is stronger in deeper layers.}  The deeper layers
+  of the $s=128$ and $s=512$ checkpoints show greater posterior anisotropy, whereas low-scale
+  profiles are nearly flat.  Covariance state persists across tokens within each layer;
+  hidden activations, rather than a shared covariance state, connect different layers.
 \end{enumerate}
 
-The low cold-channel fraction matters for interpretation.  A high anisotropy score could be
-produced by broadly collapsing most channels to zero, but only $2.6\%$--$5.3\%$ of crossed
-cells' channels satisfy the cold threshold.  The observed reduction in effective rank is
-therefore distributed channel concentration under this diagnostic, not wholesale channel
-death.
+The low cold-channel fraction is a narrow auxiliary diagnostic.  Only $2.6\%$--$5.3\%$ of
+crossed cells' $\beta_{\rm ch}$ values fall below one tenth of their within-head median.
+Thus high anisotropy and lower effective rank are not accompanied by a large relative lower
+tail in the gain coefficient under this threshold.  The metric cannot distinguish distributed
+covariance heterogeneity from a few hot channels, nor can it detect uniform absolute shrinkage.
 
 \section{Limitations and reading guide}
 
@@ -479,9 +488,9 @@ death.
 
 \section{Conclusion}
 
-DiagKLA checkpoints learn strongly channel-dependent covariance and gain.  The stable trained
-gain anisotropy near $0.64$ shows that this behavior persists across a 512-fold nominal scale
-range after training.  Information scale nevertheless remains a powerful state-control
+Trained DiagKLA checkpoints exhibit strongly channel-dependent covariance and gain.  The
+stable gain anisotropy near $0.64$ shows that this behavior persists across a 512-fold nominal
+scale range in these checkpoints.  Information scale nevertheless remains a powerful state-control
 parameter: at fixed weights it transfers the update from prior retention toward measurement
 information, shrinks posterior covariance by about $88\%$, raises posterior anisotropy by
 $0.17$--$0.21$, and lowers normalized effective rank by $0.20$--$0.29$.  The dominant scale
@@ -489,6 +498,7 @@ effect is therefore covariance contraction and channel concentration, not a larg
 the gain.  These findings motivate a trace-preserving isotropization ablation if the next goal
 is to connect learned anisotropy causally to language-model performance.
 
+\clearpage
 \appendix
 \section{All-checkpoint trained summary}
 
@@ -531,24 +541,34 @@ be mistaken for saved historical initial states.
 
 \RunDiagnostics{R01}{tsz128x4k_100B_diag_kla_1.3B_randgain_repro_ngocbh_diag_kla_1.3B_100B_randgain}{1.3B random-gain, 100B tokens}{Nominal $s=128$; $\Akap=0.646$, $\Apost=0.753$, $\Rpost=0.591$, $\Mdom=0.477$.}
 
+\clearpage
 \RunDiagnostics{R02}{tsz128x4k_20B_repro_ngocbh_diag_kla_220M_randgain_20B}{220M random-gain, 20B tokens}{Head dimension 64 and nominal $s=64$; $\Akap=0.643$, $\Apost=0.707$, $\Rpost=0.649$, $\Mdom=0.327$.}
 
+\clearpage
 \RunDiagnostics{R03}{tsz128x4k_50B_repro_ngocbh_diag_kla_750M_50B_isdk_oldcode_b200_v2}{750M old-code B200 v2}{Nominal $s=128$; historical gain initialization unknown; $\Apost=0.756$, $\Mdom=0.430$.}
 
+\clearpage
 \RunDiagnostics{R04}{tsz128x4k_50B_repro_ngocbh_diag_kla_750M_50B_isdk_oldcode_gdn2mem_h100}{750M old-code GDN2-memory H100}{Nominal $s=128$; historical gain initialization unknown; $\Apost=0.758$, $\Mdom=0.434$.}
 
+\clearpage
 \RunDiagnostics{R05}{tsz128x4k_50B_repro_ngocbh_diag_kla_750M_50B_isdk_oldcode_h100}{750M old-code H100}{Nominal $s=128$; historical gain initialization unknown; $\Apost=0.758$, $\Mdom=0.433$.}
 
+\clearpage
 \RunDiagnostics{R06}{tsz128x4k_50B_repro_ngocbh_diag_kla_750M_is4dk_randgain_50B}{750M random-gain, $s=512$}{Highest nominal scale; $\Akap=0.637$, $\Apost=0.795$, $\Rpost=0.522$, $\Mdom=0.565$.}
 
+\clearpage
 \RunDiagnostics{R07}{tsz128x4k_50B_repro_ngocbh_diag_kla_750M_isdk_isoinit_50B}{750M isotropic-init}{Nominal $s=128$, seed unrecorded; $\Akap=0.651$, $\Apost=0.757$, $\Mdom=0.432$.}
 
+\clearpage
 \RunDiagnostics{R08}{tsz128x4k_50B_repro_ngocbh_diag_kla_750M_isdk_isoinit_s1234_50B}{750M isotropic-init, seed 1234}{Nominal $s=128$; $\Akap=0.650$, $\Apost=0.753$, $\Mdom=0.425$.}
 
+\clearpage
 \RunDiagnostics{R09}{tsz128x4k_50B_repro_ngocbh_diag_kla_750M_isone_randgain_50B}{750M random-gain, $s=1$}{Lowest nominal scale; $\Akap=0.639$, $\Apost=0.641$, $\Rpost=0.721$, $\Mdom=0.107$.}
 
+\clearpage
 \RunDiagnostics{R10}{tsz128x4k_50B_repro_ngocbh_diag_kla_750M_issqrt_randgain_50B}{750M random-gain, $s=\sqrt{128}$}{Nominal $s\approx11.314$; $\Akap=0.650$, $\Apost=0.672$, $\Rpost=0.692$, $\Mdom=0.219$.}
 
+\clearpage
 \RunDiagnostics{R11}{tsz128x4k_50B_repro_ngocbh_diag_kla_750M_randgain_50B}{750M random-gain, $s=128$}{Current central arm; $\Akap=0.645$, $\Apost=0.742$, $\Rpost=0.607$, $\Mdom=0.418$.}
 
 \end{document}
