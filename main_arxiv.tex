@@ -130,10 +130,9 @@ value per key channel. Our contributions are:
 \section{Preliminaries}
 \label{sec:preliminaries}
 
-\paragraph{Attention: token-level content addressing.}
-Causal softmax attention retains
-  every preceding key--value pair and retrieves a query-dependent weighted combination
-  \citep{vaswani2017attention},
+\paragraph{Self-attention: exact but growing memory.}
+Causal softmax attention stores every preceding key--value pair and retrieves a
+query-dependent weighted combination \citep{vaswani2017attention},
   \begin{equation}
     \ve{o}_t
     =\sum_{i=1}^{t}
@@ -141,15 +140,16 @@ Causal softmax attention retains
       {\sum_{j=1}^{t}\exp(\ve{q}_t^{\tr}\ve{k}_j/\sqrt{d_k})}\,\ve{v}_i.
     \label{eq:softmax-attention}
   \end{equation}
-  Direct access to the token history is expressive, but the autoregressive cache grows linearly
-  with $t$ and the full sequence requires quadratic query--key interactions.
+  Retaining the complete token history provides direct access to past content, but the
+  autoregressive cache grows linearly with $t$, and processing a full sequence requires
+  quadratic query--key interactions. This scaling cost motivates replacing the growing cache
+  with a fixed-size recurrent memory.
 
-\paragraph{Linear attention: fixed-size memory, edited online.}
-In its unnormalized
-  associative-memory form, linear attention replaces the growing key--value cache of softmax
-  attention with a fixed-size recurrent state
-  $\ve{S}_t \in \R^{d_k \times d_v}$ that is \emph{written} as tokens stream in and
-  \emph{read} by the query \citep{katharopoulos2020transformers},
+\paragraph{Linear attention: fixed-size additive memory.}
+Linear attention addresses this growth by compressing the token history into a fixed-size
+recurrent state $\ve{S}_t \in \R^{d_k \times d_v}$. In its unnormalized associative-memory
+form, each token writes a key--value association to the state, and each query reads from it
+\citep{katharopoulos2020transformers},
   \begin{equation}
     \text{(write)}\quad \ve{S}_t = \ve{S}_{t-1} + \ve{k}_t \ve{v}_t^{\tr},
     \qquad\qquad
@@ -157,37 +157,36 @@ In its unnormalized
     \label{eq:linattn}
   \end{equation}
   Here $\ve{k}_t$ and $\ve{q}_t$ denote feature-mapped keys and queries; when required, the usual
-  linear-attention normalizer can be tracked by a separate recurrent state. Our focus is the
-  matrix state that stores key--value associations.
-  The design question is how to \emph{edit} this store online --- what to write and
-  what to forget. This plain additive write only ever \emph{adds} associations:
-  nothing is removed and non-orthogonal keys interfere, so the store saturates and
-  reads degrade.
+  linear-attention normalizer can be tracked by a separate recurrent state.
+  The recurrent state removes the growing cache, but its additive update can only write. Old
+  associations cannot be explicitly removed from the fixed-size memory and may therefore
+  interfere with new ones.
 
-\paragraph{DeltaNet: error-correcting writes.}
-The delta rule
-  \citep{schlag2021linear,yang2024parallelizing} reads what is stored at $\ve{k}_t$ and
-  writes back only the correction,
+\paragraph{DeltaNet: key-local erase and write.}
+DeltaNet addresses this limitation by replacing the additive update with an error-correcting
+delta rule \citep{schlag2021linear,yang2024parallelizing}. It reads the value currently
+associated with $\ve{k}_t$ and writes only the residual,
   \begin{equation}
   \begin{aligned}
     \ve{S}_t
-      &= \ve{S}_{t-1} + \beta_t \ve{k}_t\,(\ve{v}_t-\ve{S}_{t-1}^{\tr}\ve{k}_t)^{\tr}
+      &= \ve{S}_{t-1}
+         + \beta_t \ve{k}_t\,(\ve{v}_t-\ve{S}_{t-1}^{\tr}\ve{k}_t)^{\tr}
         \qquad\text{(canonical residual form)}\\
       &= (\ve{I}-\beta_t \ve{k}_t \ve{k}_t^{\tr})\,\ve{S}_{t-1}
          + \beta_t \ve{k}_t \ve{v}_t^{\tr},
   \end{aligned}
     \label{eq:deltanet}
   \end{equation}
-  so for a unit-norm repeated key, the stored value moves toward $\ve{v}_t$ by a fraction
-  $\beta_t$ (and is exactly overwritten when $\beta_t=1$) rather than being accumulated.
-  The update includes no explicit decay away from the current key, although non-orthogonal keys
-  can still interfere.
+  For a unit-norm repeated key, this moves the stored value toward $\ve{v}_t$ by a fraction
+  $\beta_t$ and exactly overwrites it when $\beta_t=1$. The erase is local to the current key,
+  however: associations stored elsewhere receive no explicit decay. A stale association can
+  therefore persist for many steps and interfere with a later write when its key is
+  non-orthogonal to the new key.
 
-\paragraph{Gated DeltaNet: forgetting by decay.}
-DeltaNet corrects the current key
-  but removes nothing else, so stale associations linger and the state drifts over long
-  contexts. To actually \emph{forget}, Gated DeltaNet shrinks the whole state by a
-  data-dependent decay $\alpha_t\in(0,1)$ before each write \citep{yang2024gdn},
+\paragraph{Gated DeltaNet: global forgetting.}
+Gated DeltaNet~\citep{yang2024gdn} addresses this limitation by applying a data-dependent decay
+$\alpha_t\in(0,1)$ to the entire state before the delta update, following the state-decay
+mechanism of Mamba-2~\citep{dao2024transformers}:
   \begin{equation}
   \begin{aligned}
     \ve{S}_t
@@ -199,15 +198,15 @@ DeltaNet corrects the current key
   \end{aligned}
     \label{eq:gdn}
   \end{equation}
-  so untouched memories fade geometrically when the learned decays remain below one, giving
-  more weight to recent tokens. But a single scalar $\alpha_t$ per head fades \emph{every} channel at the
-  same rate --- it cannot hold some memories long while dropping others fast.
+  The decay makes untouched associations fade geometrically, preventing stale content from
+  persisting indefinitely. However, the single scalar $\alpha_t$ applies the same retention
+  rate to every key channel in a head. The model therefore cannot preserve long-lived
+  information in some channels while rapidly forgetting transient information in others.
 
-\paragraph{KDA: multi-timescale forgetting.}
-A useful memory needs several
-  horizons at once --- a name or topic kept for thousands of tokens, a local cue dropped
-  immediately. KDA replaces the scalar with a diagonal $\ve{D}_t=\diag(\ve{\alpha}_t)$, giving each
-  channel its own decay rate \citep{kimiteam2025kimilinear},
+\paragraph{KDA: channel-wise forgetting.}
+KDA addresses this limitation by replacing the scalar decay with a diagonal transition
+$\ve{D}_t=\diag(\ve{\alpha}_t)$, giving each key channel its own decay rate
+\citep{kimiteam2025kimilinear},
   \begin{equation}
   \begin{aligned}
     \ve{S}_t
@@ -219,19 +218,29 @@ A useful memory needs several
   \end{aligned}
     \label{eq:kda}
   \end{equation}
-  so one head spans a \emph{mixture of timescales} --- the most expressive forgetting in
-  the family, and the baseline we build on.
+  A single head can thus combine short- and long-lived associations. This is the most
+  expressive transition in the family, but the erase/write strength is still controlled by a
+  scalar gate $\beta_t$ predicted from the current token. Because this gate does not depend on
+  the evidence accumulated in memory, it cannot distinguish a well-supported association from
+  an uncertain one.
 
 % =============================================================================
 \section{Kalman Associative Memory}
 \label{sec:memory-kalman}
 
+We revisit DeltaNet-style models through the lens of a linear--Gaussian state-space model, for
+which the optimal recursive estimator is the Kalman filter. Under this view, DeltaNet, Gated
+DeltaNet, and KDA emerge as fixed-gain special cases: they retain the Kalman residual correction
+but omit covariance tracking and predict the write strength directly from the current input.
+Forgetting is interpreted as the transition model's prediction of how the latent memory state
+persists or changes between observations. Tracking the covariance then quantifies confidence in
+the predicted memory and yields a principled gain for incorporating new evidence.
+
 \subsection{Associative Memory as a Linear-Gaussian State-Space Model}
 \label{sec:memory-formulation}
 
-The recurrent state in linear attention is not just a cache compression; it is an
-\emph{estimate} of an associative memory. At time $t$, the memory is a matrix
-$\ve{S}_t\in\R^{d_k\times d_v}$ that defines the associative map
+To make this filtering view precise, let the memory at time $t$ be a matrix
+$\ve{S}_t\in\R^{d_k\times d_v}$ defining the associative map
 \begin{equation}
   \mc M_t\colon \R^{d_k}\to\R^{d_v},\qquad \mc M_t(\ve{k})=\ve{S}_t^{\tr}\ve{k} .
   \label{eq:assoc-map}
@@ -252,9 +261,12 @@ measurement arrives:
 The operator $\ve{D}_t$ is the process model: it is the formal object corresponding to forgetting
 under information drift, topic drift, and other non-stationarity in the stream. For DeltaNet
 $\ve{D}_t=\ve{I}$; for Gated DeltaNet $\ve{D}_t=\alpha_t \ve{I}$; for KDA
-$\ve{D}_t=\diag(\ve{\alpha}_t)$. The process
-noise $\ve{W}_t$ represents memory drift not explained by deterministic decay, while $\ve{\Omega}_t$ is
-its covariance.
+$\ve{D}_t=\diag(\ve{\alpha}_t)$. The process noise $\ve{W}_t$ represents memory drift not captured
+by deterministic decay, while $\ve{\Omega}_t$ is its covariance. In a language model, this
+corresponds to changes in the latent discourse state that the deterministic retention model
+$\ve{D}_t$ does not predict. For example, a sentence may reveal that an entity previously in
+Paris has moved to Rome; decay can weaken the old location binding but cannot predict the new
+one.
 
 \paragraph{Observation.}
 The current key reads one direction of the latent map. The observed value is
@@ -509,7 +521,9 @@ in addition to the associative memory itself. We therefore ask which parts of th
 can be relaxed while preserving both its uncertainty-aware residual write and an associative
 scan.
 
-\paragraph{Diagonal information as the tractable state.}
+\subsection{Diagonal Kalman Delta Network}
+\label{sec:diagonal-kdn}
+
 We first restrict what the filter tracks. Let
 $\mathcal{D}_{++}^{d_k}=\{\diag(\ve{p}):\ve{p}\in\R_{++}^{d_k}\}$ and require
 \begin{equation}
@@ -797,7 +811,9 @@ delta-rule models while keeping the training primitive unchanged: the memory is 
 through $\ve{D}_t$, and the residual write is weighted by a transition-aware uncertainty
 estimate.
 
-\paragraph{Isotropic Kalman Delta Network.}
+\subsection{Isotropic Kalman Delta Network}
+\label{sec:isotropic-kdn}
+
 Instead of tracking a separate uncertainty for every key channel, we can further restrict the
 covariance to the isotropic family $\ve{P}_t\approx b_t\ve{I}$. Unlike the diagonal family, the
 isotropic family is not closed under a channel-wise transition. Isotropic KDN therefore makes
