@@ -19,7 +19,7 @@
   }%
 }
 
-\author{Ngoc Bui\yale, Rex Ying\yale\\
+\author{Ngoc Bui\yale, Tinglin Huang\yale, Rex Ying\yale\\
 \yale Department of Computer Science, Yale University\\
 \faGithub~\textbf{Source Code:} \href{https://github.com/ngocbh/kalman-linear-attention}{\texttt{https://github.com/ngocbh/kalman-linear-attention}}
 }
@@ -981,11 +981,12 @@ $25$-word rather than $500$-word increments, and each sample uses a deterministi
 the essay corpus instead of its fixed opening prefix. We also seed all keys, values, and needle depths,
 so every model is evaluated on the same $500$ samples per cell.
 
-At $750$M/$50$B the separation is clear: the Diagonal KDN is best in 12 of 13 nontrivial cells,
+At $750$M/$50$B the separation is clear: the Diagonal KDN is best in 11 of 13 nontrivial cells,
 remains perfect on S-NIAH-1 through 8K, and reaches $71.2$ on S-NIAH-2 @ 4K and $71.0$ on
-S-NIAH-3 @ 2K. Mamba-3 (SISO) leads the remaining cell, MK-NIAH-1 @ 1K, at $42.4$. The
+S-NIAH-3 @ 2K. Mamba-3 (MIMO) leads the remaining two cells, reaching $92.6$ on S-NIAH-2
+@ 2K and $50.2$ on MK-NIAH-1 @ 1K. The
 Diagonal KDN's 14-cell average is $70.3$, versus $62.4$ for the Isotropic KDN, $62.1$ for KDA,
-and $52.5$ each (rounded) for GDN-2 and Mamba-3 (SISO).
+$60.0$ for Mamba-3 (MIMO), and $52.5$ each (rounded) for GDN-2 and Mamba-3 (SISO).
 This is consistent with an anisotropic gain protecting stored associations under interference.
 
 At $1.3$B/$100$B the picture is mixed. GDN-2 and the Diagonal KDN tie on aggregate ($71.0$ and
@@ -1017,10 +1018,11 @@ Model & 1K & 2K & 4K & 8K & 1K & 2K & 4K & 8K & 1K & 2K & 4K & 1K & 2K & 4K \\
 \midrule
 \multicolumn{15}{@{}l}{\emph{Recurrent-only, 750M parameters, 50B tokens}}\\
 GDN-2         & \textbf{100.0} & \underline{99.8} & 90.2 & 47.2 & 95.0 & 74.6 & 36.0 & 12.6 & 64.6 & 31.0 & 9.2 & 27.8 & 25.6 & 22.0 \\
-Mamba-3 (SISO) & \textbf{100.0} & 98.8 & 73.8 & 33.2 & 95.4 & 82.2 & 43.0 & 17.6 & 65.6 & 26.4 & 9.0 & \textbf{42.4} & 27.6 & 19.6 \\
-KDA           & \textbf{100.0} & \underline{99.8} & \underline{99.2} & 82.6 & \underline{96.4} & \underline{89.8} & \underline{63.2} & \underline{26.0} & 68.8 & 43.6 & 13.6 & 32.6 & \underline{29.8} & \underline{24.2} \\
+Mamba-3 (SISO) & \textbf{100.0} & 98.8 & 73.8 & 33.2 & 95.4 & 82.2 & 43.0 & 17.6 & 65.6 & 26.4 & 9.0 & \underline{42.4} & 27.6 & 19.6 \\
+Mamba-3 (MIMO) & \textbf{100.0} & 99.0 & 79.2 & 39.6 & \underline{98.4} & \textbf{92.6} & 57.6 & 21.6 & 77.4 & 49.0 & 14.2 & \textbf{50.2} & \underline{36.0} & \underline{25.0} \\
+KDA           & \textbf{100.0} & \underline{99.8} & \underline{99.2} & 82.6 & 96.4 & 89.8 & \underline{63.2} & \underline{26.0} & 68.8 & 43.6 & 13.6 & 32.6 & 29.8 & 24.2 \\
 Isotropic KDN & \textbf{100.0} & \textbf{100.0} & 98.2 & \underline{89.4} & 96.0 & 86.0 & 47.8 & 16.2 & \underline{80.4} & \underline{58.4} & \underline{22.6} & 30.4 & 25.4 & 22.2 \\
-Diagonal KDN  & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{98.6} & \textbf{91.4} & \textbf{71.2} & \textbf{29.0} & \textbf{84.2} & \textbf{71.0} & \textbf{32.2} & \underline{41.0} & \textbf{36.4} & \textbf{29.6} \\
+Diagonal KDN  & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{98.6} & \underline{91.4} & \textbf{71.2} & \textbf{29.0} & \textbf{84.2} & \textbf{71.0} & \textbf{32.2} & 41.0 & \textbf{36.4} & \textbf{29.6} \\
 \midrule
 \multicolumn{15}{@{}l}{\emph{Recurrent-only, 1.3B parameters, 100B tokens}}\\
 GDN-2         & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{99.8} & \textbf{98.6} & \underline{92.4} & 67.4 & \underline{28.0} & \underline{88.0} & 64.4 & 29.4 & \underline{50.6} & \textbf{44.0} & \textbf{31.4} \\
