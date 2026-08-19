@@ -271,23 +271,33 @@ observation is: small $r_t$ means trust the token and write strongly, while larg
 treat much of $\ve{v}_t$ as context-specific noise.
 
 \paragraph{Online filtering problem.}
-The state-space model asks for an online filter: given the previous memory estimate and the
-new noisy measurement $(\ve{k}_t,\ve{v}_t)$, update the associative memory so it tracks the
-non-stationary stream. Forgetting is not an auxiliary gate added to attention; it is part of
-the state dynamics that predict how memory changes before the next measurement arrives.
+Let $\mathcal{F}_t=\sigma\{(\ve{k}_\tau,\ve{v}_\tau):\tau\leq t\}$ denote the observations
+available through step $t$. The filtering objective is to estimate the \emph{current} latent
+memory from this history with minimum mean-squared error:
+\begin{equation}
+  \ve{S}_t
+  =\argmin_{\widetilde{\ve{S}}}
+    \E\!\left[\left.\|\ve{S}_t^\star-\widetilde{\ve{S}}\|_F^2\,\right|\,\mathcal{F}_t\right]
+  =\E\!\left[\ve{S}_t^\star\mid\mathcal{F}_t\right].
+  \label{eq:online-filtering-objective}
+\end{equation}
+Each step therefore first propagates the previous posterior through the state dynamics to form a
+predictive prior for $\ve{S}_t^\star$, then conditions that prior on the new measurement
+$(\ve{k}_t,\ve{v}_t)$. Forgetting is thus part of the prediction model for how memory changes in
+a non-stationary stream, rather than an auxiliary gate appended to attention.
 
 
 % =============================================================================
 \subsection{Kalman Filtering}
 \label{sec:kalman-filtering}
 
-The state-space model in \S\ref{sec:memory-formulation} gives a principled solution to the
-filtering problem: combine the prior memory estimate with each new measurement so that the
-current state estimate has minimal uncertainty. Under the linear--Gaussian assumptions in
-\eqref{eq:mem-update-dynamics} and \eqref{eq:mem-update-observation}, this becomes the
-Kalman filtering update. The filter carries $\ve{S}_t$ as the current memory estimate, and a
-covariance $\ve{P}_t\in\R^{d_k\times d_k}$ tracks uncertainty over key directions in that
-estimate.
+Equation~\eqref{eq:online-filtering-objective} asks for the conditional mean of the current
+memory. Under the linear--Gaussian assumptions in \eqref{eq:mem-update-dynamics} and
+\eqref{eq:mem-update-observation}, the predictive state and the next measurement are jointly
+Gaussian, so this conditional mean is an affine function of the measurement. The Kalman filter
+computes it exactly through a predict--correct recursion. It carries
+$\ve{S}_t=\E[\ve{S}_t^\star\mid\mathcal{F}_t]$ together with the key-space posterior covariance
+$\ve{P}_t\in\R^{d_k\times d_k}$, shared across value coordinates.
 
 Tracking $\ve{P}_t$ is necessary because each token observes the associative map only at one key
 direction $\ve{k}_t$, and the value $\ve{v}_t$ is noisy. After many tokens, some key directions are
@@ -295,9 +305,9 @@ well supported by past measurements, while others remain uncertain or have becom
 because of drift. High uncertainty means the current token should be allowed to edit the
 memory strongly; low uncertainty means the prior memory should resist a noisy measurement.
 
-\paragraph{Predict: forgetting before writing.}
-Before observing $(\ve{k}_t,\ve{v}_t)$, the filter predicts how the state evolves from step $t-1$ to
-step $t$:
+\paragraph{Predict: propagate the previous posterior.}
+Starting from the solution at step $t-1$, the dynamics map the previous posterior to the
+predictive distribution at step $t$:
 \begin{equation}
   \widehat{\ve{S}}_t = \ve{D}_t \ve{S}_{t-1},
   \qquad
@@ -308,7 +318,7 @@ This is the formal role of forgetting. The transition $\ve{D}_t$ moves the assoc
 forward in time, while $\ve{\Omega}_t$ increases uncertainty for drift that the transition cannot
 explain.
 
-\paragraph{Read: compare the prediction to the token.}
+\paragraph{Innovation: compare the prediction to the token.}
 The predicted value under the current key is
 \begin{equation}
   \widehat{\ve{v}}_t = \widehat{\ve{S}}_t^{\tr}\ve{k}_t,
@@ -319,53 +329,57 @@ The predicted value under the current key is
 The vector $\ve{\delta}_t$ is the innovation: the part of the observed value that the predicted
 memory does not explain.
 
-\paragraph{Objective: minimize posterior uncertainty.}
-After observing $(\ve{k}_t,\ve{v}_t)$, we update the predicted memory state by writing the innovation
-back into memory. The only remaining choice is the write direction $\ve{\kappa}_t$: it controls
-which key-space direction receives the residual. For a candidate $\ve{\kappa}_t$, the memory
-update has the form
+\paragraph{Correct: solve the online filtering objective.}
+Because the model is Gaussian, the conditional mean in
+\eqref{eq:online-filtering-objective} lies in the affine residual family. For a candidate write
+direction $\ve{\kappa}_t$, define
 \begin{equation}
-  \ve{S}_t=\widehat{\ve{S}}_t+\ve{\kappa}_t
+  \widetilde{\ve{S}}_t(\ve{\kappa}_t)
+  =\widehat{\ve{S}}_t+\ve{\kappa}_t
   \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr}.
   \label{eq:kalman-residual-write}
 \end{equation}
-The Kalman objective chooses the write direction that leaves the updated memory estimate as
-certain as possible, i.e.\ the one that minimizes posterior uncertainty after the
-measurement:
+Its updated estimation-error covariance is
 \begin{equation}
-  \ve{\kappa}_t^\star
-  =
-  \arg\min_{\ve{\kappa}_t}
-  \Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right),
-  \qquad
   \ve{P}_t(\ve{\kappa}_t)
   =
   (\ve{I}-\ve{\kappa}_t \ve{k}_t^{\tr})\widehat{\ve{P}}_t
   (\ve{I}-\ve{\kappa}_t \ve{k}_t^{\tr})^{\tr}
   + r_t\,\ve{\kappa}_t\ve{\kappa}_t^{\tr}.
+  \label{eq:kalman-candidate-error-covariance}
+\end{equation}
+Since all $d_v$ value coordinates share this covariance, the conditional Frobenius risk of
+\eqref{eq:kalman-residual-write} is
+\begin{equation}
+\begin{aligned}
+  \mathcal{R}_t(\ve{\kappa}_t)
+  &:=\E\!\left[
+    \left.\|\ve{S}_t^\star-\widetilde{\ve{S}}_t(\ve{\kappa}_t)\|_F^2
+    \,\right|\,\mathcal{F}_{t-1},\ve{k}_t\right]
+    =d_v\Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right),\\
+  \ve{\kappa}_t^\star
+  &=\arg\min_{\ve{\kappa}_t}\mathcal{R}_t(\ve{\kappa}_t)
+    =\arg\min_{\ve{\kappa}_t}\Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right).
+\end{aligned}
   \label{eq:kalman-tracking-objective}
 \end{equation}
-Here $\ve{P}_t(\ve{\kappa}_t)$ is the posterior covariance that would result if we used the
-candidate write direction $\ve{\kappa}_t$. The trace is the total remaining uncertainty across
-key-space directions, so minimizing it chooses the residual write that makes the filtered
-memory estimate maximally certain after the token is used. The first term in
-$\ve{P}_t(\ve{\kappa}_t)$ propagates the predicted uncertainty $\widehat{\ve{P}}_t$ through the correction
-operator $\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr}$: observing key $\ve{k}_t$ should reduce uncertainty in the
-directions corrected by the write. The second term, $r_t\ve{\kappa}_t\ve{\kappa}_t^{\tr}$, is the
-uncertainty injected by trusting a noisy value measurement. Thus the objective balances two
-effects: write strongly where the memory is uncertain, but avoid injecting too much
-measurement noise when the token value is unreliable.
+Thus minimizing the trace is not a separate criterion: it is precisely the mean-squared-error
+objective in \eqref{eq:online-filtering-objective}, evaluated for the Gaussian affine correction.
+The first term in \eqref{eq:kalman-candidate-error-covariance} is the predicted error that remains
+after correction, while the second is the error injected by the noisy value measurement.
+Gaussianity makes the affine optimum the unrestricted MMSE solution, rather than merely the best
+linear estimator.
 
-\paragraph{Update: write the uncertainty-weighted residual.}
-Solving the objective in \eqref{eq:kalman-tracking-objective} gives the Kalman gain, which
-decides how much to trust the token relative to the current memory:
+\paragraph{Update: the MMSE solution.}
+Minimizing \eqref{eq:kalman-tracking-objective} gives the Kalman gain,
 \begin{equation}
   \ve{\kappa}_t = \frac{\widehat{\ve{P}}_t \ve{k}_t}
   {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t \ve{k}_t}.
   \label{eq:kalman-gain}
 \end{equation}
-The optimal filtering update writes only the innovation, along this uncertainty-weighted key
-direction:
+Substituting this gain into \eqref{eq:kalman-residual-write} gives the conditional mean in
+\eqref{eq:online-filtering-objective}; the corresponding error covariance is the exact posterior
+covariance:
 \begin{equation}
   \ve{S}_t = \widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr},
   \qquad
@@ -377,9 +391,8 @@ Finally, the layer reads from the filtered memory,
   \ve{o}_t = \ve{S}_t^{\tr}\ve{q}_t .
   \label{eq:kalman-read}
 \end{equation}
-This filtering update decomposes memory editing into the three operations the model needs:
-predict the drifting memory, measure the prediction error at the current key, and write back
-the residual in proportion to uncertainty.
+The Kalman recursion therefore solves the online filtering problem by predicting the drifting
+memory, measuring its error at the current key, and applying the MMSE residual correction.
 
 \refstepcounter{definition}\label{prop:kalman-optimal-update}
 \begin{tcolorbox}[
@@ -397,9 +410,10 @@ the residual in proportion to uncertainty.
   bottom=5pt
 ]
 Under the linear--Gaussian state-space model in
-\eqref{eq:mem-update-dynamics}--\eqref{eq:mem-update-observation}, the residual write that
-minimizes the posterior uncertainty in \eqref{eq:kalman-tracking-objective} is the Kalman
-filtering update below. Given the memory estimate $\ve{S}_{t-1}$ and uncertainty $\ve{P}_{t-1}$
+\eqref{eq:mem-update-dynamics}--\eqref{eq:mem-update-observation}, the solution to the online
+MMSE filtering problem in \eqref{eq:online-filtering-objective} is the Kalman update below;
+equivalently, its gain minimizes the estimation-error objective in
+\eqref{eq:kalman-tracking-objective}. Given the memory estimate $\ve{S}_{t-1}$ and uncertainty $\ve{P}_{t-1}$
 before token $t$, the filter first predicts how the memory drifts under the process model
 $\ve{D}_t$ and process noise $\ve{\Omega}_t$. After observing the key--value pair
 $(\ve{k}_t,\ve{v}_t)$, it writes only the value residual
@@ -1330,8 +1344,8 @@ $j=1,\ldots,d_v$ gives the rank-one residual write
 Thus the residual write does not come from DeltaNet first; it comes from the Kalman
 posterior-mean update $x^+=x^-+K(y-Hx^-)$. DeltaNet later appears as the fixed-gain special
 case where $\ve{\kappa}_t$ is forced to be proportional to $\ve{k}_t$.
-For a candidate write direction $\ve{\kappa}_t$, the posterior covariance induced by this
-write is
+For a candidate write direction $\ve{\kappa}_t$, the updated estimation-error covariance induced
+by this write is
 \begin{equation}
   \ve{P}_t(\ve{\kappa}_t)
   =
@@ -1342,7 +1356,8 @@ write is
   r_t\ve{\kappa}_t\ve{\kappa}_t^{\tr}.
   \label{eq:kam-candidate-cov}
 \end{equation}
-The Kalman write direction is the minimizer of total posterior uncertainty,
+Because the expected squared Frobenius error is
+$d_v\Trace(\ve{P}_t(\ve{\kappa}_t))$, the online MMSE objective is equivalently
 \begin{equation}
   \ve{\kappa}_t^\star
   =
@@ -1350,6 +1365,7 @@ The Kalman write direction is the minimizer of total posterior uncertainty,
   \Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right).
   \label{eq:kam-trace-objective}
 \end{equation}
+At the minimizing gain, this error covariance is the exact posterior covariance.
 Expanding the trace gives
 \begin{equation}
   \Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right)
