@@ -882,25 +882,6 @@ GDN-2~\citep{hatamizadeh2026gdn2}, and KDA~\citep{kimiteam2025kimilinear}; the K
 Networks are the Isotropic and Diagonal variants developed above. We evaluate zero-shot with the
 standard harness for recurrent language models and report in-context retrieval on RULER.
 
-\begin{wrapfigure}{r}{0.52\textwidth}
-  \vspace{-0.8\baselineskip}
-  \centering
-  \includegraphics[width=\linewidth]{figures/mixer_throughput_scaling.pdf}
-  \caption{Training throughput of 750M-width, state-matched mixer layers on one H200
-  ($B=4$, $d_{\mathrm{model}}=2048$, BF16; 30-run median). Diagonal KLA uses S0 BF16/TF32;
-  the Transformer is full causal attention. $>4$K are scaling probes.}
-  \label{fig:mixer-throughput}
-  \vspace{-0.6\baselineskip}
-\end{wrapfigure}
-
-\paragraph{Ablation and runtime.}
-Figure~\ref{fig:mixer-throughput} isolates the mixer rather than end-to-end model throughput.
-At 4K, Isotropic KLA matches KDA (1.70 versus 1.65 million tokens/s/GPU); Diagonal KLA reaches
-1.34 million, slightly above GDN-2 at 1.31 million. At 32K, Mamba-3 SISO leads at 2.28 million,
-KDA and Isotropic KLA sustain 1.77 million, Diagonal KLA reaches 1.48 million, and GDN-2 reaches
-1.36 million. The channel-wise uncertainty scan therefore costs $1.20$--$1.23\times$ KDA layer
-latency from 4K to 32K while retaining linear scaling.
-
 \paragraph{Language modeling and commonsense reasoning.}
 Table~\ref{tab:pretrain-lm} reports WikiText and LAMBADA perplexity, zero-shot LAMBADA accuracy,
 and the commonsense suite (PIQA, HellaSwag, WinoGrande, ARC-easy, ARC-challenge). Because the
@@ -1060,6 +1041,29 @@ unavailable and marked with dashes. Essay contexts use deterministic random corp
 column within each block in \textbf{bold}, second best \underline{underlined}.}
 \label{tab:pretrain-niah}
 \end{table}
+
+\FloatBarrier
+
+\subsection{Ablation and Runtime}
+\label{sec:ablation-runtime}
+
+\paragraph{Throughput.}
+\begin{wrapfigure}{r}{0.52\textwidth}
+  \vspace{-0.8\baselineskip}
+  \centering
+  \includegraphics[width=\linewidth]{figures/mixer_throughput_scaling.pdf}
+  \caption{Training throughput of 750M-width, state-matched mixer layers on one H200
+  ($B=4$, $d_{\mathrm{model}}=2048$, BF16; 30-run median). Diagonal KLA uses S0 BF16/TF32;
+  the Transformer is full causal attention. $>4$K are scaling probes.}
+  \label{fig:mixer-throughput}
+  \vspace{-0.6\baselineskip}
+\end{wrapfigure}
+Figure~\ref{fig:mixer-throughput} isolates the mixer rather than end-to-end model throughput.
+At 4K, Isotropic KLA matches KDA (1.70 versus 1.65 million tokens/s/GPU); Diagonal KLA reaches
+1.34 million, slightly above GDN-2 at 1.31 million. At 32K, Mamba-3 SISO leads at 2.28 million,
+KDA and Isotropic KLA sustain 1.77 million, Diagonal KLA reaches 1.48 million, and GDN-2 reaches
+1.36 million. The channel-wise uncertainty scan therefore costs $1.20$--$1.23\times$ KDA layer
+latency from 4K to 32K while retaining linear scaling.
 
 \FloatBarrier
 
