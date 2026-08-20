@@ -19,7 +19,7 @@
   }%
 }
 
-\author{Ngoc Bui\yale, Tinglin Huang\yale, Rex Ying\yale\\
+\author{Ngoc Bui\yale, Rex Ying\yale\\
 \yale Department of Computer Science, Yale University\\
 \faGithub~\textbf{Source Code:} \href{https://github.com/ngocbh/kalman-linear-attention}{\texttt{https://github.com/ngocbh/kalman-linear-attention}}
 }
@@ -229,8 +229,9 @@ $\ve{D}_t=\diag(\ve{\alpha}_t)$, giving each key channel its own decay rate
 \label{sec:memory-kalman}
 
 We revisit DeltaNet-style models through the lens of a linear--Gaussian state-space model, for
-which the optimal recursive estimator is the Kalman filter. Under this view, DeltaNet, Gated
-DeltaNet, and KDA emerge as fixed-gain special cases: they retain the Kalman residual correction
+which the optimal recursive estimator is the Kalman filter~\citep{grewal2025kalman}. Under this
+view, DeltaNet, Gated DeltaNet, and KDA emerge as fixed-gain special cases: they retain the Kalman
+residual correction
 but omit covariance tracking and predict the write strength directly from the current input.
 Forgetting is interpreted as the transition model's prediction of how the latent memory state
 persists or changes between observations. Tracking the covariance then quantifies confidence in
@@ -266,7 +267,7 @@ by deterministic decay, while $\ve{\Omega}_t$ is its covariance. In a language m
 corresponds to changes in the latent discourse state that the deterministic retention model
 $\ve{D}_t$ does not predict. For example, a sentence may reveal that an entity previously in
 Paris has moved to Rome; decay can weaken the old location binding but cannot predict the new
-one.
+one before observing it.
 
 \paragraph{Observation.}
 The current key reads one direction of the latent map. The observed value is
@@ -276,7 +277,7 @@ The current key reads one direction of the latent map. The observed value is
 \end{equation}
 Thus $\ve{k}_t^{\tr}$ is the observation map and $\ve{v}_t$ is the measurement. The noise term $\ve{e}_t$
 captures the part of the token value that should \emph{not} be treated as a clean memory
-target. In an LLM, $\ve{v}_t$ is a contextual feature produced from a noisy token embedding,
+target. In language modeling, $\ve{v}_t$ is a contextual feature produced from a noisy token embedding,
 local syntax, position, layer mixing, and finite model capacity; not all of it is a stable
 fact that can be stored under key $\ve{k}_t$. The covariance $r_t\ve{I}$ sets how reliable this value
 observation is: small $r_t$ means trust the token and write strongly, while large $r_t$ means
@@ -303,11 +304,10 @@ a non-stationary stream, rather than an auxiliary gate appended to attention.
 \subsection{Kalman Filtering}
 \label{sec:kalman-filtering}
 
-Equation~\eqref{eq:online-filtering-objective} asks for the conditional mean of the current
+Equation~\eqref{eq:online-filtering-objective} defines the target posterior mean of the current
 memory. Under the linear--Gaussian assumptions in \eqref{eq:mem-update-dynamics} and
-\eqref{eq:mem-update-observation}, the predictive state and the next measurement are jointly
-Gaussian, so this conditional mean is an affine function of the measurement. The Kalman filter
-computes it exactly through a predict--correct recursion. It carries
+\eqref{eq:mem-update-observation}, the Kalman filter computes this expectation exactly by first
+predicting the latent memory and then conditioning that prediction on the current token. It carries
 $\ve{S}_t=\E[\ve{S}_t^\star\mid\mathcal{F}_t]$ together with the key-space posterior covariance
 $\ve{P}_t\in\R^{d_k\times d_k}$, shared across value coordinates.
 
@@ -318,20 +318,22 @@ because of drift. High uncertainty means the current token should be allowed to 
 memory strongly; low uncertainty means the prior memory should resist a noisy measurement.
 
 \paragraph{Predict: propagate the previous posterior.}
-Starting from the solution at step $t-1$, the dynamics map the previous posterior to the
-predictive distribution at step $t$:
+At step $t-1$, the filter has posterior mean $\ve{S}_{t-1}$ and covariance $\ve{P}_{t-1}$.
+Applying the state dynamics gives the predictive mean and covariance at step $t$,
 \begin{equation}
   \widehat{\ve{S}}_t = \ve{D}_t \ve{S}_{t-1},
   \qquad
   \widehat{\ve{P}}_t = \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t .
   \label{eq:kalman-predict}
 \end{equation}
-This is the formal role of forgetting. The transition $\ve{D}_t$ moves the associative memory
-forward in time, while $\ve{\Omega}_t$ increases uncertainty for drift that the transition cannot
-explain.
+These quantities summarize the predictive distribution of $\ve{S}_t^\star$ before the current
+token mapping $(\ve{k}_t,\ve{v}_t)$ is observed. This is
+the formal role of forgetting: $\ve{D}_t$ moves the associative memory forward in time, while
+$\ve{\Omega}_t$ increases uncertainty for drift that the transition cannot capture.
 
 \paragraph{Innovation: compare the prediction to the token.}
-The predicted value under the current key is
+The current token observes the predicted memory along $\ve{k}_t$. Its predicted value and
+innovation are
 \begin{equation}
   \widehat{\ve{v}}_t = \widehat{\ve{S}}_t^{\tr}\ve{k}_t,
   \qquad
@@ -341,17 +343,16 @@ The predicted value under the current key is
 The vector $\ve{\delta}_t$ is the innovation: the part of the observed value that the predicted
 memory does not explain.
 
-\paragraph{Correct: solve the online filtering objective.}
-Because the model is Gaussian, the conditional mean in
-\eqref{eq:online-filtering-objective} lies in the affine residual family. For a candidate write
-direction $\ve{\kappa}_t$, define
+\paragraph{Correct: solve for the posterior mean.}
+Because the predictive memory and the observed value are jointly Gaussian, the posterior mean in
+\eqref{eq:online-filtering-objective} lies in the affine residual family. Introduce a candidate
+write direction $\ve{\kappa}_t$ through
 \begin{equation}
   \widetilde{\ve{S}}_t(\ve{\kappa}_t)
-  =\widehat{\ve{S}}_t+\ve{\kappa}_t
-  \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr}.
+  =\widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr}.
   \label{eq:kalman-residual-write}
 \end{equation}
-Its updated estimation-error covariance is
+Its estimation-error covariance is
 \begin{equation}
   \ve{P}_t(\ve{\kappa}_t)
   =
@@ -360,51 +361,50 @@ Its updated estimation-error covariance is
   + r_t\,\ve{\kappa}_t\ve{\kappa}_t^{\tr}.
   \label{eq:kalman-candidate-error-covariance}
 \end{equation}
-Since all $d_v$ value coordinates share this covariance, the conditional Frobenius risk of
-\eqref{eq:kalman-residual-write} is
+Since all $d_v$ value coordinates share this covariance, minimizing the conditional mean-squared
+error is equivalent to minimizing the posterior uncertainty, measured by the trace of the error
+covariance:
 \begin{equation}
 \begin{aligned}
-  \mathcal{R}_t(\ve{\kappa}_t)
-  &:=\E\!\left[
-    \left.\|\ve{S}_t^\star-\widetilde{\ve{S}}_t(\ve{\kappa}_t)\|_F^2
-    \,\right|\,\mathcal{F}_{t-1},\ve{k}_t\right]
-    =d_v\Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right),\\
   \ve{\kappa}_t^\star
-  &=\arg\min_{\ve{\kappa}_t}\mathcal{R}_t(\ve{\kappa}_t)
-    =\arg\min_{\ve{\kappa}_t}\Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right).
+  &=\arg\min_{\ve{\kappa}_t}
+    \E\!\left[
+      \left.\|\ve{S}_t^\star-\widetilde{\ve{S}}_t(\ve{\kappa}_t)\|_F^2
+      \,\right|\,\mathcal{F}_{t-1},\ve{k}_t
+    \right] \\
+  &=\arg\min_{\ve{\kappa}_t}
+    \Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right).
 \end{aligned}
   \label{eq:kalman-tracking-objective}
 \end{equation}
-Thus minimizing the trace is not a separate criterion: it is precisely the mean-squared-error
-objective in \eqref{eq:online-filtering-objective}, evaluated for the Gaussian affine correction.
-The first term in \eqref{eq:kalman-candidate-error-covariance} is the predicted error that remains
-after correction, while the second is the error injected by the noisy value measurement.
-Gaussianity makes the affine optimum the unrestricted MMSE solution, rather than merely the best
-linear estimator.
-
-\paragraph{Update: the MMSE solution.}
-Minimizing \eqref{eq:kalman-tracking-objective} gives the Kalman gain,
+Solving this objective and dropping the star gives the Kalman gain
 \begin{equation}
   \ve{\kappa}_t = \frac{\widehat{\ve{P}}_t \ve{k}_t}
   {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t \ve{k}_t}.
   \label{eq:kalman-gain}
 \end{equation}
-Substituting this gain into \eqref{eq:kalman-residual-write} gives the conditional mean in
-\eqref{eq:online-filtering-objective}; the corresponding error covariance is the exact posterior
-covariance:
+The gain assigns greater weight to key-space directions that remain uncertain under
+$\widehat{\ve{P}}_t$ and to observations with smaller noise $r_t$. Substituting it into
+\eqref{eq:kalman-residual-write} gives the posterior mean and covariance,
 \begin{equation}
-  \ve{S}_t = \widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr},
+  \ve{S}_t
+  = \widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr}
+  = \E\!\left[\ve{S}_t^\star\mid\mathcal{F}_t\right],
   \qquad
   \ve{P}_t=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t .
   \label{eq:kalman-update}
 \end{equation}
+Thus the posterior mean is a residual write: the filter adds only the part of the observed value
+that the predicted memory failed to explain. The corresponding covariance update records the
+remaining uncertainty after this observation.
 Finally, the layer reads from the filtered memory,
 \begin{equation}
   \ve{o}_t = \ve{S}_t^{\tr}\ve{q}_t .
   \label{eq:kalman-read}
 \end{equation}
-The Kalman recursion therefore solves the online filtering problem by predicting the drifting
-memory, measuring its error at the current key, and applying the MMSE residual correction.
+The predict--innovation--correct recursion therefore computes the conditional expectation in
+\eqref{eq:online-filtering-objective} at every step.
+The following proposition summarizes this optimal recursion.
 
 \refstepcounter{definition}\label{prop:kalman-optimal-update}
 \begin{tcolorbox}[
@@ -424,9 +424,10 @@ memory, measuring its error at the current key, and applying the MMSE residual c
 Under the linear--Gaussian state-space model in
 \eqref{eq:mem-update-dynamics}--\eqref{eq:mem-update-observation}, the solution to the online
 MMSE filtering problem in \eqref{eq:online-filtering-objective} is the Kalman update below;
-equivalently, its gain minimizes the estimation-error objective in
-\eqref{eq:kalman-tracking-objective}. Given the memory estimate $\ve{S}_{t-1}$ and uncertainty $\ve{P}_{t-1}$
-before token $t$, the filter first predicts how the memory drifts under the process model
+equivalently, its gain minimizes the posterior uncertainty in
+\eqref{eq:kalman-tracking-objective}. Given the memory estimate $\ve{S}_{t-1}$ and uncertainty
+$\ve{P}_{t-1}$ before token $t$, the filter first predicts how the memory drifts under the process
+model
 $\ve{D}_t$ and process noise $\ve{\Omega}_t$. After observing the key--value pair
 $(\ve{k}_t,\ve{v}_t)$, it writes only the value residual
 $\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t$ along the uncertainty-weighted
@@ -1004,7 +1005,9 @@ This is consistent with an anisotropic gain protecting stored associations under
 
 At $1.3$B/$100$B the picture is mixed. GDN-2 and the Diagonal KDN tie on aggregate ($71.0$ and
 $70.6$); the Diagonal KDN leads long S-NIAH-2, KDA leads S-NIAH-3, and GDN-2 leads two of three
-multi-key lengths. KDA again degrades sharply on the easiest S-NIAH-1 probe. The previously observed
+multi-key lengths. Mamba-3 (SISO) averages $63.1$, below KDA's $64.3$, with strong short-context
+S-NIAH-1/2 recall but a sharper drop at 8K ($62.6$/$20.6$) and on S-NIAH-3. KDA again degrades
+sharply on the easiest S-NIAH-1 probe. The previously observed
 short-context collapse of the 1.3B Diagonal KDN disappears under randomized essay windows
 (S-NIAH-2 @ 1K: $21.4\to88.0$; S-NIAH-3 @ 1K: $3.6\to82.4$), showing that it was an interaction
 with the fixed opening essay rather than a short-memory failure. These are single checkpoints and one
@@ -1038,8 +1041,9 @@ Isotropic KDN & \textbf{100.0} & \textbf{100.0} & 98.2 & \underline{89.4} & 96.0
 Diagonal KDN  & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{98.6} & \underline{91.4} & \textbf{71.2} & \textbf{29.0} & \textbf{84.2} & \textbf{71.0} & \textbf{32.2} & 41.0 & \textbf{36.4} & \textbf{29.6} \\
 \midrule
 \multicolumn{15}{@{}l}{\emph{Recurrent-only, 1.3B parameters, 100B tokens}}\\
-GDN-2         & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{99.8} & \textbf{98.6} & \underline{92.4} & 67.4 & \underline{28.0} & \underline{88.0} & 64.4 & 29.4 & \underline{50.6} & \textbf{44.0} & \textbf{31.4} \\
-KDA           & \underline{99.8} & \underline{99.2} & \underline{66.6} & 30.2 & 98.0 & \textbf{95.0} & 62.2 & 23.6 & \textbf{92.6} & \textbf{77.2} & \textbf{43.2} & 47.4 & 38.8 & 26.6 \\
+GDN-2         & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{99.8} & \textbf{98.6} & 92.4 & 67.4 & \underline{28.0} & \underline{88.0} & 64.4 & 29.4 & \underline{50.6} & \textbf{44.0} & \textbf{31.4} \\
+Mamba-3 (SISO) & \textbf{100.0} & \underline{99.8} & \underline{98.2} & 62.6 & \textbf{98.6} & \underline{93.6} & 62.6 & 20.6 & 69.0 & 50.2 & 16.6 & 46.6 & 38.4 & \underline{27.2} \\
+KDA           & \underline{99.8} & 99.2 & 66.6 & 30.2 & 98.0 & \textbf{95.0} & 62.2 & 23.6 & \textbf{92.6} & \textbf{77.2} & \textbf{43.2} & 47.4 & 38.8 & 26.6 \\
 Isotropic KDN & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & 94.6 & \underline{98.4} & 91.8 & \underline{68.4} & 24.2 & 86.8 & \underline{67.6} & 34.6 & 41.6 & 29.8 & 23.4 \\
 Diagonal KDN  & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \underline{99.6} & 88.0 & 91.0 & \textbf{77.2} & \textbf{29.4} & 82.4 & 65.0 & \underline{36.0} & \textbf{51.0} & \underline{42.2} & \underline{27.2} \\
 \midrule
@@ -1223,11 +1227,14 @@ The linear--Gaussian state-space model is
   &
   \ve{e}_t&\sim\mathcal{N}(0,r_t\ve{I}).
 \end{align}
-Let $\ve{z}_s=(\ve{k}_s,\ve{v}_s)$ denote the key--value observation at step $s$.
+Here and throughout the proof, the matrix-Gaussian notation is columnwise: the $d_v$ value
+columns are conditionally independent and share the displayed key-space covariance. The current
+model quantities $\ve{D}_t$, $\ve{\Omega}_t$, $r_t$, and $\ve{k}_t$ are treated as known when the
+gain is selected.
 At the end of step $t-1$, the Kalman filter represents the posterior over the latent
 memory as a Gaussian,
 \begin{equation}
-  p(\ve{S}_{t-1}^\star\mid \ve{z}_{1:t-1})
+  p(\ve{S}_{t-1}^\star\mid \mc F_{t-1})
   =
   \mathcal{N}(\ve{S}_{t-1},\ve{P}_{t-1}),
   \label{eq:previous-filtering-posterior}
@@ -1240,17 +1247,17 @@ key-space covariance shared across value columns.
 Before observing token $t$, the filter first predicts the next latent memory by marginalizing
 over the previous posterior:
 \begin{equation}
-  p(\ve{S}_t^\star\mid \ve{z}_{1:t-1})
+  p(\ve{S}_t^\star\mid \mc F_{t-1})
   =
   \int
   p(\ve{S}_t^\star\mid \ve{S}_{t-1}^\star)
-  p(\ve{S}_{t-1}^\star\mid \ve{z}_{1:t-1})
+  p(\ve{S}_{t-1}^\star\mid \mc F_{t-1})
   \,d\ve{S}_{t-1}^\star .
   \label{eq:prediction-integral}
 \end{equation}
 Because both factors are linear--Gaussian, the predicted distribution is Gaussian,
 \begin{equation}
-  p(\ve{S}_t^\star\mid \ve{z}_{1:t-1})
+  p(\ve{S}_t^\star\mid \mc F_{t-1})
   =
   \mathcal{N}(\widehat{\ve{S}}_t,\widehat{\ve{P}}_t).
   \label{eq:predicted-prior}
@@ -1265,9 +1272,8 @@ Its mean and covariance are the exact Kalman prediction:
   \label{eq:kam-predict}
 \end{equation}
 Thus $\widehat{\ve{S}}_t$ is a point estimate, but specifically the \emph{predicted prior
-mean} of $\ve{S}_t^\star$ conditioned on the past key--value sequence
-$\ve{z}_{1:t-1}$. It is not yet the point estimate of
-$p(\ve{S}_t^\star\mid \ve{z}_{1:t})$, because the current pair
+mean} of $\ve{S}_t^\star$ conditioned on $\mc F_{t-1}$. It is not yet the point estimate of
+$p(\ve{S}_t^\star\mid \mc F_t)$, because the current pair
 $(\ve{k}_t,\ve{v}_t)$ has not been used. The covariance $\widehat{\ve{P}}_t$ is not a point
 estimate; it is the predicted uncertainty around that mean.
 The predicted read and innovation are
@@ -1278,8 +1284,8 @@ The predicted read and innovation are
   \label{eq:kam-innovation}
 \end{equation}
 
-This residual form is the matrix version of the standard Kalman correction. To see it,
-first look at one value coordinate $j$. Let $\ve{s}_{t,j}$ be column $j$ of the memory and
+To derive the correction from the MMSE objective, first consider one value coordinate $j$.
+Let $\ve{s}_{t,j}$ be column $j$ of the memory and
 let $v_{t,j}$ be coordinate $j$ of the observed value. The measurement model is
 \begin{equation}
   v_{t,j}
@@ -1289,9 +1295,10 @@ let $v_{t,j}$ be coordinate $j$ of the observed value. The measurement model is
   e_{t,j}\sim\mathcal{N}(0,r_t).
   \label{eq:single-value-coordinate-observation}
 \end{equation}
-Before this measurement is used, the predicted distribution for this column is
+Treating the current key as the known observation map, the predicted distribution before the
+value measurement is
 \begin{equation}
-  \ve{s}_{t,j}^\star \mid \ve{z}_{1:t-1}
+  \ve{s}_{t,j}^\star \mid \mc F_{t-1},\ve{k}_t
   \sim
   \mathcal{N}(\widehat{\ve{s}}_{t,j},\widehat{\ve{P}}_t).
   \label{eq:single-coordinate-prior}
@@ -1305,82 +1312,90 @@ by the prior is the scalar residual
   v_{t,j}-\ve{k}_t^{\tr}\widehat{\ve{s}}_{t,j}.
   \label{eq:single-coordinate-innovation}
 \end{equation}
-For a joint Gaussian pair $(x,y)$ with scalar $y$, the conditional mean is
-\[
-  \mathbb{E}[x\mid y]
-  =
-  \mathbb{E}[x]
-  +
-  \operatorname{Cov}(x,y)\operatorname{Var}(y)^{-1}
-  \big(y-\mathbb{E}[y]\big).
-\]
-Apply this identity with $x=\ve{s}_{t,j}^\star$ and $y=v_{t,j}$. Under
-\eqref{eq:single-coordinate-prior}--\eqref{eq:single-value-coordinate-observation},
+We now solve for the gain rather than assume it. For an arbitrary candidate
+$\ve{\kappa}_t$ that depends only on $(\mc F_{t-1},\ve{k}_t)$, define
 \begin{equation}
-  \operatorname{Cov}(\ve{s}_{t,j}^\star,v_{t,j})
+  \widetilde{\ve{S}}_t(\ve{\kappa}_t)
   =
-  \widehat{\ve{P}}_t\ve{k}_t,
-  \qquad
-  \operatorname{Var}(v_{t,j})
-  =
-  \ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t+r_t.
-  \label{eq:single-coordinate-cross-cov}
+  \widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr}.
+  \label{eq:kam-candidate-write}
 \end{equation}
-Therefore the posterior mean is
+For value coordinate $j$, let $\widetilde{\ve{s}}_{t,j}(\ve{\kappa}_t)$ denote column $j$ of
+\eqref{eq:kam-candidate-write}, and let $\widehat{\ve{\epsilon}}_{t,j}
+=\ve{s}_{t,j}^\star-\widehat{\ve{s}}_{t,j}$ be the prediction error. Conditioned on
+$\mc F_{t-1}$ and the current observation map $\ve{k}_t$, it has zero mean and covariance
+$\widehat{\ve{P}}_t$. Moreover,
+$\delta_{t,j}=\ve{k}_t^{\tr}\widehat{\ve{\epsilon}}_{t,j}+e_{t,j}$, so the error after the
+candidate correction is
 \begin{equation}
-  \ve{s}_{t,j}
-  =
-  \widehat{\ve{s}}_{t,j}
-  +
-  \ve{\kappa}_t\,\delta_{t,j}.
-  \label{eq:single-coordinate-kalman-correction}
+\begin{aligned}
+  \ve{\epsilon}_{t,j}(\ve{\kappa}_t)
+  &:=\ve{s}_{t,j}^\star-\widetilde{\ve{s}}_{t,j}(\ve{\kappa}_t) \\
+  &=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})
+    \widehat{\ve{\epsilon}}_{t,j}-\ve{\kappa}_t e_{t,j}.
+\end{aligned}
+  \label{eq:kam-candidate-error}
 \end{equation}
-where
+The measurement noise is zero-mean and independent of the prediction error. Consequently, the
+cross terms vanish, and every value coordinate has conditional error covariance
 \begin{equation}
-  \ve{\kappa}_t
-  =
-  \frac{\widehat{\ve{P}}_t\ve{k}_t}
-  {\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t+r_t}.
-  \label{eq:single-coordinate-gain}
-\end{equation}
-The same $\ve{\kappa}_t$ applies to every value coordinate because the model uses the same
-key-space covariance $\widehat{\ve{P}}_t$ and the same observation noise $r_t$ for every
-coordinate of $\ve{v}_t$. Stacking \eqref{eq:single-coordinate-kalman-correction} over
-$j=1,\ldots,d_v$ gives the rank-one residual write
-\begin{equation}
-  \ve{S}_t
-  =
-  \widehat{\ve{S}}_t
-  +
-  \ve{\kappa}_t
-  \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr}.
-  \label{eq:kam-residual-write}
-\end{equation}
-Thus the residual write does not come from DeltaNet first; it comes from the Kalman
-posterior-mean update $x^+=x^-+K(y-Hx^-)$. DeltaNet later appears as the fixed-gain special
-case where $\ve{\kappa}_t$ is forced to be proportional to $\ve{k}_t$.
-For a candidate write direction $\ve{\kappa}_t$, the updated estimation-error covariance induced
-by this write is
-\begin{equation}
+\begin{aligned}
   \ve{P}_t(\ve{\kappa}_t)
-  =
-  (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})
+  &:={}
+  \E\!\left[
+    \left.
+    \ve{\epsilon}_{t,j}(\ve{\kappa}_t)
+    \ve{\epsilon}_{t,j}(\ve{\kappa}_t)^{\tr}
+    \,\right|\,\mc F_{t-1},\ve{k}_t
+  \right] \\
+  &=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})
   \widehat{\ve{P}}_t
   (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})^{\tr}
-  +
-  r_t\ve{\kappa}_t\ve{\kappa}_t^{\tr}.
+  +r_t\ve{\kappa}_t\ve{\kappa}_t^{\tr}.
+\end{aligned}
   \label{eq:kam-candidate-cov}
 \end{equation}
-Because the expected squared Frobenius error is
-$d_v\Trace(\ve{P}_t(\ve{\kappa}_t))$, the online MMSE objective is equivalently
+Using $\|\ve{A}\|_F^2=\sum_j\|\ve{a}_j\|_2^2$ and
+$\|\ve{x}\|_2^2=\Trace(\ve{x}\ve{x}^{\tr})$, we obtain
 \begin{equation}
-  \ve{\kappa}_t^\star
-  =
+\begin{aligned}
+  &\E\!\left[
+    \left.
+    \|\ve{S}_t^\star-\widetilde{\ve{S}}_t(\ve{\kappa}_t)\|_F^2
+    \,\right|\,\mc F_{t-1},\ve{k}_t
+  \right] \\
+  &\qquad={}
+  \sum_{j=1}^{d_v}
+  \Trace\!\left(
+    \E\!\left[
+      \left.
+      \ve{\epsilon}_{t,j}(\ve{\kappa}_t)
+      \ve{\epsilon}_{t,j}(\ve{\kappa}_t)^{\tr}
+      \,\right|\,\mc F_{t-1},\ve{k}_t
+    \right]
+  \right) \\
+  &\qquad={}
+  d_v\Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right).
+\end{aligned}
+  \label{eq:kam-mse-trace-identity}
+\end{equation}
+Here the conditioning includes the known key but not $\ve{v}_t$, because the MSE averages over
+the current measurement when selecting the gain. Since $d_v>0$ is constant with respect to
+$\ve{\kappa}_t$,
+\begin{equation}
+\begin{aligned}
+  &\arg\min_{\ve{\kappa}_t}
+  \E\!\left[
+    \left.
+    \|\ve{S}_t^\star-\widetilde{\ve{S}}_t(\ve{\kappa}_t)\|_F^2
+    \,\right|\,\mc F_{t-1},\ve{k}_t
+  \right] \\
+  &\qquad={}
   \arg\min_{\ve{\kappa}_t}
   \Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right).
+\end{aligned}
   \label{eq:kam-trace-objective}
 \end{equation}
-At the minimizing gain, this error covariance is the exact posterior covariance.
 Expanding the trace gives
 \begin{equation}
   \Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right)
@@ -1392,16 +1407,79 @@ Expanding the trace gives
   \ve{\kappa}_t^{\tr}\ve{\kappa}_t .
   \label{eq:kam-trace-expanded}
 \end{equation}
-Taking the gradient with respect to $\ve{\kappa}_t$ and setting it to zero yields
+Because $r_t>0$ and $\widehat{\ve{P}}_t\succeq0$, this quadratic is strictly convex. Taking its
+gradient with respect to $\ve{\kappa}_t$ and setting it to zero therefore yields the unique
+minimizer
 \begin{equation}
+\begin{aligned}
+  \ve{0}
+  &=\nabla_{\ve{\kappa}_t}\Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right) \\
+  &=-2\widehat{\ve{P}}_t\ve{k}_t
+    +2\big(r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t\big)\ve{\kappa}_t,
+  \\
+  &\therefore\qquad
   \boxed{
-  \ve{\kappa}_t
-  =
-  \frac{\widehat{\ve{P}}_t\ve{k}_t}
-  {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}
+    \ve{\kappa}_t
+    =\frac{\widehat{\ve{P}}_t\ve{k}_t}
+    {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}
   }.
+\end{aligned}
   \label{eq:kam-optimal-gain}
 \end{equation}
+It remains to show that the optimizer over the affine residual family is also the unrestricted
+posterior mean. For each value coordinate, let
+\begin{equation}
+  \ve{\epsilon}_{t,j}^{+}
+  :=\ve{s}_{t,j}^\star-\widetilde{\ve{s}}_{t,j}(\ve{\kappa}_t).
+  \label{eq:kam-optimal-error}
+\end{equation}
+Using
+$\operatorname{Cov}(\widehat{\ve{\epsilon}}_{t,j},\delta_{t,j}\mid
+\mc F_{t-1},\ve{k}_t)=\widehat{\ve{P}}_t\ve{k}_t$
+and the optimality condition in \eqref{eq:kam-optimal-gain},
+\begin{equation}
+\begin{aligned}
+  &\operatorname{Cov}(\ve{\epsilon}_{t,j}^{+},\delta_{t,j}\mid
+    \mc F_{t-1},\ve{k}_t) \\
+  &\qquad={}
+  \widehat{\ve{P}}_t\ve{k}_t
+  -\ve{\kappa}_t
+   \big(\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t+r_t\big)
+  =\ve{0}.
+\end{aligned}
+  \label{eq:kam-optimal-orthogonality}
+\end{equation}
+Conditioned on $(\mc F_{t-1},\ve{k}_t)$, the pair
+$(\ve{\epsilon}_{t,j}^{+},\delta_{t,j})$ is jointly Gaussian because both variables are affine
+functions of the Gaussian prediction error and measurement noise. Equation
+\eqref{eq:kam-optimal-orthogonality} therefore implies conditional independence and
+\begin{equation}
+  \E[\ve{\epsilon}_{t,j}^{+}\mid
+      \mc F_{t-1},\ve{k}_t,\delta_{t,j}]=\ve{0}.
+  \label{eq:kam-optimal-zero-conditional-error}
+\end{equation}
+Since $\delta_{t,j}$ and $v_{t,j}$ carry the same information given
+$(\mc F_{t-1},\ve{k}_t)$, and the value columns are conditionally independent,
+\begin{equation}
+  \ve{s}_{t,j}
+  :=\widehat{\ve{s}}_{t,j}+\ve{\kappa}_t\delta_{t,j}
+  =\E[\ve{s}_{t,j}^\star\mid\mc F_t].
+  \label{eq:single-coordinate-kalman-correction}
+\end{equation}
+The same gain applies to every value coordinate because they share
+$\widehat{\ve{P}}_t$ and $r_t$. Stacking the coordinatewise posterior means gives
+\begin{equation}
+  \ve{S}_t
+  :=\E[\ve{S}_t^\star\mid\mc F_t]
+  =\widehat{\ve{S}}_t
+  +\ve{\kappa}_t
+  \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr}.
+  \label{eq:kam-residual-write}
+\end{equation}
+At this gain, \eqref{eq:kam-candidate-cov} is the exact posterior covariance. Using
+$\widehat{\ve{P}}_t\ve{k}_t
+=\ve{\kappa}_t(r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t)$ reduces its Joseph form to
+$(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t$.
 Therefore the exact Kalman Associative Memory update is
 \begin{equation}
 \begin{aligned}
