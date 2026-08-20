@@ -121,7 +121,7 @@ The parameterization also stays fixed:
 \begin{equation}
   r_t^{\mathrm{raw}}=r_{\min}+\operatorname{softplus}(r_{\mathrm{proj},t}),
   \qquad
-  \ve{\omega}_t=q_{\min}+\operatorname{softplus}(\ve{q}_{\mathrm{proj},t}),
+  \ve{\omega}_t=q_{\min}+\operatorname{softplus}(\ve{qn}_{\mathrm{proj},t}),
   \qquad
   \mu=\operatorname{softplus}(\mu_{\mathrm{param}})+0.1 .
 \end{equation}
@@ -145,6 +145,9 @@ the model carries
   \ve{P}_c^- \succ 0 .
 \end{equation}
 The columns of \(\ve{S}_c^-\) share the same key-space covariance \(\ve{P}_c^-\), as in KLA.
+For the approximate recursive model, \(\ve{P}_c^-\) is a propagated ensemble MSE matrix, not an
+exact posterior covariance conditional on the realized preceding chunks. The local derivation
+treats the entry error as zero mean across the modeled observation histories.
 Within the chunk, stack
 \begin{equation}
   \ve{K}_c=[\ve{k}_1,\ldots,\ve{k}_{C_c}]
@@ -162,14 +165,14 @@ and let row \(t\) of
 The chunk-time observation model treats the latent associative map as fixed while these
 observations are accumulated:
 \begin{equation}
-  \ve{V}_c = \ve{K}_c^{\tr}\ve{S}_c^\star+\ve{E}_c,
+  \ve{V}_c = \ve{K}_c^{\tr}\ve{S}_c^\star+\ve{\Xi}_c,
   \qquad
-  \operatorname{Cov}(\ve{E}_{c,:,j})=\ve{R}_c
+  \operatorname{Cov}(\ve{\Xi}_{c,:,j})=\ve{R}_c
 \end{equation}
-for every value coordinate \(j\). Conditional on the chunk-entry variables and
-\((\ve{K}_c,\ve{R}_c)\), the noise is zero mean and independent of the entry-state estimation
-error. This static-within-chunk assumption is part of the approximation, not a claim about the
-original tokenwise state-space model.
+for every value coordinate \(j\). Treating \((\ve{K}_c,\ve{R}_c)\) as fixed design quantities,
+the noise is zero mean and independent of the entry-state estimation error. This
+static-within-chunk assumption is part of the approximation, not a claim about the original
+tokenwise state-space model.
 
 \subsection{Parallel gains from the frozen prior}
 
@@ -319,8 +322,8 @@ The dense boundary covariance is
 \label{eq:joseph}
 \end{equation}
 This is positive semidefinite in exact arithmetic. More precisely, it is the ensemble
-estimation-error MSE conditional on the chunk-entry variables, \(\ve{K}_c\), and \(\ve{R}_c\),
-but averaged over the current prior error and observation noise. It is not the Bayesian posterior
+estimation-error MSE averaged over prior observation histories and current noise, while treating
+the keys, gates, and noise parameters as fixed design quantities. It is not the Bayesian posterior
 covariance conditional on the realized \(\ve{V}_c\). Propagating it gives average calibration for
 the chosen linear estimator; it does not erase that estimator's realized conditional bias.
 
@@ -342,13 +345,31 @@ Equation~\eqref{eq:joseph} has the low-rank expansion
 and therefore needs only GEMM-shaped products with width \(C_c\). The full
 \(\ve{G}_c=\ve{R}_c+\ve{K}_c^{\tr}\ve{U}_c\) is used in the covariance accounting, but it is never
 inverted or factored. Its off-diagonal entries correct the confidence carried forward even though
-they were omitted from the within-chunk gain.
+the mean uses them only through causal lower-triangular residual feedback rather than the exact
+symmetric inverse.
 
 Repeated or collinear keys expose why this distinction matters. Sequential residuals prevent the
 undamped parallel update from multiplying one identical residual by \(C_c\), but the frozen gains
 still fail to contract after earlier observations. The estimator can therefore overweight later
 noise or become order-sensitive. The Joseph term reports the MSE of that behavior rather than
 pretending that the update was the exact block posterior.
+
+There is a closed-form scalar stability oracle. For \(C\) repeated unit keys, constant prior
+variance \(p\), and noise \(r\), let
+\begin{equation}
+  \ell=\frac{p}{p+r},
+  \qquad
+  a=1-\ell=\frac{r}{p+r}.
+\end{equation}
+The frozen-gain sequential recurrence has prior-error multiplier \(a^C\) and boundary MSE
+\begin{equation}
+  P_C
+  =
+  a^{2C}p
+  +\ell^2r\frac{1-a^{2C}}{1-a^2}.
+\label{eq:repeated-key-oracle}
+\end{equation}
+This identity simultaneously checks WY orientation, the effective gain, and Joseph accounting.
 
 \subsection{Dynamics only at chunk boundaries}
 
@@ -391,9 +412,11 @@ noise across one chunk interval, but they do not reproduce the original order of
 predict--update steps. In particular, the full chunk decay attenuates a final-position write by the
 same amount as a first-position write, whereas tokenwise KLA applies only the remaining tail decay.
 For \(C=1\), the gate is also shifted from predict-before-update to update-before-predict. The
-quality screen must therefore compare update--predict, a causal pre-chunk gate, and an explicitly
-position-transported write before the gate convention is frozen. A learned chunk-level gate is a
-later modeling ablation, not part of the first kernel.
+first prototype freezes the update--predict convention in
+equation~\eqref{eq:chunk-dynamics} and measures this positional bias explicitly. A causal pre-chunk
+gate or position-dependent tail transport would change the mean, effective gain, and process-noise
+covariance; either requires a new derivation before it becomes a later model ablation. Neither is
+an implementation option for the v0 kernel.
 
 \subsection{Initialization, tails, and complexity}
 
@@ -419,13 +442,14 @@ Joseph-update latency spike.
 
 \subsection{Exact properties of the proposed estimator}
 
-For the stated chunk-static observation model and the chosen gain \(\ve{L}_c\):
+For the stated chunk-static observation model, chosen raw gains \(\ve{L}_c\), and induced effective
+gain \(\ve{L}_{c,\mathrm{eff}}\):
 \begin{enumerate}
   \item Equations~\eqref{eq:virtual-recurrence} and~\eqref{eq:causal-output} are exactly the
         frozen-gain sequential-residual update and all of its causal prefixes.
   \item Equation~\eqref{eq:joseph} is exactly the pre-observation ensemble MSE covariance of
-        equation~\eqref{eq:mean-commit}, conditional on the entry variables, keys, and noises
-        variances.
+        equation~\eqref{eq:mean-commit}, averaged over modeled observation histories and current
+        noise for fixed design variables.
   \item The dense covariance preserves cross-key-coordinate uncertainty between chunks.
   \item With \(C_c=1\), the observation update is the ordinary scalar Kalman update. Full parity
         with equation~\eqref{eq:token-exact} additionally requires the same placement of the
@@ -457,7 +481,8 @@ The first alternative removes the WY dependency by taking a damped parallel Jaco
   =
   \ve{S}_c^-+\eta_C\ve{L}_c\ve{\Delta}_c .
 \end{equation}
-It is only a speed/quality ablation. The undamped choice \(\eta_C=1\) is unsafe: with identical
+The first ablation fixes \(\eta_C=1/C_c\), using the true length for a partial chunk. It is only a
+speed/quality ablation. The undamped choice \(\eta_C=1\) is unsafe: with identical
 scalar keys, negligible noise, and identical targets, its error multiplier is \(1-C\). At
 \(C=32\) it can amplify the error by \(31\times\) in one chunk. Any damping must be fixed from
 causal-safe information such as \(C\); a rule based on future keys cannot affect earlier outputs.
@@ -519,7 +544,10 @@ with one or two cooperative CTAs per batch--head item. The existing two-CTA evid
 ownership and synchronization, but the new kernel contains no factor/inverse or \(288\)-RHS path.
 Grouped library GEMMs are allowed only in the Stage-5 multi-launch roofline decomposition. They
 cannot be called from a persistent device kernel. Stage 6 must use in-kernel MMA/CuTe/Triton dot
-operations, or explicitly remain a multi-kernel graph with materialized boundaries.
+operations; the materialized graph remains a feasibility artifact and cannot qualify as the
+production path. Ordinary Triton is initially a one-CTA option. A cooperative two-CTA design must
+use the demonstrated SM90 cluster/DSM mechanism in raw CUDA/CuTe unless equivalent cluster
+synchronization is independently proven for the chosen Triton path.
 
 At \(d=m=128\), FP32 \(\ve{P}+\ve{S}\) already require \(128\) KiB per head before
 \(\ve{K},\ve{Q},\ve{V},\ve{U},\ve{L},\ve{E}\), and small matrices. Before implementing the
@@ -527,14 +555,21 @@ complete persistent body, freeze row/tile ownership and compile a representative
 registers, static and dynamic shared memory, stack/local/spill/global scratch, active clusters for
 batch--head \(64\), and a synchronization/state-publication-only \(T=4096\) control. Compare one
 CTA and two CTAs in the same run; the prepared exact solver does not establish occupancy for this
-larger state.
+larger state. The representative spine advances only with zero stack/local/spill/global scratch
+and capacity for at least \(64\) active programs or clusters at batch--head \(64\). Stage 5 must
+also assign a numeric median/minimum budget to the synchronization/state-publication control from
+the complete-layer latency budget.
 
 \subsection{Numerical policy}
 
 Store and accumulate \(\ve{P}\), \(\ve{G}\), gain denominators, the WY transform, and the Joseph
 update in FP32 initially. IEEE FP32, TF32, TF32x3/B3, and BF16-input GEMMs are separate measured
 arms; no operation is called tensor-core-safe before a full boundary/output/gradient gate promotes
-its instruction precision. Tests must be invariant to the ambient PyTorch matmul policy.
+its instruction precision. These are numerical implementation arms, not a license to change the
+layer's dtype contract or rescue a slow design by lowering precision; the performance levers are
+tiling, fusion, launch structure, and recomputation. Tests must be invariant to the ambient
+PyTorch matmul policy, and every precision arm must report full-\(T\) boundary, output, gradient,
+and same-run latency results.
 Symmetrize the stored boundary covariance as
 \(\tfrac12(\ve{P}+\ve{P}^{\tr})\) to remove antisymmetric roundoff. Do not silently add jitter,
 clip eigenvalues, or project to the positive semidefinite cone. If stress tests require such a
@@ -542,8 +577,10 @@ modification, record it as a model/numerical change and evaluate it explicitly.
 
 The expanded Joseph expression can suffer cancellation even though the mathematical result is
 positive semidefinite. Compare it with direct Joseph evaluation in FP64 and with a square-root
-reference. The production path advances only if symmetry error and minimum-eigenvalue drift are no
-worse than the frozen FP32 baseline over full training-length sequences.
+reference. Before custom kernels, freeze the full-\(T\) IEEE-FP32 tensorized implementation against
+the FP64 Chunk-KLA reference; this is the named FP32 numerical baseline. The production path
+advances only if symmetry error and minimum-eigenvalue drift are no worse than that baseline over
+full training-length sequences.
 
 \subsection{Backward and checkpointing}
 
@@ -590,11 +627,22 @@ stream, warmup, and input tensors. Report both
 Implement two independent references:
 \begin{enumerate}
   \item a token-loop reference that forms each frozen-prior gain, residual, causal prefix output,
-        mean commit, Joseph covariance, and chunk transition directly;
+        mean commit, and chunk transition directly. It propagates the estimator-error covariance
+        independently at each token as
+        \[
+          \ve{P}^{\mathrm{err}}_t
+          =
+          (\ve{I}-\ve{\ell}_t\ve{k}_t^{\tr})
+          \ve{P}^{\mathrm{err}}_{t-1}
+          (\ve{I}-\ve{\ell}_t\ve{k}_t^{\tr})^{\tr}
+          +r_t\ve{\ell}_t\ve{\ell}_t^{\tr},
+        \]
+        while keeping the raw \(\ve{\ell}_t\) frozen from the chunk-entry \(\ve{P}_c^-\);
   \item a tensorized FP64 reference that explicitly forms the unit-lower WY inverse and implements
         equations~\eqref{eq:u-g}--\eqref{eq:chunk-dynamics}.
 \end{enumerate}
-The two references must agree, but neither is required to equal tokenwise ExactKLA for
+The tokenwise error-covariance endpoint must match the effective-gain Joseph expression. The two
+references must otherwise agree, but neither is required to equal tokenwise ExactKLA for
 \(C>1\). Compare to ExactKLA only as a measured approximation gap. The \(C=1\), no-dynamics case
 must match one scalar ExactKLA measurement update to FP64 tolerance.
 
@@ -618,7 +666,8 @@ Before any custom kernel, test:
   \item a binding injected at each within-chunk position and queried in the next chunk for
         \(\alpha\in\{0.5,0.9,0.99\}\), to expose the boundary-dynamics phase bias;
   \item undamped Jacobi's repeated-key failure, plus finite/norm-growth checks for frozen-gain
-        sequential residuals and the \(\eta_C=1/C\) Jacobi ablation through \(T=4096\).
+        sequential residuals and the \(\eta_C=1/C_c\) Jacobi ablation through \(T=4096\);
+  \item exact agreement with equation~\eqref{eq:repeated-key-oracle} across \(p,r,C\).
 \end{enumerate}
 The future-key mutation may change the covariance committed for the next chunk; it must not change
 an earlier output in the current chunk.
@@ -644,11 +693,17 @@ Run the tensorized reference, before writing a persistent kernel, on:
 \end{enumerate}
 Compare frozen-gain sequential residuals and damped Jacobi at
 \(C\in\{4,16,32,64\}\) against ExactKLA, DiagKLA, and KDA at matched parameter count. Report fixed
-and randomized offsets and the boundary-position survival probe. Before running this stage, freeze
-a manifest of numerical go/no-go thresholds for repeated-key state/covariance growth, MQAR and
-collision accuracy, short-range loss, NIAH accuracy, and a fixed-token language-model
-loss/perplexity gap. Derive thresholds from baseline seed variance; qualitative labels are not
-pass criteria. Select the update semantics and chunk width before Stage 5.
+and randomized offsets and the boundary-position survival probe. Add same-model ablations that
+replace only the carried boundary covariance by
+\(\diag(\ve{P}_c)\) and by
+\(\operatorname{tr}(\ve{P}_c)\ve{I}/d\); keep sequential residuals, dynamics, peripherals, and
+boundaries identical so the value of dense anisotropy can be isolated.
+
+Before running this stage, freeze a manifest of numerical go/no-go thresholds for repeated-key
+state/covariance growth, MQAR and collision accuracy, short-range loss, NIAH accuracy, and a
+fixed-token language-model loss/perplexity gap. Derive thresholds from baseline seed variance;
+qualitative labels are not pass criteria. Select the update semantics and the quality-eligible
+width set before Stage 5; the dependent performance gate makes the final width decision.
 
 \subsection{Stage 5: Tensorized GPU feasibility}
 
@@ -728,9 +783,10 @@ It is not to restore the failed exact chunk implementation under a new name.
 
 \section{Derivation of the Boundary Covariance}
 
-For one value coordinate, suppress the chunk subscript and condition throughout on the
-chunk-entry variables, \(\ve{K}\), and \(\ve{R}\), but not on the current realized observation.
-Write the boundary estimation error as
+For one value coordinate, suppress the chunk subscript and treat the keys, gates, and noise
+parameters as fixed design quantities. The expectation below averages over the modeled prior
+observation histories and current noise, not merely the current noise conditional on a realized
+approximate entry state. Write the boundary estimation error as
 \begin{equation}
   \ve{e}^-=\ve{s}^\star-\ve{s}^-,
   \qquad
