@@ -429,7 +429,8 @@ For one full chunk, the leading dense work is
   O(d^2C+dC^2+dCm+C^2m+C^3),
 \end{equation}
 with recurrence depth \(T/C\). The \(O(Td^2)\) covariance--key arithmetic has not disappeared, but
-it becomes tensor-core-friendly matrix multiplication. The exact dynamic builder, factorization,
+it becomes GEMM-shaped matrix multiplication; tensor-core acceleration remains conditional on the
+precision gate. The exact dynamic builder, factorization,
 and wide triangular solve are absent; the \(C^3\) term is the existing unit-lower WY transform.
 With the production geometry \(d=m=128\), \(C=32\) is the provisional first point because exact
 component evidence favors that tile and its local matrices remain small. The new dependent
@@ -660,8 +661,8 @@ Before any custom kernel, test:
   \item an op-level causality mutation test: changing any
         \((\ve{k}_t,\ve{v}_t,\ve{q}_t,r_t,\ve{\alpha}_t,\ve{\omega}_t)\) with \(t>j\) cannot
         change output \(j\);
-  \item full-layer streaming-versus-full-sequence causality parity, including projections and
-        short convolution;
+  \item a slow reference full-layer streaming-versus-full-sequence causality check, including
+        projections and short convolution; this is not the production cache promised in Stage 7;
   \item chunk-boundary shifts, random offsets, and aligned versus layer-staggered boundaries;
   \item a binding injected at each within-chunk position and queried in the next chunk for
         \(\alpha\in\{0.5,0.9,0.99\}\), to expose the boundary-dynamics phase bias;
@@ -723,12 +724,26 @@ chunk \(c\). Add poisoned-boundary and transitive-mutation checks; independently
 repeated buffers, and sums of component minima are not recurrence evidence.
 
 After a fresh KDA measurement, freeze numeric budgets for the guards-off dependent core, mandatory
-tail/symmetrization work, layer peripherals, forward--backward, and peak memory. A component timing
-is never promoted to a layer claim. The complete-layer target for this approximate model is below
-\(3\times\) KDA at matched \(d=128\); the old \(5\)--\(6\times\) allowance applied to a model that
-preserved exact inference. A \(3\)--\(5\times\) approximate result advances only under a
-predeclared quality exception, and a result at or above \(5\times\) is rejected. This stricter
-target is the required return for giving up exact tokenwise semantics.
+tail/symmetrization work, layer peripherals, forward--backward, peak memory, and the resource
+control above. Freeze the forward--backward/KDA target and memory ceiling here, before either
+custom kernel is written. A component timing is never promoted to a layer claim. The complete-layer
+target for this approximate model is below \(3\times\) KDA at matched \(d=128\); the old
+\(5\)--\(6\times\) allowance applied to a model that preserved exact inference. A
+\(3\)--\(5\times\) approximate result advances only under a predeclared quality exception, and a
+result at or above \(5\times\) is rejected. This stricter target is the required return for giving
+up exact tokenwise semantics.
+
+Define runtime guards before timing: gain denominators must be positive and finite, and WY,
+boundary-mean, and boundary-covariance intermediates must remain finite. A device failure flag is
+fail-closed and raises an explicit training error before the optimizer step; v0 has no silent
+jitter, clipping, retry, or exact fallback. PSD and symmetry are full-sequence numerical gates,
+not an unpriced per-chunk eigensolve. Final timing includes predicate evaluation, flag
+bookkeeping, the empty failure path, masks, and tails.
+
+The final compiled candidate uses a source-pinned, same-process balanced interleave with
+15 warmups and 40 measured samples. The chosen threshold or quality exception must hold separately
+for both median/median and minimum/minimum ratios, and separately for forward and
+forward--backward.
 
 \subsection{Stage 6: Persistent forward and custom backward}
 
@@ -742,9 +757,9 @@ redzones, active-range aliases, allocator lifetime, and producer/consumer orderi
 
 After the forward passes all gates, implement the reverse chunk recurrence with superchunk
 checkpointing. Measure \(J\in\{4,8,16\}\), validate every input gradient independently, and report
-forward--backward latency and peak memory. Freeze a separate numeric forward--backward/KDA ratio;
-forward speed alone cannot qualify a training kernel. The final timed layer call includes masks,
-tails, symmetrization, boundary publication, mandatory dispatches, and the complete layer shell.
+forward--backward latency and peak memory against the Stage-5 frozen targets; forward speed alone
+cannot qualify a training kernel. The final timed layer call includes masks, tails, symmetrization,
+boundary publication, mandatory dispatches, and the complete layer shell.
 
 \subsection{Stage 7: Integration and ablation}
 

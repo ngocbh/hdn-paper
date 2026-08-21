@@ -1,0 +1,1897 @@
+\RequirePackage[svgnames,table]{xcolor}
+
+\documentclass[11pt,letterpaper,logo]{yalearxiv}
+
+\input{preamble}
+\input{command}
+
+
+\title{Kalman Delta Networks 2:\\
+Associative Memory with Damped Rotational Dynamics}
+
+\runningtitle{Kalman Delta Networks 2}
+
+\usepackage{fontawesome5}
+
+\definecolor{yaleblue}{RGB}{0,58,112}
+\newcommand{\yale}{%
+  \textsuperscript{%
+    {\usefont{T1}{pbk}{m}{n}\textcolor{yaleblue}{\textbf{Y}}}%
+  }%
+}
+
+\author{Ngoc Bui\yale, Rex Ying\yale\\
+\yale Department of Computer Science, Yale University\\
+\faGithub~\textbf{Source Code:} \href{https://github.com/ngocbh/kalman-delta-networks}{\texttt{https://github.com/ngocbh/kalman-delta-networks}}
+}
+
+\hypersetup{colorlinks=true, linkcolor=blue!50!black, citecolor=blue!50!black,
+            urlcolor=blue!50!black}
+
+% --- draft-local notation ---
+\newcommand{\tril}{\operatorname{tril}}
+\newcommand{\blockdiag}{\operatorname{blockdiag}}
+\newcommand{\Diag}{\operatorname{Diag}}
+\newcommand{\Rot}{\mathsf{R}}
+
+\begin{abstract}
+\vspace{-1mm}
+{\centering\section*{Abstract}}
+Linear attention compresses a sequence into a fixed-size associative memory. Existing delta-rule
+mixers learn how strongly that memory should decay, but their positive real transitions primarily
+control \emph{survival}: they do not provide a process mechanism for moving surviving information
+between latent directions. We introduce \emph{Kalman Delta Networks 2} (KDN-2), which equips
+uncertainty-aware associative memory with damped rotational dynamics. Each fixed two-dimensional
+mode has a radius that controls lifetime and an angle that controls phase. Learned measurement
+maps determine which modes are observed and corrected, while read maps determine visibility. When
+the uncertainty-shaped write and read phases align appropriately, a write can occupy a latent
+quadrature with little immediate readout and later become observable, without conflating
+persistence with accessibility. Its deterministic rotational transport is a moving-coordinate
+representation of the accumulated rotary addressing used by Mamba-3; KDN-2 differs by coupling
+this shared geometry to an innovation-driven, covariance-shaped correction. We formulate KDN-2
+as a linear--Gaussian
+state-space model and derive its exact tokenwise Kalman residual update, dense covariance
+propagation, rotational composition law, and survival--visibility decomposition. Exact dense
+filtering remains computationally demanding. As an implementation detail, we therefore propose
+processing KDN-2 in chunks using a co-rotating frame, freezing dense-prior gains within each chunk,
+preserving causal sequential residuals through a WY form, and committing the corresponding Joseph
+error covariance
+at the boundary. This design preserves deterministic rotational transport exactly while
+approximating within-chunk covariance feedback and process-noise timing. We state these boundaries
+explicitly and give falsifiable tests for phase-aware recall, cue-controlled observability,
+interference, approximation error, and complete systems cost.
+\end{abstract}
+
+
+\begin{document}
+
+
+\maketitle
+
+
+% =============================================================================
+\section{Introduction}
+\label{sec:intro-kdn2}
+
+Self-attention is a flexible content-addressing mechanism: every query can compare itself with all
+preceding keys and retrieve their values \citep{vaswani2017attention}. This flexibility comes from
+retaining the token history. The autoregressive key--value cache grows with context length, and
+processing a full sequence requires quadratic query--key interactions. Linear attention instead
+compresses the prefix into a fixed-size recurrent state
+\citep{katharopoulos2020transformers}. Its scaling is attractive, but compression turns attention
+into an online memory-management problem. Once many observations share one state, the model must
+decide what survives, what is overwritten, and what a query can currently observe.
+
+DeltaNet treats the recurrent state as an associative map. It reads the value stored at the
+current key and writes only the residual
+\citep{schlag2021linear,yang2024parallelizing}. Gated DeltaNet and KDA additionally learn positive
+real transitions that decay the memory globally or by channel
+\citep{yang2024gdn,kimiteam2025kimilinear}. These mechanisms create a bank of retention
+timescales. They answer \emph{how much} of a memory remains, but they do not provide a process
+mechanism for moving the surviving state between latent directions. A slow channel remains in the
+same coordinate; it is visible whenever the query overlaps that coordinate. A fast channel
+vanishes and cannot later be restored by the process alone.
+
+This observation suggests that memory dynamics have three distinct roles. \emph{Survival} asks
+whether a write retains appreciable norm. \emph{Phase} asks where that surviving write moves in
+latent space. \emph{Visibility} asks whether the current read direction observes it. Positive
+diagonal decay mainly controls the first quantity. Changing queries can still change visibility,
+but the process itself cannot rotate an association into a latent quadrature, preserve it there,
+and move it toward a readable phase. Conflating these roles makes it difficult to express
+active/archive behavior, delayed visibility, or phase-selective retrieval.
+
+Kalman associative memory provides the right framework for separating them. It regards the
+recurrent matrix as an estimate of a latent, drifting key--value map. Each token is a noisy linear
+observation, the process model predicts how the map moves, and a covariance records which address
+directions are supported by evidence. The Kalman gain then produces an uncertainty-weighted delta
+write: uncertain directions adapt quickly, while well-supported directions resist noisy
+corrections. Importantly, the process transition is not merely a forget gate. It is the model's
+explicit hypothesis about how stored associations move between observations.
+
+We introduce \emph{Kalman Delta Networks 2} (KDN-2), whose process model consists of damped
+two-dimensional rotations. Each mode has complex-conjugate poles
+$\rho e^{\pm\mathrm{i}\theta}$ represented in real arithmetic. The radius $\rho$ controls
+survival, the angle $\theta$ controls phase motion, and learned measurement and read maps control
+which modes are written, corrected, and observed. A cross-quadrature write can therefore have
+small immediate readout while retaining norm and becoming visible after later rotations. A bank of
+modes yields damped oscillatory responses rather than only zero-frequency exponential decay.
+
+Damped rotational transport itself is not the distinction from prior sequence models. Mamba-3
+accumulates phase in its key and query maps and thereby realizes the same open-loop relative-phase
+kernel \citep{lahoti2026mamba3}. Section~\ref{sec:kdn2-mamba3} gives the exact change of
+coordinates between that representation and KDN-2's incremental state rotation. The models
+separate at the memory update: Mamba-3 uses additive exponential--trapezoidal writes, whereas
+KDN-2 uses the innovation and an evolving covariance to determine what is corrected and by how
+much.
+
+KDN-2 remains a Kalman delta network, not an unrelated spectral state-space model. The exact
+tokenwise recursion predicts both the associative memory and its dense covariance through the
+rotational process, forms the uncertainty-optimal residual write, and reads the corrected state.
+Dense uncertainty matters because a measurement immediately creates anisotropy and correlations
+between modes. Those correlations can redirect later gains, so the observation address does not
+by itself determine the write phase. The transition, covariance, measurement map, and read map
+must be analyzed together.
+
+The rotational construction also has sharp limitations. Rotation changes temporal coding and
+interference; it does not create additional capacity. A fixed oscillator schedules visibility by
+elapsed time but does not by itself retrieve an arbitrary item on a semantic cue. Query-controlled
+observability remains necessary, and later Kalman corrections can erase a nominally hidden
+quadrature. We therefore distinguish the open-loop process response from the actual closed-loop
+lineage after intervening measurements, and design evaluations that randomize cue times and recall
+order.
+
+The exact tokenwise recurrence defines KDN-2's reference semantics, but its dense covariance
+follows a fine-grained Riccati recurrence. Our proposed implementation design addresses this
+systems obstacle
+without redefining the model. Within each chunk, we transform keys and queries into a co-rotating
+frame, compute dense-prior gains together, and preserve causal sequential residuals with a WY
+form. At the boundary, a Joseph update records the ensemble error covariance of the local
+frozen-gain estimator under a delayed-noise surrogate. Deterministic rotational transport remains
+token-timed; the proposed design approximates covariance feedback and the timing of process noise.
+Chunking is thus an
+implementation detail and an explicit approximation, not the motivation or definition of KDN-2.
+
+Our contributions are:
+
+\begin{itemize}[leftmargin=1.4em,itemsep=3pt,topsep=2pt]
+  \item We formalize survival, phase, and visibility as distinct properties of recurrent
+  associative memory and derive their roles in open-loop and closed-loop retrieval.
+  \item We introduce KDN-2, an exact tokenwise Kalman associative-memory model with damped
+  rotational transitions, phase-aware measurement and read maps, and dense uncertainty-aware
+  residual writes.
+  \item We prove that its rotational transport is coordinate-equivalent to Mamba-3's accumulated
+  rotary addressing, then isolate the different update rules. We also characterize hidden and
+  observable quadratures and distinguish scheduled resurfacing from recall on cue.
+  \item We derive a causal chunkwise implementation in a co-rotating frame. It retains dense
+  uncertainty at boundaries and exact deterministic rotational transport while making its
+  within-chunk filtering approximations explicit.
+\end{itemize}
+
+The suffix in KDN-2 denotes this richer process geometry for Kalman Delta Networks. It is unrelated
+to the architectural suffix in Gated DeltaNet-2 (GDN-2;
+\citealp{hatamizadeh2026gdn2}).
+
+
+% =============================================================================
+\section{Preliminaries}
+\label{sec:preliminaries-kdn2}
+
+\subsection{Linear Associative Memory and Delta Updates}
+\label{sec:linear-memory-kdn2}
+
+Let $\ve{S}_t\in\R^{d\times m}$ be a recurrent associative memory with address width $d$ and
+value width $m$. A key--value pair $(\ve{k}_t,\ve{v}_t)$ writes to the memory and a query
+$\ve{q}_t$ reads
+\begin{equation}
+  \ve{o}_t=\ve{S}_t^{\tr}\ve{q}_t.
+  \label{eq:kdn2-read}
+\end{equation}
+Additive linear attention uses
+$\ve{S}_t=\ve{S}_{t-1}+\ve{k}_t\ve{v}_t^{\tr}$, which cannot explicitly remove a conflicting
+association. DeltaNet instead takes a residual-gradient step on the instantaneous recall error,
+\begin{equation}
+  \ve{S}_t
+  =
+  \ve{S}_{t-1}
+  +\beta_t\ve{k}_t
+   \big(\ve{v}_t-\ve{S}_{t-1}^{\tr}\ve{k}_t\big)^{\tr}.
+  \label{eq:kdn2-delta}
+\end{equation}
+Gated variants first transform the state,
+\begin{equation}
+  \widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1},
+  \qquad
+  \ve{S}_t
+  =
+  \widehat{\ve{S}}_t
+  +\beta_t\ve{k}_t
+   \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr},
+  \label{eq:kdn2-gated-delta}
+\end{equation}
+where $\ve{D}_t=\alpha_t\ve{I}$ in Gated DeltaNet and
+$\ve{D}_t=\diag(\ve{\alpha}_t)$ in KDA. These transitions provide multiple survival timescales,
+but the scalar gain $\beta_t$ does not depend on accumulated uncertainty.
+
+\subsection{Associative Memory as a Filtering Problem}
+\label{sec:filtering-problem-kdn2}
+
+Let $\ve{S}_t^\star$ be a latent associative map. A linear--Gaussian model writes
+\begin{equation}
+\begin{aligned}
+  \ve{S}_t^\star
+  &=\ve{D}_t\ve{S}_{t-1}^\star+\ve{W}_t,
+  &\ve{W}_t&\sim\N(\ve{0},\ve{\Omega}_t),\\
+  \ve{v}_t
+  &=\ve{S}_t^{\star\tr}\ve{k}_t+\ve{e}_t,
+  &\ve{e}_t&\sim\N(\ve{0},r_t\ve{I}).
+\end{aligned}
+\label{eq:kdn2-token-model}
+\end{equation}
+The matrix-normal notation is columnwise: value coordinates are conditionally independent and
+share one key-space covariance. Let $\mc F_t$ denote the observations available through token
+$t$. The minimum conditional mean-squared-error estimate is
+\begin{equation}
+  \ve{S}_t
+  =
+  \argmin_{\widetilde{\ve{S}}}
+  \E\!\left[
+    \left.
+    \|\ve{S}_t^\star-\widetilde{\ve{S}}\|_F^2
+    \right|\mc F_t
+  \right]
+  =
+  \E[\ve{S}_t^\star\mid\mc F_t].
+  \label{eq:kdn2-mmse}
+\end{equation}
+
+Given posterior mean $\ve{S}_{t-1}$ and covariance $\ve{P}_{t-1}$, the exact Kalman reference is
+\begin{equation}
+\begin{aligned}
+  \widehat{\ve{S}}_t
+    &=\ve{D}_t\ve{S}_{t-1},
+  &
+  \widehat{\ve{P}}_t
+    &=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t,
+  \\
+  \ve{\kappa}_t
+    &=\frac{\widehat{\ve{P}}_t\ve{k}_t}
+      {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t},
+  &
+  \ve{S}_t
+    &=\widehat{\ve{S}}_t
+      +\ve{\kappa}_t
+       \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr},
+  \\
+  \ve{P}_t
+    &=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})
+      \widehat{\ve{P}}_t,
+  &
+  \ve{o}_t
+    &=\ve{S}_t^{\tr}\ve{q}_t.
+\end{aligned}
+\label{eq:kdn2-token-exact}
+\end{equation}
+The gain in \eqref{eq:kdn2-token-exact} is obtained by minimizing the conditional
+estimation-error objective, equivalently the trace of the candidate error covariance. Thus the
+Kalman update is a delta rule whose write direction is preconditioned by the uncertainty accumulated
+from the entire preceding stream. Appendix~\ref{app:kdn2-optimal-gain} derives the gain directly
+from this objective.
+
+\subsection{From KDN to KDN-2}
+\label{sec:from-kdn-to-kdn2}
+
+The predecessor KDN construction interprets the delta rule as a Kalman correction and makes its
+uncertainty state scan-compatible through scalar or diagonal structure. KDN-2 keeps that
+uncertainty-aware interpretation but changes the process geometry: its latent associative map moves
+through damped rotational modes, so persistence and phase are no longer the same quantity. The
+exact tokenwise filter below defines the model. Section~\ref{sec:kdn2-efficient} later derives an
+approximate implementation; that implementation is not a second KDN-2 variant.
+
+\begin{center}
+\footnotesize
+\begin{tabular}{p{0.20\linewidth}p{0.24\linewidth}p{0.25\linewidth}p{0.19\linewidth}}
+\toprule
+\textbf{Mixer} & \textbf{Write geometry} & \textbf{Process geometry} & \textbf{Primary role}\\
+\midrule
+DeltaNet / GDN / KDA & learned scalar residual gain & identity, scalar decay, or positive diagonal
+decay & overwrite and retention\\
+KDN & scalar- or diagonal-uncertainty gain & positive real scalar or diagonal dynamics &
+uncertainty-aware retention\\
+KDN-2 & Kalman gain in a lifted latent address space & damped rotations with complex-conjugate
+poles & survival, phase, and visibility\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+
+% =============================================================================
+\section{Beyond Geometric Forgetting}
+\label{sec:kdn2-geometry}
+
+\subsection{Process-Only Survival and Visibility}
+\label{sec:kdn2-process-lineage}
+
+Consider a residual written at time $\tau$ through
+\begin{equation}
+  \ve{U}_\tau
+  =
+  \ve{\kappa}_\tau\ve{\delta}_\tau^{\tr},
+  \qquad
+  \ve{\delta}_\tau
+  =
+  \ve{v}_\tau-\widehat{\ve{S}}_\tau^{\tr}\ve{h}_\tau.
+  \label{eq:kdn2-write-impulse}
+\end{equation}
+Here $\ve{h}_\tau$ is the measurement address; it may be the external key or a learned lift of
+that key. To isolate the process model, first suppress all later measurement corrections. The
+contribution propagated to $t>\tau$ is
+\begin{equation}
+  \widetilde{\ve{S}}_{t\leftarrow\tau}^{\mathrm{proc}}
+  =
+  \ve{\Phi}_{t:\tau}\ve{\kappa}_\tau\ve{\delta}_\tau^{\tr},
+  \qquad
+  \ve{\Phi}_{t:\tau}
+  =
+  \ve{D}_t\ve{D}_{t-1}\cdots\ve{D}_{\tau+1}.
+  \label{eq:kdn2-process-contribution}
+\end{equation}
+For a read address $\ve{g}_t$, its process-only output is
+\begin{equation}
+  \widetilde{\ve{o}}_{t\leftarrow\tau}^{\mathrm{proc}}
+  =
+  \ve{\delta}_\tau
+  \underbrace{
+    \ve{\kappa}_\tau^{\tr}
+    \ve{\Phi}_{t:\tau}^{\tr}\ve{g}_t
+  }_{\text{visibility at time }t}.
+  \label{eq:kdn2-process-visibility}
+\end{equation}
+Equations~\eqref{eq:kdn2-process-contribution}--\eqref{eq:kdn2-process-visibility} separate two
+questions that a scalar retention score conflates:
+$\|\ve{\Phi}_{t:\tau}\ve{\kappa}_\tau\|_2$ measures how much of the write survives, while its
+alignment with $\ve{g}_t$ measures how much is currently visible.
+
+For positive diagonal dynamics,
+\begin{equation}
+  \ve{\Phi}_{t:\tau}
+  =
+  \diag\!\left(
+    \prod_{s=\tau+1}^{t}\alpha_{s,1},
+    \ldots,
+    \prod_{s=\tau+1}^{t}\alpha_{s,d}
+  \right),
+  \qquad
+  0\leq\alpha_{s,i}\leq1.
+  \label{eq:kdn2-diagonal-product}
+\end{equation}
+Every scalar mode is nonincreasing in magnitude. Different coordinates provide different
+timescales, and a changing query can still alter their visibility, but the process cannot move
+surviving state between coordinates or generate oscillatory phase. A fixed change of basis does
+not change this fact: a transition with positive real eigenvalues still contains only
+zero-frequency exponential modes.
+
+\subsection{The Closed Loop}
+\label{sec:kdn2-closed-loop}
+
+Process-only survival is necessary but not sufficient for retrieval. Expanding a Kalman residual
+update gives
+\begin{equation}
+  \ve{S}_t
+  =
+  \underbrace{
+    (\ve{I}-\ve{\kappa}_t\ve{h}_t^{\tr})\ve{D}_t
+  }_{\ve{A}_t}
+  \ve{S}_{t-1}
+  +
+  \ve{\kappa}_t\ve{v}_t^{\tr}.
+  \label{eq:kdn2-closed-loop-carry}
+\end{equation}
+Let
+\begin{equation}
+  \ve{\Psi}_{t:\tau}
+  =
+  \ve{A}_t\ve{A}_{t-1}\cdots\ve{A}_{\tau+1}.
+  \label{eq:kdn2-closed-loop-product}
+\end{equation}
+Holding subsequent inputs fixed, the actual contribution of write $\tau$ to a later output is
+\begin{equation}
+  \ve{o}_{t\leftarrow\tau}
+  =
+  \ve{\delta}_\tau
+  \ve{\kappa}_\tau^{\tr}
+  \ve{\Psi}_{t:\tau}^{\tr}\ve{g}_t.
+  \label{eq:kdn2-closed-loop-contribution}
+\end{equation}
+The difference between $\ve{\Phi}_{t:\tau}$ and $\ve{\Psi}_{t:\tau}$ is essential. A process mode
+can retain norm yet be erased or mixed by later observations. We therefore use
+\eqref{eq:kdn2-process-visibility} to identify what the transition makes possible and
+\eqref{eq:kdn2-closed-loop-contribution} to evaluate what the complete memory actually retrieves.
+
+
+% =============================================================================
+\section{Kalman Delta Networks 2}
+\label{sec:kdn2-method}
+
+KDN-2 enriches the latent process geometry while retaining the ordinary linear--Gaussian
+filtering rule. Its defining model is tokenwise: the process controls survival and phase, while
+distinct measurement and read maps control which latent directions are corrected and observed.
+
+\subsection{Latent Measurement and Read Geometry}
+\label{sec:kdn2-address-geometry}
+
+Let $\ve{S}_t^\star\in\R^{d_s\times d_v}$ be the latent associative map. We distinguish external
+keys and queries from their latent-state addresses,
+\begin{equation}
+  \ve{h}_t=\ve{E}_t\ve{k}_t,
+  \qquad
+  \ve{g}_t=\ve{F}_t\ve{q}_t,
+  \qquad
+  \ve{E}_t,\ve{F}_t\in\R^{d_s\times d_k}.
+  \label{eq:kdn2-address-lifts}
+\end{equation}
+The measurement address $\ve{h}_t$ determines which directions are observed and corrected. The
+read address $\ve{g}_t$ determines which directions enter the output. Their separation makes
+being hidden from the current read a precise property rather than a synonym for forgetting.
+
+For each value coordinate, KDN-2 assumes
+\begin{equation}
+\begin{aligned}
+  \ve{S}_t^\star
+  &=
+  \ve{D}_t\ve{S}_{t-1}^\star+\ve{W}_t,
+  &
+  \Cov(\ve{W}_{t,:,j})
+  &=
+  \ve{\Omega}_t,
+  \\
+  \ve{v}_t
+  &=
+  \ve{S}_t^{\star\tr}\ve{h}_t+\ve{\xi}_t,
+  &
+  \ve{\xi}_t
+  &\sim\N(\ve{0},r_t\ve{I}_{d_v}).
+\end{aligned}
+\label{eq:kdn2-state-space-model}
+\end{equation}
+The noises are zero mean and mutually independent. The token-local quantities
+$\ve{D}_t,\ve{\Omega}_t,\ve{E}_t,\ve{F}_t$, and $r_t$ are known when conditioning on the current
+input.
+
+\subsection{Exact Tokenwise Recursion}
+\label{sec:kdn2-exact-tokenwise}
+
+Given the posterior mean and shared key-space covariance from token $t-1$, KDN-2 predicts
+\begin{equation}
+\begin{aligned}
+  \widehat{\ve{S}}_t
+  &=
+  \ve{D}_t\ve{S}_{t-1},
+  &
+  \widehat{\ve{P}}_t
+  &=
+  \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}
+  +\ve{\Omega}_t.
+\end{aligned}
+\label{eq:kdn2-predict}
+\end{equation}
+With innovation
+$\ve{\delta}_t=\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{h}_t$, the correction and read are
+\begin{equation}
+\boxed{
+\begin{aligned}
+  \ve{\kappa}_t
+  &=
+  \frac{\widehat{\ve{P}}_t\ve{h}_t}
+  {r_t+\ve{h}_t^{\tr}\widehat{\ve{P}}_t\ve{h}_t},
+  \\
+  \ve{S}_t
+  &=
+  \widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr},
+  \\
+  \ve{P}_t
+  &=
+  (\ve{I}-\ve{\kappa}_t\ve{h}_t^{\tr})
+  \widehat{\ve{P}}_t
+  (\ve{I}-\ve{\kappa}_t\ve{h}_t^{\tr})^{\tr}
+  +
+  r_t\ve{\kappa}_t\ve{\kappa}_t^{\tr},
+  \\
+  \ve{o}_t
+  &=
+  \ve{S}_t^{\tr}\ve{g}_t.
+\end{aligned}}
+\label{eq:kdn2-exact-recurrence}
+\end{equation}
+Under \eqref{eq:kdn2-state-space-model},
+$\ve{S}_t=\E[\ve{S}_t^\star\mid\mc F_t]$. The gain is derived from the conditional
+mean-squared-error objective, not assumed in advance: Appendix~\ref{app:kdn2-optimal-gain} shows
+that it is the unique minimizer of that objective, equivalently of the trace of the
+post-correction error covariance.
+Equation~\eqref{eq:kdn2-exact-recurrence} is the reference semantics of KDN-2.
+
+Dense covariance matters even though the process is structured. A single observation creates
+anisotropy and cross-coordinate correlations; the next write direction is
+$\widehat{\ve{P}}_t\ve{h}_t$, not generally $\ve{h}_t$. Projecting after each observation to a
+scalar or diagonal family changes both uncertainty and the phase of later writes.
+
+\subsection{Damped Rotational Process}
+\label{sec:kdn2-rotation}
+
+Define
+\begin{equation}
+  \Rot(\theta)
+  =
+  \begin{bmatrix}
+    \cos\theta&-\sin\theta\\
+    \sin\theta& \cos\theta
+  \end{bmatrix}.
+  \label{eq:kdn2-rotation-matrix}
+\end{equation}
+Partition $d_s=\sum_{a=1}^{M}2r_a$ into fixed mode groups and let
+\begin{equation}
+  \ve{D}_t
+  =
+  \blockdiag_{a=1}^{M}
+  \left[
+    \rho_{t,a}\Rot(\theta_{t,a})\otimes\ve{I}_{r_a}
+  \right],
+  \qquad
+  0<\rho_{t,a}\leq1.
+  \label{eq:kdn2-rotational-D}
+\end{equation}
+A stable token-local parameterization is
+\begin{equation}
+  \rho_{t,a}
+  =
+  \exp(-\lambda_a\Delta_{t,a}),
+  \qquad
+  \theta_{t,a}
+  =
+  \omega_a\Delta_{t,a}+\gamma_{t,a},
+  \qquad
+  \lambda_a\geq0,\quad \Delta_{t,a}\geq0,
+  \label{eq:kdn2-rho-theta}
+\end{equation}
+where $\omega_a$ is a base frequency and $\gamma_{t,a}$ is an optional bounded phase increment.
+The initial design uses fixed learned frequencies and sets $\gamma_{t,a}=0$; dynamic phase
+increments are an ablation because one kick moves every association sharing that mode. A
+block-isotropic process noise,
+\begin{equation}
+  \ve{\Omega}_t
+  =
+  \blockdiag_{a=1}^{M}
+  \left[\nu_{t,a}\ve{I}_{2r_a}\right],
+  \qquad
+  \nu_{t,a}\geq0,
+  \label{eq:kdn2-process-noise}
+\end{equation}
+makes the additive noise update cheap. The fixed-plane structure of $\ve{D}_t$ is what lets a
+dense covariance prediction be evaluated in $O(d_s^2)$ rather than by a generic cubic similarity
+transform.
+
+\refstepcounter{definition}\label{prop:kdn2-rotation}
+\begin{tcolorbox}[
+  title={Proposition~\thedefinition: Damped Rotational Composition},
+  colback=blue!7,
+  colbacktitle=blue!22,
+  colframe=blue!45!black,
+  coltitle=black,
+  fonttitle=\bfseries,
+  boxrule=0.4pt,
+  arc=1pt,
+  left=5pt,
+  right=5pt,
+  top=5pt,
+  bottom=5pt
+]
+For mode $a$, define
+$\ve{\Phi}_{t:\tau}^{(a)}
+=\ve{D}_t^{(a)}\cdots\ve{D}_{\tau+1}^{(a)}$. Then
+\begin{equation}
+  \ve{\Phi}_{t:\tau}^{(a)}
+  =
+  \left(\prod_{s=\tau+1}^{t}\rho_{s,a}\right)
+  \Rot\!\left(\sum_{s=\tau+1}^{t}\theta_{s,a}\right)
+  \otimes\ve{I}_{r_a},
+  \label{eq:kdn2-rotation-product}
+\end{equation}
+and, for every $\ve{x}$ in that mode,
+\begin{equation}
+  \|\ve{\Phi}_{t:\tau}^{(a)}\ve{x}\|_2
+  =
+  \left(\prod_{s=\tau+1}^{t}\rho_{s,a}\right)\|\ve{x}\|_2.
+  \label{eq:kdn2-rotation-norm}
+\end{equation}
+Thus the radii determine survival independently of accumulated phase; visibility additionally
+depends on the read direction.
+\end{tcolorbox}
+
+\noindent\textit{Proof.} See Appendix~\ref{app:kdn2-rotation-proof}.
+
+For constant $\rho_a$ and $\theta_a$, the eigenvalues are
+$\rho_a e^{\pm\mathrm{i}\theta_a}$ and the amplitude half-life is
+\begin{equation}
+  L_{1/2,a}
+  =
+  \frac{\log 2}{-\log\rho_a}
+  \label{eq:kdn2-half-life}
+\end{equation}
+when $\rho_a<1$. If $\ve{b}_a$ and $\ve{c}_a$ are the actual two-dimensional slices of a write
+and a later read, the process response at lag $\ell$ is
+\begin{equation}
+\begin{aligned}
+  h_a(\ell)
+  &=
+  \ve{c}_a^{\tr}
+  [\rho_a\Rot(\theta_a)]^\ell
+  \ve{b}_a\\
+  &=
+  \rho_a^\ell
+  \left[
+    A_a\cos(\ell\theta_a)+B_a\sin(\ell\theta_a)
+  \right].
+\end{aligned}
+\label{eq:kdn2-mode-response}
+\end{equation}
+A bank of modes therefore provides damped oscillatory responses, rather than only a bank of
+zero-frequency exponential decays. Rotation changes temporal coding and interference; it does not
+increase the number of independent values that a fixed-size memory can store.
+
+\subsection{Relation to Mamba-3: Equivalent Rotational Coordinates, Different Updates}
+\label{sec:kdn2-mamba3}
+
+KDN-2 and Mamba-3 place phase in apparently different parts of their recurrences. KDN-2
+transports the associative state with incremental rotations, whereas Mamba-3 applies accumulated
+rotary maps to its write and read addresses \citep{lahoti2026mamba3}. The two parameterizations
+are exactly related by a time-dependent orthogonal change of coordinates.
+
+To make the relation explicit, consider one Mamba-3 SISO head and transpose its recurrent state
+into the address-by-value convention used here. After absorbing address normalization and biases
+into the keys and queries, and omitting only the direct skip and output gate, its memory recurrence
+can be written
+\begin{equation}
+\begin{aligned}
+  \ve{A}_t
+  &=
+  \alpha_t\ve{A}_{t-1}
+  +\beta_t\widetilde{\ve{k}}_{t-1}\ve{v}_{t-1}^{\tr}
+  +\gamma_t\widetilde{\ve{k}}_t\ve{v}_t^{\tr},
+  &
+  \ve{o}^{\mathrm{mem}}_t
+  &=
+  \ve{A}_t^{\tr}\widetilde{\ve{q}}_t,
+  \\
+  \widetilde{\ve{k}}_t
+  &=\ve{R}_t\ve{k}_t,
+  &
+  \widetilde{\ve{q}}_t
+  &=\ve{R}_t\ve{q}_t,
+\end{aligned}
+\label{eq:mamba3-siso-memory}
+\end{equation}
+where $\ve{R}_t$ is the block-orthogonal map formed from accumulated phases. Mamba-3's learned
+exponential--trapezoidal discretization uses
+\begin{equation}
+  \alpha_t=\exp(a_t\Delta_t),
+  \qquad
+  \beta_t=\alpha_t\Delta_t(1-\eta_t),
+  \qquad
+  \gamma_t=\Delta_t\eta_t,
+  \qquad a_t<0,\quad 0\leq\eta_t\leq1.
+  \label{eq:mamba3-trapezoidal-weights}
+\end{equation}
+
+Define a moving-frame state and the relative rotation
+\begin{equation}
+  \ve{S}^{\mathrm{M3}}_t=\ve{R}_t^{\tr}\ve{A}_t,
+  \qquad
+  \ve{U}_t=\ve{R}_t^{\tr}\ve{R}_{t-1}.
+  \label{eq:mamba3-moving-frame}
+\end{equation}
+Substituting \eqref{eq:mamba3-moving-frame} into \eqref{eq:mamba3-siso-memory} gives, without
+approximation,
+\begin{equation}
+\boxed{
+\begin{aligned}
+  \ve{S}^{\mathrm{M3}}_t
+  &=
+  \underbrace{\alpha_t\ve{U}_t}_{\ve{D}^{\mathrm{M3}}_t}
+  \left[
+    \ve{S}^{\mathrm{M3}}_{t-1}
+    +\Delta_t(1-\eta_t)\ve{k}_{t-1}\ve{v}_{t-1}^{\tr}
+  \right]
+  +\Delta_t\eta_t\ve{k}_t\ve{v}_t^{\tr},
+  \\
+  \ve{o}^{\mathrm{mem}}_t
+  &=
+  (\ve{S}^{\mathrm{M3}}_t)^{\tr}\ve{q}_t.
+\end{aligned}}
+\label{eq:mamba3-rotational-form}
+\end{equation}
+If the planes of $\ve{R}_t$ have accumulated angles $\phi_{t,a}$, then
+\begin{equation}
+  \ve{U}_t
+  =
+  \blockdiag_a\!\left[
+    \Rot(\phi_{t-1,a}-\phi_{t,a})
+  \right].
+  \label{eq:mamba3-relative-rotation}
+\end{equation}
+Thus $\ve{D}^{\mathrm{M3}}_t=\alpha_t\ve{U}_t$ is exactly a damped rotational transition of the
+form in \eqref{eq:kdn2-rotational-D}; the sign of the angle only records whether phase is assigned
+to the addresses or the state.
+
+The same identity appears directly in the open-loop kernel. For
+$\ve{\Phi}^{\mathrm{M3}}_{t:\tau}
+=\ve{D}^{\mathrm{M3}}_t\cdots\ve{D}^{\mathrm{M3}}_{\tau+1}$,
+\begin{equation}
+\begin{aligned}
+  \ve{\Phi}^{\mathrm{M3}}_{t:\tau}
+  &=
+  \left(\prod_{s=\tau+1}^{t}\alpha_s\right)
+  \ve{R}_t^{\tr}\ve{R}_{\tau},
+  \\
+  \ve{k}_{\tau}^{\tr}
+  (\ve{\Phi}^{\mathrm{M3}}_{t:\tau})^{\tr}\ve{q}_t
+  &=
+  \left(\prod_{s=\tau+1}^{t}\alpha_s\right)
+  (\ve{R}_{\tau}\ve{k}_{\tau})^{\tr}
+  (\ve{R}_t\ve{q}_t).
+\end{aligned}
+\label{eq:mamba3-relative-phase-kernel}
+\end{equation}
+Accumulated rotary addressing and incremental rotational state transport therefore produce the
+same damped relative-phase interaction. The two trapezoidal endpoint writes change the causal
+weight assigned to a token, but not this coordinate identity.
+
+\paragraph{Where the equivalence ends.}
+This equivalence concerns deterministic transport, not the complete memory update. Expanding the
+KDN-2 mean correction gives
+\begin{equation}
+  \ve{S}_t
+  =
+  (\ve{I}-\ve{\kappa}_t\ve{h}_t^{\tr})
+  \ve{D}_t\ve{S}_{t-1}
+  +\ve{\kappa}_t\ve{v}_t^{\tr},
+  \qquad
+  \ve{\kappa}_t
+  =
+  \frac{\widehat{\ve{P}}_t\ve{h}_t}
+  {r_t+\ve{h}_t^{\tr}\widehat{\ve{P}}_t\ve{h}_t}.
+  \label{eq:kdn2-vs-mamba3-update}
+\end{equation}
+Mamba-3 instead uses additive trapezoidal outer-product writes; it has no innovation subtraction,
+Riccati covariance, or covariance-shaped gain. Its MIMO variant replaces a SISO write with a
+rank-$R$ sum but remains additive. Mamba-3 also uses a scalar radius per SISO head in this
+recurrence, while KDN-2 permits mode-specific radii and process uncertainty. Hence the models
+share an exactly equivalent rotational geometry, but not an equivalent correction rule. KDN-2's
+distinction is coupling that geometry to uncertainty-shaped residual correction and closed-loop
+associative memory.
+
+\subsection{Hidden Quadratures and Cue-Controlled Recall}
+\label{sec:kdn2-observability}
+
+Let
+$\ve{e}_{\mathrm{vis}}=(1,0)^{\tr}$ and
+$\ve{e}_{\mathrm{hid}}=(0,1)^{\tr}$. A cross-quadrature diagnostic has
+\begin{equation}
+  \ve{b}=\ve{e}_{\mathrm{hid}},
+  \qquad
+  \ve{c}=\ve{e}_{\mathrm{vis}},
+  \qquad
+  h_{\mathrm{delay}}(\ell)
+  =
+  -\rho^\ell\sin(\ell\theta).
+  \label{eq:kdn2-delayed-phase}
+\end{equation}
+It is invisible at insertion and becomes visible as the plane rotates. For the actual filter,
+however, the write is $\ve{\kappa}_t\ve{\delta}_t^{\tr}$, so immediate invisibility requires
+$\ve{g}_t^{\tr}\ve{\kappa}_t=0$. Because
+$\ve{\kappa}_t\propto\widehat{\ve{P}}_t\ve{h}_t$, a measurement address does not prescribe the
+write phase independently of uncertainty.
+
+The two-step observability matrix for one plane read through $\ve{e}_{\mathrm{vis}}$ is
+\begin{equation}
+  \begin{bmatrix}
+    \ve{e}_{\mathrm{vis}}^{\tr}\\
+    \ve{e}_{\mathrm{vis}}^{\tr}\rho\Rot(\theta)
+  \end{bmatrix}
+  =
+  \begin{bmatrix}
+    1&0\\
+    \rho\cos\theta&-\rho\sin\theta
+  \end{bmatrix}.
+  \label{eq:kdn2-observability}
+\end{equation}
+It has full rank when $\rho\sin\theta\neq0$: a direction may be hidden now but recoverable later.
+This is a process/readout statement. The closed-loop product in
+\eqref{eq:kdn2-closed-loop-product} can still destroy that direction.
+
+A fixed oscillator supplies \emph{scheduled resurfacing}, not arbitrary recall on a semantic cue.
+KDN-2 therefore makes query-controlled observability primary: $\ve{F}_t$ emits both quadratures
+and a causal gate over modes, allowing an ordinary token to suppress a persistent mode and a
+recall cue to expose it. Token-dependent phase increments can complement this mechanism, but they
+cannot provide content selection because a phase kick acts on all associations in a mode.
+Randomized cue times and recall order are consequently necessary tests.
+
+\subsection{Layer Parameterization}
+\label{sec:kdn2-layer}
+
+The surrounding layer follows the same controlled shell as its delta-rule baselines: learned
+query, key, and value projections, the same short convolution, output gate, gated normalization,
+and output projection. Latent measurement and read lifts implement \eqref{eq:kdn2-address-lifts};
+the read lift includes one sigmoid gate per rotational mode. Observation noise is positive and
+token local,
+\begin{equation}
+  r_t
+  =
+  r_{\min}
+  +
+  \operatorname{softplus}(\ve{w}_r^{\tr}\ve{x}_t+b_r),
+  \qquad r_{\min}>0.
+  \label{eq:kdn2-noise-parameterization}
+\end{equation}
+We initialize $\ve{S}_0=\ve{0}$ and
+$\ve{P}_0=\mu^{-1}\ve{I}$ for learned $\mu>0$. The main control uses the identical paired state,
+lifts, gates, and parameter budget with every $\theta_a=0$. Fixed nonzero frequencies are
+initialized from a range of target delays, while their radii are initialized with lifetimes
+longer than those delays. Signed-real poles, dynamic phase increments, and alternative covariance
+structures are explicit ablations, not additional names for the model.
+
+
+% =============================================================================
+\section{Chunkwise Implementation of KDN-2}
+\label{sec:kdn2-efficient}
+
+The model in Section~\ref{sec:kdn2-method} is defined at token time. A direct implementation,
+however, needs $\ve{P}_t$ before it can form $\ve{P}_t\ve{h}_{t+1}$, creating a fine-grained dense
+Riccati dependency. We obtain matrix-oriented work by expressing deterministic within-chunk
+dynamics in a common co-rotating frame and freezing only the uncertainty used to form local gains.
+This is a proposed approximate implementation of KDN-2, not a second model.
+The local frame below is the chunk-restricted version of the moving-coordinate transformation in
+Section~\ref{sec:kdn2-mamba3}.
+
+\subsection{Co-Rotating Chunk Frame}
+\label{sec:kdn2-corotating-frame}
+
+Let chunk $c$ begin with $(\ve{S}_c^-,\ve{P}_c^-)$ and contain $C_c\leq C$ tokens. The structured
+transition $\ve{D}_{c,t}$ is applied before token $t$. Define
+\begin{equation}
+  \ve{\Phi}_{c,0}=\ve{I},
+  \qquad
+  \ve{\Phi}_{c,t}
+  =
+  \ve{D}_{c,t}\ve{D}_{c,t-1}\cdots\ve{D}_{c,1}.
+  \label{eq:kdn2-prefix-transition}
+\end{equation}
+Each prefix is represented by cumulative log-radii and angles, so no generic dense product is
+formed. Ignoring within-chunk process noise for the moment, write the physical latent map as
+$\ve{S}_{c,t}^\star=\ve{\Phi}_{c,t}\ve{X}_c^\star$ and pull addresses back to the entry frame:
+\begin{equation}
+  \widetilde{\ve{h}}_{c,t}
+  =
+  \ve{\Phi}_{c,t}^{\tr}\ve{h}_{c,t},
+  \qquad
+  \widetilde{\ve{g}}_{c,t}
+  =
+  \ve{\Phi}_{c,t}^{\tr}\ve{g}_{c,t}.
+  \label{eq:kdn2-transported-addresses}
+\end{equation}
+Then
+\begin{equation}
+  \ve{S}_{c,t}^{\star\tr}\ve{h}_{c,t}
+  =
+  \ve{X}_c^{\star\tr}\widetilde{\ve{h}}_{c,t},
+  \qquad
+  \ve{S}_{c,t}^{\star\tr}\ve{g}_{c,t}
+  =
+  \ve{X}_c^{\star\tr}\widetilde{\ve{g}}_{c,t}.
+  \label{eq:kdn2-frame-identities}
+\end{equation}
+Thus the proposed algorithm preserves deterministic token-timed damping and rotation. It applies
+structured prefix transforms and the final forward map, never $\ve{\Phi}_{c,t}^{-1}$.
+
+Stack the transported addresses as
+\begin{equation}
+  \widetilde{\ve{H}}_c
+  =
+  [\widetilde{\ve{h}}_{c,1},\ldots,\widetilde{\ve{h}}_{c,C_c}],
+  \qquad
+  \widetilde{\ve{Q}}_c
+  =
+  [\widetilde{\ve{g}}_{c,1},\ldots,\widetilde{\ve{g}}_{c,C_c}],
+  \label{eq:kdn2-hq-stack}
+\end{equation}
+and let row $t$ of $\ve{V}_c$ be $\ve{v}_{c,t}^{\tr}$. In this frame the proposed algorithm uses
+the local observation model
+\begin{equation}
+  \ve{V}_c
+  =
+  \widetilde{\ve{H}}_c^{\tr}\ve{X}_c^\star+\ve{\Xi}_c,
+  \qquad
+  \Cov(\ve{\Xi}_{c,:,j})
+  =
+  \ve{R}_c
+  =
+  \diag(r_{c,1},\ldots,r_{c,C_c}).
+  \label{eq:kdn2-chunk-observation}
+\end{equation}
+
+\subsection{Frozen Dense Gains and Causal Residuals}
+\label{sec:kdn2-frozen-gains}
+
+All raw gains use the same dense entry covariance:
+\begin{equation}
+\begin{aligned}
+  \ve{U}_c
+  &=
+  \ve{P}_c^-\widetilde{\ve{H}}_c,
+  &
+  \ve{\Gamma}_c
+  &=
+  \ve{R}_c+\widetilde{\ve{H}}_c^{\tr}\ve{U}_c,
+  \\
+  \ve{\Lambda}_c
+  &=
+  \Diag(\diag(\ve{\Gamma}_c)),
+  &
+  \ve{L}_c
+  &=
+  \ve{U}_c\ve{\Lambda}_c^{-1}.
+\end{aligned}
+\label{eq:kdn2-u-gamma}
+\end{equation}
+Column $t$ is
+\begin{equation}
+  \ve{\ell}_{c,t}
+  =
+  \frac{\ve{P}_c^-\widetilde{\ve{h}}_{c,t}}
+  {r_{c,t}
+   +\widetilde{\ve{h}}_{c,t}^{\tr}
+    \ve{P}_c^-\widetilde{\ve{h}}_{c,t}}.
+  \label{eq:kdn2-raw-gain}
+\end{equation}
+It is the scalar Kalman gain against the chunk-entry prior in the co-rotating frame. The
+approximation is that earlier observations do not contract the covariance used for later raw
+gains.
+
+The residuals remain sequential. Define
+\begin{equation}
+  \ve{\Delta}_c
+  =
+  \ve{V}_c-\widetilde{\ve{H}}_c^{\tr}\ve{S}_c^-,
+  \label{eq:kdn2-boundary-residual}
+\end{equation}
+and
+\begin{equation}
+\begin{aligned}
+  \ve{M}_c
+  &=
+  \tril(\widetilde{\ve{H}}_c^{\tr}\ve{L}_c,-1),
+  &
+  \ve{T}_c
+  &=
+  \ve{I}+\ve{M}_c,
+  &
+  \overline{\ve{A}}_c
+  &=
+  \ve{T}_c^{-1}.
+\end{aligned}
+\label{eq:kdn2-wy-system}
+\end{equation}
+The unit-lower WY solve and the committed entry-frame mean are
+\begin{equation}
+  \ve{Z}_c
+  =
+  \overline{\ve{A}}_c\ve{\Delta}_c,
+  \qquad
+  \overline{\ve{S}}_c^+
+  =
+  \ve{S}_c^-+\ve{L}_c\ve{Z}_c.
+  \label{eq:kdn2-wy-commit}
+\end{equation}
+This is algebraically identical to applying the frozen columns of $\ve{L}_c$ with causal
+sequential residuals. The read-after-write outputs are
+\begin{equation}
+  \ve{O}_c
+  =
+  \widetilde{\ve{Q}}_c^{\tr}\ve{S}_c^-
+  +
+  \tril(\widetilde{\ve{Q}}_c^{\tr}\ve{L}_c)\ve{Z}_c,
+  \label{eq:kdn2-causal-output}
+\end{equation}
+where $\tril$ includes the diagonal. No later key, value, query, or transition enters an earlier
+output.
+
+\subsection{Boundary Error and Published State}
+\label{sec:kdn2-joseph}
+
+The effective gain is
+\begin{equation}
+  \ve{L}_{c,\mathrm{eff}}
+  =
+  \ve{L}_c\overline{\ve{A}}_c,
+  \qquad
+  \overline{\ve{S}}_c^+
+  =
+  \ve{S}_c^-+\ve{L}_{c,\mathrm{eff}}\ve{\Delta}_c.
+  \label{eq:kdn2-effective-gain}
+\end{equation}
+Let
+\begin{equation}
+  \ve{A}_c
+  =
+  \ve{I}
+  -
+  \ve{L}_{c,\mathrm{eff}}\widetilde{\ve{H}}_c^{\tr}.
+  \label{eq:kdn2-error-transition}
+\end{equation}
+Under the delayed-noise local model in \eqref{eq:kdn2-chunk-observation}, the Joseph ensemble-MSE
+covariance of the frozen-gain estimator is
+\begin{equation}
+  \boxed{
+  \overline{\ve{P}}_c^+
+  =
+  \ve{A}_c\ve{P}_c^-\ve{A}_c^{\tr}
+  +
+  \ve{L}_{c,\mathrm{eff}}\ve{R}_c
+  \ve{L}_{c,\mathrm{eff}}^{\tr}.}
+  \label{eq:kdn2-joseph}
+\end{equation}
+Equivalently,
+\begin{equation}
+  \overline{\ve{P}}_c^+
+  =
+  \ve{P}_c^-
+  -\ve{L}_{c,\mathrm{eff}}\ve{U}_c^{\tr}
+  -\ve{U}_c\ve{L}_{c,\mathrm{eff}}^{\tr}
+  +\ve{L}_{c,\mathrm{eff}}\ve{\Gamma}_c
+   \ve{L}_{c,\mathrm{eff}}^{\tr}.
+  \label{eq:kdn2-joseph-expanded}
+\end{equation}
+This covariance is not an exact posterior conditional on the realized $\ve{V}_c$; it is the
+observation-averaged error covariance of the frozen-gain estimator under that local model.
+
+The published physical-frame boundary is
+\begin{equation}
+\boxed{
+\begin{aligned}
+  \ve{S}_{c+1}^-
+  &=
+  \ve{\Phi}_{c,C_c}\overline{\ve{S}}_c^+,
+  \\
+  \ve{P}_{c+1}^-
+  &=
+  \ve{\Phi}_{c,C_c}\overline{\ve{P}}_c^+
+  \ve{\Phi}_{c,C_c}^{\tr}
+  +
+  \ve{\Omega}_c^{\mathrm{chunk}}.
+\end{aligned}}
+\label{eq:kdn2-corotating-boundary}
+\end{equation}
+For block-isotropic token noises, the open-loop end-of-chunk aggregate in mode $a$ is
+\begin{equation}
+  \nu_{c,a}^{\mathrm{chunk}}
+  =
+  \sum_{s=1}^{C_c}
+  \nu_{c,s,a}
+  \prod_{u=s+1}^{C_c}\rho_{c,u,a}^{2}.
+  \label{eq:kdn2-aggregate-noise}
+\end{equation}
+The proposed implementation treats this aggregate as independent boundary noise and adds it at
+publication. This matches the process-only end covariance. It does not match the exact filtered
+contribution under \eqref{eq:kdn2-state-space-model}: early process noise also enters later
+observations, so subsequent corrections are correlated with the final aggregate. The delayed-noise
+surrogate therefore approximates residual statistics, gains, and the final filtered MSE.
+
+\refstepcounter{definition}\label{prop:kdn2-chunk-update}
+\begin{tcolorbox}[
+  title={Proposition~\thedefinition: Causal Chunkwise Implementation},
+  colback=blue!7,
+  colbacktitle=blue!22,
+  colframe=blue!45!black,
+  coltitle=black,
+  fonttitle=\bfseries,
+  boxrule=0.4pt,
+  arc=1pt,
+  left=5pt,
+  right=5pt,
+  top=5pt,
+  bottom=5pt
+]
+For the co-rotating delayed-noise model \eqref{eq:kdn2-chunk-observation} and raw frozen gains
+\eqref{eq:kdn2-u-gamma}--\eqref{eq:kdn2-raw-gain}:
+\begin{enumerate}[leftmargin=1.5em,itemsep=2pt,topsep=2pt]
+  \item the WY system \eqref{eq:kdn2-wy-system}--\eqref{eq:kdn2-wy-commit} equals the
+  frozen-gain sequential-residual recurrence;
+  \item \eqref{eq:kdn2-causal-output} gives every read-after-write prefix without future inputs;
+  \item \eqref{eq:kdn2-effective-gain} exactly represents the committed mean, and
+  \eqref{eq:kdn2-joseph} is its ensemble-MSE covariance; and
+  \item \eqref{eq:kdn2-prefix-transition}--\eqref{eq:kdn2-corotating-boundary} preserve
+  deterministic token-timed transport.
+\end{enumerate}
+These statements do not assert equivalence to tokenwise Kalman covariance feedback.
+\end{tcolorbox}
+
+\noindent\textit{Proof.} See Appendix~\ref{app:kdn2-proofs}.
+
+\subsection{Exact and Approximate Contract}
+\label{sec:kdn2-contract}
+
+\begin{center}
+\small
+\begin{tabular}{p{0.45\linewidth}p{0.47\linewidth}}
+\toprule
+\textbf{Exact in the proposed implementation} &
+\textbf{Approximate relative to \eqref{eq:kdn2-exact-recurrence}}\\
+\midrule
+Structured prefix damping and rotation. &
+All raw gains use the same chunk-entry covariance.\\
+Transported measurement and read addresses. &
+Measurement contraction does not alter later within-chunk gains.\\
+Causal sequential residuals and read prefixes. &
+Process noise does not affect within-chunk gains or residual statistics.\\
+Effective-gain mean and Joseph ensemble MSE under the delayed-noise surrogate. &
+The boundary covariance is neither a realized-value posterior nor the exact filtered MSE under
+token-local process noise.\\
+Position-dependent tail transport of every write. &
+Dense Riccati feedback remains delayed to the next chunk.\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+At $C=1$ and zero process noise, the proposed implementation reduces to the exact scalar-observation
+correction in a changed frame. Increasing $C$ exposes more matrix-shaped work but lengthens the
+interval over which covariance feedback is frozen.
+
+\subsection{Complexity and Systems Scope}
+\label{sec:kdn2-complexity}
+
+For state width $d_s$, value width $d_v$, and chunk length $C$, the recurrent core costs
+\begin{equation}
+  O(
+    d_s^2C+d_sC^2+d_sCd_v+C^2d_v+C^3
+  )
+  \label{eq:kdn2-chunk-complexity}
+\end{equation}
+per chunk, while structured address transport and boundary publication add
+$O(Cd_s+d_sd_v+d_s^2)$. Across $T$ tokens, the recurrent core costs
+\begin{equation}
+  O\!\left(
+    Td_s^2+Td_sC+Td_sd_v+TCd_v+TC^2
+    +\frac{T}{C}(d_s^2+d_sd_v)
+  \right).
+  \label{eq:kdn2-sequence-complexity}
+\end{equation}
+In the intended regime $C\leq d_s$ and $d_v\asymp d_s$, covariance--address multiplication has
+the leading $O(Td_s^2)$ scaling. Chunking changes its execution granularity from dependent
+matrix--vector products to matrix-shaped work; it does not remove that term or by itself establish
+a faster layer. These counts cover the recurrent core and exclude input/output projections and
+other full-layer peripherals.
+
+The implementation primarily targets training and prompt prefill. Autoregressive decode still
+needs a dense covariance--address product for each generated token and a consistent policy for
+partial chunks. Complete benchmarks must include the dependent recurrence, Joseph update,
+rotational maps, state traffic, tail masks, and backward checkpointing. We treat $C=32$ as an
+initial engineering point and compare $C\in\{16,32,64\}$ by the joint quality--latency--memory
+tradeoff; component microbenchmarks are not evidence of an end-to-end speedup.
+
+\section{Evaluation Protocol}
+\label{sec:kdn2-experiments}
+
+We test KDN-2's scientific hypothesis separately from the implementation hypothesis. The primary
+hypothesis is that damped rotational dynamics improve closed-loop associative memory by separating
+survival from visibility and allowing recall to be controlled by a cue. The secondary hypothesis
+is that the chunkwise approximation in Section~\ref{sec:kdn2-efficient} can execute that model with
+acceptable error and systems cost. We report no KDN-2 result before the corresponding complete
+implementation is measured; predecessor checkpoints are baselines, not evidence for either claim.
+
+\subsection{Experimental Setup}
+\label{sec:kdn2-experimental-setup}
+
+\paragraph{Backbone and pretraining.}
+We use the controlled recurrent-mixer protocol of GDN-2
+\citep{hatamizadeh2026gdn2}. Models are pretrained from scratch on FineWeb-Edu
+\citep{penedo2024fineweb} with $4$K sequences, a global batch of $0.5$M tokens, and identical data
+seed, optimizer, schedule, surrounding backbone, and non-embedding parameter budget. Feed-forward
+width is calibrated whenever the mixer changes the recurrent-state parameter count.
+
+\paragraph{Baselines and controls.}
+The main baselines are GDN-2, KDA, isotropic KDN, diagonal KDN, and the SISO and MIMO variants of
+Mamba-3. The mandatory no-rotation control uses the same paired representation, latent lifts, mode
+gates, state dimension, and total parameter budget as KDN-2, but fixes $\theta=0$. A matched
+additive control keeps KDN-2's radii, angles, measurement addresses, and read addresses, but
+replaces the innovation and covariance-shaped gain by an additive outer-product write. This
+separates the shared rotational geometry from Kalman correction. Additional controls use
+signed-real poles, damped rotations without a mode gate, and damped rotations with aligned or
+cross-quadrature routing. Scalar, diagonal, and dense covariance ablations isolate uncertainty
+structure from process geometry. At small widths, exact tokenwise filtering is the semantic
+reference for the implementation approximation.
+
+\paragraph{Tasks.}
+The diagnostic suite begins with lag-resolved multi-query associative recall, survival--visibility
+interventions, randomized-time cue recall, key collisions, and controlled distractors. These tasks
+make the claimed mechanism identifiable. End-to-end evaluation then uses seeded single- and
+multi-key RULER tasks \citep{hsieh2024ruler}, language-modeling perplexity, and the same zero-shot
+suite as the predecessor mixers. Every example records write time, cue time, requested-item order,
+and within-chunk position.
+
+\subsection{Questions About the Model}
+\label{sec:kdn2-model-evaluation}
+
+\paragraph{Can information survive while remaining temporarily invisible?}
+For one tagged association, we measure both the process-only lineage
+$\ve{\Phi}_{t:\tau}\ve{\kappa}_\tau$ and the closed-loop lineage
+$\ve{\Psi}_{t:\tau}\ve{\kappa}_\tau$. At every lag we report norm, visibility under a fixed read
+direction, and an intervention difference between streams with and without the tagged write.
+Holding the read fixed prevents a changing query from producing an apparent delayed peak under
+positive diagonal decay. KDN-2 succeeds on its defining hypothesis only if closed-loop lineage norm
+can remain high while visibility is low and then rise later.
+
+\paragraph{Is retrieval cue-controlled or merely scheduled?}
+Cue times and requested-item order are randomized independently of write time. We ablate the mode
+gate, read phase, and optional input-conditioned phase increment, and report both correct recall
+and periodic false echoes. A fixed oscillator that predicts a delay but ignores the requested
+content does not count as cue-based recall.
+
+\paragraph{What are the collision and capacity costs?}
+At fixed lag, we vary the number of simultaneously stored pairs, address similarity, and the
+number of distractors. We report accuracy, effective state rank, and per-mode write/read energy.
+This tests whether temporal selectivity merely reallocates a fixed state away from content
+capacity. Rotation is not credited with extra capacity unless it improves the matched-dimension
+collision curve.
+
+\paragraph{What does dense uncertainty contribute?}
+At identical mean state, process, and parameter budget, we compare full $\ve{P}$ with
+$\diag(\ve{P})$ and $\Trace(\ve{P})\ve{I}/d_s$. Results are stratified by key collision and by
+alignment with prior-covariance eigenvectors. We also measure the angles between
+$\widehat{\ve{P}}_t\ve{h}_t$, $\ve{h}_t$, and the eventual read direction. This identifies a
+central risk: the statistically preferred correction can rotate away from the geometry useful for
+retrieval.
+
+\subsection{Questions About the Implementation}
+\label{sec:kdn2-implementation-evaluation}
+
+\paragraph{How much error does chunkwise inference introduce?}
+At small $d_s$ and $T$, an FP64 implementation of
+\eqref{eq:kdn2-exact-recurrence} supplies the reference. We measure output, mean-state, covariance,
+and gradient error for $C\in\{1,16,32,64\}$ while sweeping address correlation, observation noise,
+process noise, and rotational rate. The comparison is reported by position within a chunk. This
+directly exposes gain-freezing error, delayed process-noise error, and any residual boundary bias.
+The $C=1$, zero-process-noise case must match the reference under the same read-after-write
+convention.
+
+\paragraph{Does the implementation preserve the intended token timing?}
+We inject identical writes at every within-chunk offset and compare their end-of-chunk tail
+transport with the appropriate remaining transition product. Shifting chunk boundaries must not
+change deterministic rotational phase. Long-horizon, large-angle, repeated-key, partial-tail, and
+poisoned-boundary tests verify that each chunk consumes the state actually published by its
+predecessor.
+
+\paragraph{Is the complete layer faster?}
+Correctness is checked against an independent recurrence for forward outputs, published states,
+covariance symmetry and positivity, and gradients. The primary H200 benchmark measures the full
+dependent layer at the production model geometry. It includes address/value projections in the
+shared mixer contract, transported addresses, causal reads, Joseph updates, rotational
+publication, tail masks, state traffic, and the actual backward checkpoint policy. We report
+training forward--backward, prefill, and decode separately, together with peak memory and
+quality. Isolated covariance products or triangular solves are diagnostic microbenchmarks, not a
+speed result. The detailed protocol appears in Appendix~\ref{app:kdn2-runtime-protocol}.
+
+
+% =============================================================================
+\section{Related Work}
+\label{sec:kdn2-related-work}
+
+\paragraph{Linear attention and delta-rule memories.}
+Linear attention replaces the softmax attention matrix with a recurrent fast-weight state
+\citep{katharopoulos2020transformers}. DeltaNet interprets that state as an online associative
+memory and writes the error at the current key
+\citep{schlag2021linear,yang2024parallelizing}. Gated DeltaNet, GDN-2, and KDA add learned
+forgetting or richer positive real transitions
+\citep{yang2024gdn,hatamizadeh2026gdn2,kimiteam2025kimilinear}. KDN-2 instead gives surviving
+associations explicit phase motion while retaining uncertainty-aware residual correction.
+
+\paragraph{Complex and rotational dynamics.}
+Complex poles and phase-aware decay appear in recurrent sequence models such as RetNet
+\citep{sun2023retentive}; signed and oscillatory eigenvalues can also improve linear state
+tracking \citep{grazzi2025statetracking}. Most closely, Mamba-3 combines accumulated rotary query
+and key maps with an exponential--trapezoidal SISO or MIMO recurrence
+\citep{lahoti2026mamba3}. Section~\ref{sec:kdn2-mamba3} shows that its rotary addressing and
+KDN-2's rotational state transport are coordinate-equivalent and yield the same open-loop
+relative-phase kernel. KDN-2 does not claim rotation itself as the distinction; it couples that
+geometry to innovation-based writes and dense Kalman uncertainty, and studies the resulting
+closed-loop survival, visibility, and cue control.
+
+\paragraph{Kalman filtering and online least squares.}
+The Kalman filter is the exact recursive estimator for linear--Gaussian state-space models
+\citep{grewal2025kalman}. Recursive least squares is its static-state specialization and an online
+second-order update. Recent Kalman sequence mixers use structured information-form recurrences for
+parallel execution \citep{shaj2026kalmanlinearattention}. KDN-2 uses the same filtering principle
+to couple a rotational associative process with uncertainty-aware writes. Its chunkwise
+dense-covariance recursion is an implementation approximation, not a different filtering model.
+
+\paragraph{Test-time training and recurrent online learners.}
+TTT layers treat hidden state as the parameters of a local learner and update it on input chunks
+\citep{sun2024learning}; Titans likewise emphasizes learned long-term neural memory
+\citep{behrouz2024titans}. The KDN-2 implementation shares the use of matrix-oriented local
+adaptation, but its preconditioner and error state come from the Kalman model, and its WY system
+preserves causal residual prefixes.
+
+
+% =============================================================================
+\section{Limitations and Future Directions}
+\label{sec:kdn2-limitations}
+
+Rotation does not create storage capacity. Finite frequency banks can alias; periodic modes can
+resurface stale content; learned angles can collapse toward zero; and an apparently hidden
+quadrature can be erased by later measurement updates. A unit-radius mode with persistent process
+noise may also accumulate unbounded uncertainty when it is poorly observed. Stable radii, matched
+zero-angle controls, and closed-loop lineage measurements are necessary but do not remove these
+risks.
+
+A fixed oscillator can solve fixed-delay data without learning arbitrary recall on cue.
+Query-controlled observability is therefore indispensable to the central claim. Even then, a
+single phase kick moves every association sharing a mode, so more expressive active/archive
+routing may trade temporal control against content interference.
+
+Dense uncertainty introduces a separate geometric risk. The Kalman direction
+$\widehat{\ve{P}}_t\ve{h}_t$ minimizes estimation error under the stated model, but it may point
+away from both the measurement address and the later read. Better state estimation need not imply
+better associative retrieval; gain--read alignment must be measured rather than assumed.
+
+The practical inference path is approximate. Frozen gains are order sensitive, process noise is
+delayed inside a chunk, and the propagated Joseph matrix is an ensemble MSE rather than the
+posterior covariance conditional on a realized neural-network history. Learned addresses and noise
+scales also depart from literal fixed-design assumptions. These approximations may produce
+chunk-length and within-chunk-position effects even though deterministic rotation is transported
+exactly.
+
+Finally, KDN-2 retains a quadratic covariance state and $O(Td_s^2)$ covariance--address work.
+Chunking changes execution granularity, not asymptotic cost, and autoregressive decode remains
+especially demanding. Future work should first improve cue-controlled read and active/archive
+routing, then study richer frequency mixtures, process-noise treatment inside chunks, and
+explicitly ablated covariance compression. Each changes a distinct part of KDN-2 and must be
+evaluated without conflating model geometry with implementation speed.
+
+
+% =============================================================================
+\section{Conclusion}
+\label{sec:kdn2-conclusion}
+
+KDN-2 extends recurrent associative memory beyond geometric forgetting. Its damped rotational
+process separates how long information survives from how that information moves in phase, while
+phase-aware query routing determines when surviving content is visible. This rotational geometry
+is shared with Mamba-3 under an exact change of coordinates; KDN-2's contribution is to couple it
+to covariance-shaped residual correction. The survival--visibility distinction is
+meaningful only in the closed loop: later residual corrections can erase a hidden mode, and a
+fixed oscillator can produce scheduled echoes without learning recall on cue. KDN-2 therefore
+couples rotational dynamics to uncertainty-aware associative writes and evaluates survival,
+visibility, and cue control separately. Exact tokenwise inference supplies the model semantics;
+the co-rotating dense-covariance recursion is a proposed approximate implementation. The central
+empirical question is whether this richer memory geometry improves closed-loop recall without
+unacceptable interference, approximation error, or systems cost.
+
+\bibliography{main}
+\bibliographystyle{plainnat}
+
+
+\appendix
+
+% =============================================================================
+\section{From Conditional MSE to the Kalman Gain}
+\label{app:kdn2-optimal-gain}
+
+Condition on $\mc F_{t-1}$ and the current measurement address $\ve{h}_t$; the other current design
+quantities in \eqref{eq:kdn2-state-space-model} are also treated as known. For value coordinate
+$j$, let
+\begin{equation}
+  \widehat{\ve{s}}_{t,j}
+  =
+  \E[\ve{s}_{t,j}^\star\mid\mc F_{t-1},\ve{h}_t],
+  \qquad
+  \ve{\epsilon}_{t,j}^-
+  =
+  \ve{s}_{t,j}^\star-\widehat{\ve{s}}_{t,j},
+  \qquad
+  \Cov(\ve{\epsilon}_{t,j}^-\mid\mc F_{t-1},\ve{h}_t)
+  =
+  \widehat{\ve{P}}_t.
+  \label{eq:app-kdn2-predictive-error}
+\end{equation}
+The scalar observation for this value coordinate is
+\begin{equation}
+  v_{t,j}
+  =
+  \ve{h}_t^{\tr}\ve{s}_{t,j}^\star+\xi_{t,j},
+  \qquad
+  \E[\xi_{t,j}]=0,
+  \qquad
+  \Var(\xi_{t,j})=r_t,
+  \label{eq:app-kdn2-scalar-observation}
+\end{equation}
+where $\xi_{t,j}$ is independent of the predictive error. Starting from the objective, consider
+the affine residual family
+\begin{equation}
+  \widetilde{\ve{S}}_t(\ve{\kappa}_t)
+  =
+  \widehat{\ve{S}}_t
+  +
+  \ve{\kappa}_t
+  (\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{h}_t)^{\tr}.
+  \label{eq:app-kdn2-candidate-estimator}
+\end{equation}
+Its error in column $j$ is
+\begin{equation}
+  \ve{s}_{t,j}^\star
+  -
+  \widetilde{\ve{s}}_{t,j}(\ve{\kappa}_t)
+  =
+  (\ve{I}-\ve{\kappa}_t\ve{h}_t^{\tr})
+  \ve{\epsilon}_{t,j}^-
+  -
+  \ve{\kappa}_t\xi_{t,j}.
+  \label{eq:app-kdn2-candidate-error}
+\end{equation}
+The conditional error covariance is therefore
+\begin{equation}
+\begin{aligned}
+  \ve{P}_t(\ve{\kappa}_t)
+  =
+  &(\ve{I}-\ve{\kappa}_t\ve{h}_t^{\tr})
+   \widehat{\ve{P}}_t
+   (\ve{I}-\ve{\kappa}_t\ve{h}_t^{\tr})^{\tr}
+  +r_t\ve{\kappa}_t\ve{\kappa}_t^{\tr}.
+\end{aligned}
+\label{eq:app-kdn2-candidate-covariance}
+\end{equation}
+Because all $d_v$ value coordinates share this covariance,
+\begin{equation}
+\begin{aligned}
+  &\argmin_{\ve{\kappa}_t}
+  \E\!\left[
+    \left.
+    \|\ve{S}_t^\star-
+      \widetilde{\ve{S}}_t(\ve{\kappa}_t)\|_F^2
+    \right|
+    \mc F_{t-1},\ve{h}_t
+  \right]\\
+  &\hspace{34mm}
+  =
+  \argmin_{\ve{\kappa}_t}
+  \Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right).
+\end{aligned}
+\label{eq:app-kdn2-mse-trace-equivalence}
+\end{equation}
+Indeed, the first objective equals
+$d_v\Trace(\ve{P}_t(\ve{\kappa}_t))$. Expanding the trace gives
+\begin{equation}
+\begin{aligned}
+  \Trace(\ve{P}_t(\ve{\kappa}_t))
+  =
+  \Trace(\widehat{\ve{P}}_t)
+  -2\ve{\kappa}_t^{\tr}\widehat{\ve{P}}_t\ve{h}_t
+  +
+  (r_t+\ve{h}_t^{\tr}\widehat{\ve{P}}_t\ve{h}_t)
+  \ve{\kappa}_t^{\tr}\ve{\kappa}_t.
+\end{aligned}
+\label{eq:app-kdn2-trace-expanded}
+\end{equation}
+Its Hessian is
+$2(r_t+\ve{h}_t^{\tr}\widehat{\ve{P}}_t\ve{h}_t)\ve{I}\succ0$. Hence the unique minimizer is
+\begin{equation}
+  \boxed{
+  \ve{\kappa}_t^\star
+  =
+  \frac{\widehat{\ve{P}}_t\ve{h}_t}
+  {r_t+\ve{h}_t^{\tr}\widehat{\ve{P}}_t\ve{h}_t}.}
+  \label{eq:app-kdn2-optimal-gain}
+\end{equation}
+Thus the optimal Kalman gain minimizes conditional mean-squared error and, equivalently, the sum
+of post-correction error variances. Under joint Gaussianity the resulting estimator is the
+conditional mean given
+$\mc F_t=\sigma(\mc F_{t-1},\ve{h}_t,\ve{v}_t)$; with only the stated second moments it is the
+unique linear-MMSE residual estimator.
+
+
+% =============================================================================
+\section{Proofs for the Chunkwise Implementation}
+\label{app:kdn2-proofs}
+
+All quantities in this section are expressed in the co-rotating entry frame, and we suppress the
+chunk subscript and tildes for readability.
+
+\subsection{WY Equivalence and Causality}
+\label{app:kdn2-wy-proof}
+
+Let the explicit frozen-gain recurrence be
+\begin{equation}
+\begin{aligned}
+  \ve{X}_0^{\mathrm{virt}}
+  &=
+  \ve{S}^-,
+  \\
+  \ve{e}_t
+  &=
+  \ve{v}_t
+  -
+  (\ve{X}_{t-1}^{\mathrm{virt}})^{\tr}\ve{h}_t,
+  \\
+  \ve{X}_t^{\mathrm{virt}}
+  &=
+  \ve{X}_{t-1}^{\mathrm{virt}}
+  +
+  \ve{\ell}_t\ve{e}_t^{\tr}.
+\end{aligned}
+\label{eq:app-kdn2-virtual-recurrence}
+\end{equation}
+Expanding its prefix gives
+\begin{equation}
+  \ve{X}_{t-1}^{\mathrm{virt}}
+  =
+  \ve{S}^-
+  +
+  \sum_{s<t}\ve{\ell}_s\ve{e}_s^{\tr}.
+  \label{eq:app-kdn2-virtual-expanded}
+\end{equation}
+Substitution into the innovation yields
+\begin{equation}
+  \ve{e}_t^{\tr}
+  =
+  \ve{\Delta}_t
+  -
+  \sum_{s<t}
+  (\ve{h}_t^{\tr}\ve{\ell}_s)\ve{e}_s^{\tr}.
+  \label{eq:app-kdn2-residual-row}
+\end{equation}
+Stacking rows gives
+\begin{equation}
+  [\ve{I}+\tril(\ve{H}^{\tr}\ve{L},-1)]\ve{Z}
+  =
+  \ve{\Delta}.
+  \label{eq:app-kdn2-stacked-system}
+\end{equation}
+The bracket is $\ve{T}$ from \eqref{eq:kdn2-wy-system}; therefore
+$\ve{Z}=\overline{\ve{A}}\ve{\Delta}$ and
+\begin{equation}
+  \ve{X}_{C}^{\mathrm{virt}}
+  =
+  \ve{S}^-+\ve{L}\ve{Z}
+  =
+  \overline{\ve{S}}^+.
+  \label{eq:app-kdn2-commit}
+\end{equation}
+
+At output position $j$, the virtual state contains exactly writes $1{:}j$, so
+\begin{equation}
+  \ve{o}_j
+  =
+  (\ve{S}^-)^{\tr}\ve{g}_j
+  +
+  \sum_{t\leq j}
+  (\ve{g}_j^{\tr}\ve{\ell}_t)\ve{e}_t.
+  \label{eq:app-kdn2-output}
+\end{equation}
+Stacking these rows gives \eqref{eq:kdn2-causal-output}. Equivalently, every leading principal
+block of the unit-lower matrix $\ve{T}$ is independent of later rows, so neither $\ve{Z}_{1:j}$
+nor output $j$ can use a future token.
+
+\subsection{Effective Gain and Joseph Ensemble MSE}
+\label{app:kdn2-joseph-proof}
+
+The mean identity follows from
+\begin{equation}
+  \overline{\ve{S}}^+
+  =
+  \ve{S}^-+\ve{L}\overline{\ve{A}}\ve{\Delta}
+  =
+  \ve{S}^-+\ve{L}_{\mathrm{eff}}\ve{\Delta}.
+  \label{eq:app-kdn2-effective-identity}
+\end{equation}
+For one value coordinate, let
+$\ve{\epsilon}^-=\ve{x}^\star-\ve{s}^-$. Under
+\eqref{eq:kdn2-chunk-observation},
+\begin{equation}
+  \ve{\Delta}_{:,j}
+  =
+  \ve{H}^{\tr}\ve{\epsilon}^-+\ve{\xi}_{:,j}.
+  \label{eq:app-kdn2-delta-error}
+\end{equation}
+The committed error is
+\begin{equation}
+  \ve{\epsilon}^+
+  =
+  (\ve{I}-\ve{L}_{\mathrm{eff}}\ve{H}^{\tr})
+  \ve{\epsilon}^-
+  -
+  \ve{L}_{\mathrm{eff}}\ve{\xi}.
+  \label{eq:app-kdn2-error-recursion}
+\end{equation}
+Taking the second moment and using independence gives
+\begin{equation}
+  \E[\ve{\epsilon}^+\ve{\epsilon}^{+\tr}]
+  =
+  \ve{A}\ve{P}^-\ve{A}^{\tr}
+  +
+  \ve{L}_{\mathrm{eff}}\ve{R}\ve{L}_{\mathrm{eff}}^{\tr},
+  \label{eq:app-kdn2-joseph}
+\end{equation}
+which is \eqref{eq:kdn2-joseph}. Expanding $\ve{A}$ and using
+$\ve{U}=\ve{P}^-\ve{H}$ and
+$\ve{\Gamma}=\ve{R}+\ve{H}^{\tr}\ve{P}^-\ve{H}$ gives
+\eqref{eq:kdn2-joseph-expanded}. For all value coordinates,
+\begin{equation}
+  \E[
+    \|\ve{X}^\star-\overline{\ve{S}}^+\|_F^2
+  ]
+  =
+  d_v\Trace(\overline{\ve{P}}^+).
+  \label{eq:app-kdn2-frobenius-trace}
+\end{equation}
+This equality calibrates the covariance of the chosen estimator; it does not claim that its
+frozen gains minimize the joint chunk objective.
+
+\subsection{Token-Timed Transport}
+\label{app:kdn2-transport-proof}
+
+The entry-frame correction produced at token $t$ is
+$\ve{\ell}_t\ve{e}_t^{\tr}$. Its physical direction at that token is
+$\ve{\Phi}_{c,t}\ve{\ell}_t$. At a later token $j\geq t$, deterministic tail transport gives
+\begin{equation}
+\begin{aligned}
+  \ve{D}_{c,j}\cdots\ve{D}_{c,t+1}
+  \ve{\Phi}_{c,t}\ve{\ell}_t
+  &=
+  \ve{\Phi}_{c,j}\ve{\ell}_t.
+\end{aligned}
+\label{eq:app-kdn2-tail-transport}
+\end{equation}
+Its read coefficient is
+\begin{equation}
+  \ve{g}_{c,j}^{\tr}\ve{\Phi}_{c,j}\ve{\ell}_t
+  =
+  \widetilde{\ve{g}}_{c,j}^{\tr}\ve{\ell}_t,
+  \label{eq:app-kdn2-transported-read}
+\end{equation}
+which is exactly the coefficient in \eqref{eq:kdn2-causal-output}. At the boundary, setting
+$j=C_c$ gives $\ve{\Phi}_{c,C_c}\ve{\ell}_t$, so earlier and later writes receive their correct
+remaining transition products. This proves deterministic token-timed transport without forming an
+inverse prefix.
+
+For independent block-isotropic process noises, noise injected after micro-step $s$ is transported
+through steps $s+1{:}C_c$. Rotations cancel in its covariance and the remaining scale is
+$\prod_{u=s+1}^{C_c}\rho_{c,u,a}^2$. Summing independent contributions proves
+\eqref{eq:kdn2-aggregate-noise}. Adding that aggregate only at publication reproduces its
+open-loop process-only end covariance. It does not reproduce the filtered MSE under the original
+tokenwise model, because early noise enters later observations and becomes correlated with their
+corrections.
+More explicitly, stack the micro-noises for one value coordinate in $\ve{w}$, and let $\ve{B}$
+map them to the within-chunk observation vector while $\ve{G}$ maps them to the final physical
+state. Their contribution to the true boundary error is
+\begin{equation}
+  \left(
+    \ve{G}
+    -
+    \ve{\Phi}_{c,C_c}\ve{L}_{c,\mathrm{eff}}\ve{B}
+  \right)
+  \ve{w},
+\end{equation}
+whose covariance contains the correction term. The publication-only surrogate instead uses
+\begin{equation}
+  \ve{G}\Cov(\ve{w})\ve{G}^{\tr}
+  =
+  \ve{\Omega}_c^{\mathrm{chunk}}.
+\end{equation}
+
+
+% =============================================================================
+\section{Approximation Oracles}
+\label{app:kdn2-oracles}
+
+\subsection{Exact Joint Conditioning in the Co-Rotating Frame}
+
+For a Gaussian entry state and the local observation model
+\eqref{eq:kdn2-chunk-observation}, exact joint conditioning would use
+\begin{equation}
+  \ve{L}_{\mathrm{block}}
+  =
+  \ve{U}\ve{\Gamma}^{-1},
+  \label{eq:app-kdn2-exact-block-gain}
+\end{equation}
+and
+\begin{equation}
+\begin{aligned}
+  \ve{S}_{\mathrm{block}}^+
+  &=
+  \ve{S}^-+\ve{L}_{\mathrm{block}}\ve{\Delta},
+  \\
+  \ve{P}_{\mathrm{block}}^+
+  &=
+  \ve{P}^--\ve{U}\ve{\Gamma}^{-1}\ve{U}^{\tr}.
+\end{aligned}
+\label{eq:app-kdn2-exact-block-posterior}
+\end{equation}
+The implemented effective gain is instead
+\begin{equation}
+  \ve{L}_{\mathrm{eff}}
+  =
+  \ve{U}\ve{\Lambda}^{-1}
+  \left[
+    \ve{I}
+    +
+    \tril(
+      \ve{H}^{\tr}\ve{U}\ve{\Lambda}^{-1},
+      -1
+    )
+  \right]^{-1}.
+  \label{eq:app-kdn2-effective-expanded}
+\end{equation}
+They coincide for $C=1$ and when $\ve{\Gamma}$ is diagonal in the selected token order. In
+general, exact joint conditioning uses the symmetric innovation inverse, while the implementation
+uses marginal raw gains and causal lower-triangular residual feedback. Repeated or collinear
+addresses and small observation noise are therefore mandatory stress cases.
+
+\subsection{Repeated-Key Oracle}
+
+For one scalar entry state with prior variance $p$, $C$ identical unit addresses, and observation
+noise $r$, the frozen gain and error contraction are
+\begin{equation}
+  \ell=\frac{p}{p+r},
+  \qquad
+  a=1-\ell=\frac{r}{p+r}.
+  \label{eq:app-kdn2-repeated-parameters}
+\end{equation}
+The error recurrence is
+$\epsilon_t=a\epsilon_{t-1}-\ell\xi_t$. Hence
+\begin{equation}
+  \epsilon_C
+  =
+  a^C\epsilon_0
+  -
+  \ell\sum_{t=1}^{C}a^{C-t}\xi_t,
+\end{equation}
+and
+\begin{equation}
+  \E[\epsilon_C^2]
+  =
+  a^{2C}p
+  +
+  \ell^2r
+  \frac{1-a^{2C}}{1-a^2}.
+  \label{eq:app-kdn2-repeated-oracle}
+\end{equation}
+The MSE stays bounded for $0<a<1$, but it differs from recursive Kalman filtering because later
+gains do not shrink. Equation~\eqref{eq:app-kdn2-repeated-oracle} is both a numerical oracle and a
+direct measure of gain-freezing error.
+
+
+% =============================================================================
+\section{Proofs for the Rotational Process}
+\label{app:kdn2-rotation-proof}
+
+\subsection{Composition and Norm Survival}
+
+\begin{proof}[Proof of Proposition~\ref{prop:kdn2-rotation}]
+Two planar rotations satisfy
+\begin{equation}
+  \Rot(\theta_2)\Rot(\theta_1)
+  =
+  \Rot(\theta_1+\theta_2).
+\end{equation}
+Scalar radii commute with the rotations, and the Kronecker identity acts independently on every
+content coordinate. Repeated multiplication gives \eqref{eq:kdn2-rotation-product}. Since
+$\Rot(\theta)$ is orthogonal,
+\begin{equation}
+  \|[\Rot(\theta)\otimes\ve{I}_{r_a}]\ve{x}\|_2
+  =
+  \|\ve{x}\|_2,
+\end{equation}
+so only the product of radii changes the norm, proving \eqref{eq:kdn2-rotation-norm}.
+\end{proof}
+
+\subsection{Observability of a Hidden Quadrature}
+
+The determinant of the matrix in \eqref{eq:kdn2-observability} is
+$-\rho\sin\theta$. It is therefore full rank exactly when
+$\rho\sin\theta\neq0$. Small $\rho$ destroys the signal before retrieval, while small
+$|\sin\theta|$ makes recovery poorly conditioned. This proves only open-loop read
+observability; intervening correction factors in $\ve{\Psi}_{t:\tau}$ can still alter or erase the
+hidden direction.
+
+
+% =============================================================================
+\section{Reference Algorithm and Validation Contract}
+\label{app:kdn2-algorithm}
+
+\paragraph{Initialization.}
+For each batch--head item, initialize
+\begin{equation}
+  \ve{S}_0^-=\ve{0},
+  \qquad
+  \ve{P}_0^-=\mu^{-1}\ve{I},
+  \qquad
+  \mu>0.
+\end{equation}
+
+\paragraph{Reference chunk step.}
+For every real chunk:
+\begin{enumerate}[leftmargin=1.6em,itemsep=2pt,topsep=2pt]
+  \item form every structured prefix $\ve{\Phi}_{c,t}$ and the transported addresses
+  $\widetilde{\ve{H}}_c,\widetilde{\ve{Q}}_c$;
+  \item form $\ve{U}_c,\ve{\Gamma}_c,\ve{\Lambda}_c$, and $\ve{L}_c$ from
+  \eqref{eq:kdn2-u-gamma};
+  \item form $\ve{\Delta}_c$ and solve the unit-lower system for $\ve{Z}_c$;
+  \item compute causal outputs and commit $\overline{\ve{S}}_c^+$;
+  \item form $\ve{L}_{c,\mathrm{eff}}$ and compute $\overline{\ve{P}}_c^+$ in Joseph form; and
+  \item publish $(\ve{S}_{c+1}^-,\ve{P}_{c+1}^-)$ with
+  \eqref{eq:kdn2-corotating-boundary}.
+\end{enumerate}
+
+\paragraph{Required identities.}
+An independent FP64 implementation checks
+\begin{equation}
+\begin{aligned}
+  \ve{Z}_{t,:}
+  &=
+  \ve{e}_{t}^{\tr}
+  &&\text{from \eqref{eq:app-kdn2-virtual-recurrence}},\\
+  \ve{S}^-+\ve{L}\ve{Z}
+  &=
+  \ve{S}^-+\ve{L}_{\mathrm{eff}}\ve{\Delta},\\
+  \overline{\ve{P}}_{\mathrm{Joseph}}^+
+  &=
+  \overline{\ve{P}}_{\mathrm{expanded}}^+,\\
+  \overline{\ve{P}}^+
+  &=
+  \overline{\ve{P}}^{+\tr},
+  \qquad
+  \lambda_{\min}(\overline{\ve{P}}^+)>0
+  &&\text{within numerical tolerance}.
+\end{aligned}
+\end{equation}
+Monte Carlo simulation of \eqref{eq:kdn2-chunk-observation} must match the Joseph matrix to the
+empirical ensemble MSE. Separately, deterministic writes at every chunk offset must satisfy
+\eqref{eq:app-kdn2-tail-transport}.
+
+\paragraph{Gradient and numerical validation.}
+Gradients with respect to transported addresses, values, noise scales, initial covariance,
+radii, angles, and latent lifts are compared with an autodifferentiated reference. Tests cover
+non-multiple tail chunks, low observation noise, repeated addresses, large rotations, and losses
+on both outputs and final states. The validation oracle keeps covariance operations in FP64,
+uses Joseph form, symmetrizes only for validation eigenspectrum checks, and masks padded positions
+from gains, triangular systems, reads, and transition products.
+
+
+% =============================================================================
+\section{Complete Systems Protocol}
+\label{app:kdn2-runtime-protocol}
+
+The primary layer benchmark uses the production geometry
+$B=4$, $T=4096$, $d_{\mathrm{model}}=2048$, $16$ heads, and
+$d_s=d_v=128$ on an H200. Every timed call includes the shared projection contract, the dependent
+chunk recurrence, transported addresses, causal reads, tail masks, state publication, symmetry
+policy, Joseph update, rotational mean and covariance maps, output normalization, and the actual
+backward checkpoint policy. Complete forward and complete forward--backward are distinct
+measurements.
+
+The production covariance, denominators, WY system, and Joseph update use IEEE FP32 after parity
+against the FP64 validation oracle. A production path may use BF16 for peripheral tensors while
+keeping recurrent state in FP32. TF32 or
+lower-precision covariance paths are separate ablations and must first match full-sequence
+outputs, states, eigenvalue drift, and gradients.
+
+Comparisons run in one process and stream with source revisions and compiled kernels pinned. After
+$15$ warmups, we collect $40$ samples in balanced interleaved AB/BA order. We report median and
+minimum latency, tokens per
+second, allocated and device-level peak memory, and kernel resource data including registers,
+shared memory, spills, scratch, occupancy, and synchronization. No layer result is assembled from
+independently best component timings.
+
+Training, prefill, and decode are reported separately. Decode results include ordinary-token
+latency, boundary-tail latency, time to first token, and cache bytes. Chunk lengths are selected on
+a development workload only, with recurrent width, parameter count, precision, batch, sequence
+length, and training tokens matched. Results are presented as a quality--latency--memory tradeoff;
+until this complete protocol is run, the chunkwise path is an implementation hypothesis rather
+than a demonstrated speedup.
+
+\end{document}
