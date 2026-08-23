@@ -1,923 +1,895 @@
 \documentclass[11pt]{article}
 
 \usepackage[margin=1in]{geometry}
-\usepackage{amsmath,amssymb,microtype,xcolor}
+\usepackage{amsmath,amssymb,mathtools,booktabs,microtype,xcolor}
+\usepackage{enumitem}
 \usepackage[colorlinks=true,linkcolor=blue!50!black]{hyperref}
 
-\title{Chunkwise KLA with Dense Boundary Covariance:\\
-A TTT-Style Approximation and Implementation Plan}
+\title{Structured Dynamic Panel Conditioning for KDN-2:\\
+An Exact Chunkwise Algorithm with Dense Boundary Covariance}
 \author{}
-\date{August 20, 2026}
+\date{August 22, 2026}
 
 \newcommand{\ve}[1]{\boldsymbol{#1}}
 \newcommand{\tr}{\mathsf{T}}
-\newcommand{\diag}{\operatorname{diag}}
-\newcommand{\tril}{\operatorname{tril}}
 \newcommand{\E}{\mathbb{E}}
+\newcommand{\R}{\mathbb{R}}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\blockdiag}{blockdiag}
+\DeclareMathOperator{\tril}{tril}
+\DeclareMathOperator{\Cov}{Cov}
 
 \begin{document}
 \maketitle
 
-\section{Decision and Scope}
+\begin{abstract}
+Exact Kalman linear attention carries a dense posterior covariance but pays a sequential dense
+covariance dependency at every token.  A natural approximation is to hold the latent state fixed
+inside a short panel, condition all panel observations jointly, and add the accumulated process
+noise only at the boundary.  That approximation admits compact panel solves and is internally
+consistent, but a sealed
+quality study rejects it: when the transition strongly contracts, the observations primarily
+measure newly injected process noise, precisely the information that the delayed-noise model
+discards.
 
-The previous plan attempted to reproduce tokenwise ExactKLA exactly by factoring the joint
-innovation covariance inside every chunk. That route has now been measured extensively and is not
-the implementation target of this note. Exact prefix conditioning retains the expensive dynamic
-cross-covariance builder, a small dense factorization and solve, a wide right-hand side for causal
-reads and boundary state, and a dense covariance update. Chunking changes the schedule, but not
-enough of the work.
+This note develops a different panel algorithm.  It retains the process-noise contribution to the
+observation covariance, to every causal read--observation cross-covariance, and to the terminal
+state--observation cross-covariance.  The resulting panel update is algebraically identical to the
+tokenwise Kalman filter.  For the damped rotational process model of KDN-2 and block-isotropic
+process noise, these dynamic terms can be constructed in $O(b^2d)$ work for panel width $b$ and
+state dimension $d$, alongside the unavoidable $O(bd^2)$ dense-boundary work.  Thus panel width is
+an execution tile rather than a statistical approximation knob.  Performance remains an
+empirical kernel question; this document defines the mathematics, a coherent nested fallback
+approximation, and the gates required before making a speed claim.
+\end{abstract}
 
-The replacement is a different model, called \emph{Chunk-KLA} in this note. It keeps a dense
-covariance between chunks but deliberately approximates inference within a chunk. All tokens in a
-chunk form gains from the same dense boundary prior; the mean then follows a causal
-sequential-residual update whose gains remain frozen. This update has the existing fast
-affine/WY chunk form. The covariance committed at the boundary is dense and is the Joseph-form
-ensemble error covariance of that approximate estimator. Thus approximate within the chunk does
-not mean diagonal covariance: the uncertainty carried across chunks remains anisotropic and dense.
+\section{Decision and scope}
 
-This is not a new backend for \texttt{ExactKLA}. It must be implemented and evaluated under a
-distinct mixer name such as \texttt{chunk\_kla} or \texttt{ttt\_kla}. The recurrent ExactKLA and
-the exact direct-conditioning work remain useful inference targets and correctness references,
-but they are not production implementation plans for this model.
+The exact-static, panel-refreshed proposal is not promoted as ``ChunkKLA v1.''  Its Cholesky
+conditioning is exact for a static latent variable, but relative to the tokenwise dynamic model it
+sets all within-panel process-noise observation correlations to zero and adds only the open-loop
+terminal covariance.  In a preregistered FP64 study, width $b=1$ was an exact control, while every
+tested width $b\geq2$ failed at least one regime.  At $b=2$, the near-zero-transition regime had
+median output relative error $0.69719$ and median final-mean relative error $0.99999$.  This is a
+modeling failure rather than a factorization or roundoff failure.
 
-\subsection{Reference: tokenwise ExactKLA}
+The replacement is \emph{structured dynamic panel conditioning}.  It preserves
 
-For comparison, tokenwise ExactKLA predicts, assimilates one observation, and reads after every
-token:
+\begin{enumerate}[leftmargin=1.8em,itemsep=2pt]
+  \item the token-timed damped rotational transition;
+  \item every process-noise contribution that can be inferred from a panel observation;
+  \item causal read-after-write outputs;
+  \item the exact dense posterior covariance at every panel boundary; and
+  \item the tokenwise KDN-2 result in exact arithmetic, for every panel width.
+\end{enumerate}
+
+KDN-2 is the model name.  Panel conditioning is an implementation strategy, not a second model.
+The old exact-static construction is retained only as the \emph{delayed-noise ablation}.
+Production files remain out of scope until a sandbox implementation passes forward, gradient,
+finite-precision, resource, and end-to-end speed gates.
+
+\section{Tokenwise KDN-2}
+
+Let $\ve{S}_t^\star\in\R^{d\times d_v}$ be the latent associative state and
+$\ve{v}_t,\ve{e}_t,\ve{o}_t\in\R^{d_v}$.  Conditional on the incoming filtration, its value
+columns are independent with a shared address-space covariance,
 \begin{equation}
-\begin{aligned}
+  \ve{S}_{0,:,a}^\star\mid\mathcal F_0
+  \sim\mathcal N(\ve{S}_{0,:,a},\ve{P}_0),
+  \qquad \ve{P}_0\succeq\ve{0},
+  \qquad a=1,\ldots,d_v.
+\end{equation}
+The latent process and observation are
+\begin{align}
+  \ve{S}_t^\star
+    &=\ve{D}_t\ve{S}_{t-1}^\star+\ve{W}_t,
+  &
+  \ve{W}_{t,:,a}&\sim\mathcal N(\ve{0},\ve{\Omega}_t),
+  \label{eq:process}\\
+  \ve{v}_t
+    &=\ve{S}_t^{\star\tr}\ve{k}_t+\ve{e}_t,
+  &
+  \ve{e}_t&\sim\mathcal N(\ve{0},r_t\ve{I}_{d_v}),
+  \qquad r_t>0 .
+  \label{eq:observation}
+\end{align}
+Every $\ve{\Omega}_t$ is symmetric positive semidefinite.  The process noises, observation
+noises, incoming state error, and different value-coordinate noise columns are mutually
+independent.  All covariance and conditioning identities below are derived for one arbitrary value
+column and then applied to all $d_v$ columns with shared factors.
+The transition, keys, queries, and noise parameters are conditioned design quantities known
+causally at their token.  Value coordinates are conditionally independent and share the same
+address-space covariance.  To connect with the lifted Direction-A formulation, the symbols used
+below denote the effective state-space addresses
+\begin{equation}
+  \ve{k}_t=\ve{E}_t\ve{k}_t^{\mathrm{raw}},
+  \qquad
+  \ve{q}_t=\ve{F}_t\ve{q}_t^{\mathrm{raw}},
+\end{equation}
+where the lifts $\ve{E}_t$ and $\ve{F}_t$ are also token-causal design quantities.
+
+The tokenwise filter is
+\begin{align}
   \widehat{\ve{S}}_t
-    &= \ve{D}_t\ve{S}_{t-1},
+    &=\ve{D}_t\ve{S}_{t-1},
   &
   \widehat{\ve{P}}_t
-    &= \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t,
-  \\
+    &=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t,
+  \label{eq:token-predict}\\
   \ve{\kappa}_t
-    &= \frac{\widehat{\ve{P}}_t\ve{k}_t}
+    &=\frac{\widehat{\ve{P}}_t\ve{k}_t}
       {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t},
   &
   \ve{S}_t
-    &= \widehat{\ve{S}}_t
-      +\ve{\kappa}_t
-       \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr},
-  \\
+    &=\widehat{\ve{S}}_t+
+      \ve{\kappa}_t
+      \bigl(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\bigr)^{\tr},
+  \label{eq:token-correct}\\
   \ve{P}_t
-    &= (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t,
+    &=\widehat{\ve{P}}_t-
+      \frac{(\widehat{\ve{P}}_t\ve{k}_t)
+      (\widehat{\ve{P}}_t\ve{k}_t)^{\tr}}
+      {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t},
   &
-  \ve{o}_t
-    &= \ve{S}_t^{\tr}\ve{q}_t .
-\end{aligned}
-\label{eq:token-exact}
-\end{equation}
-Here \(\ve{D}_t=\diag(\ve{\alpha}_t)\),
-\(\ve{\Omega}_t=\diag(\ve{\omega}_t)\), and the posterior covariance is dense.
-The recurrence costs \(O(d_k^2)\) arithmetic and one dense covariance dependency per token.
-
-\subsection{Why the exact chunk plan is retired}
-
-The measurements in \texttt{sanboxes/kernels/exact\_kla\_log.md} identify the decisive
-bottlenecks:
-\begin{center}
-\begin{tabular}{p{0.47\linewidth}p{0.43\linewidth}}
-\hline
-Measurement & Consequence \\
-\hline
-Diagnostics-off \(d_k=128\) screening run: \(77.37\) ms versus \(2.63\) ms for KDA
-(\(29.4\times\)); non-final \(1/4\) sample & Exact direct conditioning is not close enough to
-justify another generic decomposition, but this ratio is not acceptance evidence. \\
-Builder/factor/solve/epilogue: \(54.94/7.60/6.98/4.66\) ms &
-The dynamic exact builder is the dominant cost; solver-only optimization cannot rescue the
-complete layer. \\
-Prepared \(C=32\) two-CTA, X-only factor/inverse plus \(288\)-RHS chain: \(1.34\) ms &
-This excludes the builder, O/S/P posts, guards, layer shell, backward, and a true dependent
-boundary recurrence. It supports only the two-CTA scheduling mechanics. \\
-Solver-only \(C=32\), 128-call current-stream wrapper: \(3.54\) ms &
-This includes Python invocation, allocation, bookkeeping, and one launch per call, but no complete
-chunk recurrence. It shows why that call pattern must not be final. \\
-Optimistic \(d_k=128,C=128\) TF32 \(P H\) diagnostic: approximately \(0.66\) ms &
-This is a guards-off composite lower bound, not one promoted configuration or a dependent
-\(C=32\) recurrence. It motivates measuring a batched dense product; it does not establish the
-new path's latency or accuracy. \\
-\hline
-\end{tabular}
-\end{center}
-
-The new direction therefore tests the reusable pieces---GEMM-shaped \(P K\) products, a
-provisional \(C=32\) tile, and a persistent chunk loop---while deleting exact prefix conditioning,
-the transition-conditioned \(J/B\) builder, Cholesky or \(LDL^{\tr}\), and the \(288\)-column exact
-right-hand side. A different small Gram matrix and boundary-update dataflow remain and must be
-timed as a complete dependent recurrence. The existing register-resident \(C=32\) exact solver is
-a benchmark, not a component of the proposed algorithm.
-
-\subsection{Layer contract for the first prototype}
-
-To keep mixer comparisons meaningful, the first Chunk-KLA layer inherits the same
-KimiDeltaAttention peripherals as ExactKLA, DiagKLA, and KDA: the \(q/k/v\) projections, short
-convolution, output gate, gated output normalization, and output projection. It uses the same
-iso-parameter backbone. Queries and keys are \(L^2\)-normalized, and the equations below absorb
-the usual \(d^{-1/2}\) read scale into \(\ve{q}\).
-
-The parameterization also stays fixed:
-\begin{equation}
-  r_t^{\mathrm{raw}}=r_{\min}+\operatorname{softplus}(r_{\mathrm{proj},t}),
-  \qquad
-  \ve{\omega}_t=q_{\min}+\operatorname{softplus}(\ve{qn}_{\mathrm{proj},t}),
-  \qquad
-  \mu=\operatorname{softplus}(\mu_{\mathrm{param}})+0.1 .
-\end{equation}
-When \texttt{dk\_calibration=True}, every formula uses the effective noise
-\(r_t=r_t^{\mathrm{raw}}/d\); otherwise it uses \(r_t=r_t^{\mathrm{raw}}\).
-Assume \(r_t>0\), \(\mu>0\), \(\alpha_{t,i}>0\), and \(\omega_{t,i}\geq0\). The initial
-implementation is a training/prefill path with no cache. Streaming decode is a separate gate
-because it cannot batch future keys into \(P K\).
-
-\section{Proposed Chunk-KLA Model}
-
-\subsection{Dense boundary prior}
-
-Let \(d=d_k\), \(m=d_v\), and let chunk \(c\) contain \(C_c\leq C\) real tokens. At its entrance,
-the model carries
-\begin{equation}
-  \ve{S}_c^- \in \mathbb{R}^{d\times m},
-  \qquad
-  \ve{P}_c^- \in \mathbb{R}^{d\times d},
-  \qquad
-  \ve{P}_c^- \succ 0 .
-\end{equation}
-The columns of \(\ve{S}_c^-\) share the same key-space covariance \(\ve{P}_c^-\), as in KLA.
-For the approximate recursive model, \(\ve{P}_c^-\) is a propagated ensemble MSE matrix, not an
-exact posterior covariance conditional on the realized preceding chunks. The local derivation
-treats the entry error as zero mean across the modeled observation histories.
-Within the chunk, stack
-\begin{equation}
-  \ve{K}_c=[\ve{k}_1,\ldots,\ve{k}_{C_c}]
-    \in\mathbb{R}^{d\times C_c},
-  \qquad
-  \ve{Q}_c=[\ve{q}_1,\ldots,\ve{q}_{C_c}]
-    \in\mathbb{R}^{d\times C_c},
-\end{equation}
-and let row \(t\) of
-\(\ve{V}_c\in\mathbb{R}^{C_c\times m}\) be \(\ve{v}_t^{\tr}\). Define
-\begin{equation}
-  \ve{R}_c=\diag(r_1,\ldots,r_{C_c}),
-  \qquad r_t>0.
-\end{equation}
-The chunk-time observation model treats the latent associative map as fixed while these
-observations are accumulated:
-\begin{equation}
-  \ve{V}_c = \ve{K}_c^{\tr}\ve{S}_c^\star+\ve{\Xi}_c,
-  \qquad
-  \operatorname{Cov}(\ve{\Xi}_{c,:,j})=\ve{R}_c
-\end{equation}
-for every value coordinate \(j\). Treating \((\ve{K}_c,\ve{R}_c)\) as fixed design quantities,
-the noise is zero mean and independent of the entry-state estimation error. This
-static-within-chunk assumption is part of the approximation, not a claim about the original
-tokenwise state-space model.
-
-\subsection{Parallel gains from the frozen prior}
-
-Form
-\begin{align}
-  \ve{U}_c
-    &= \ve{P}_c^-\ve{K}_c,
-  &
-  \ve{G}_c
-    &= \ve{R}_c+\ve{K}_c^{\tr}\ve{U}_c,
-  \label{eq:u-g}
-  \\
-  \ve{D}_{g,c}
-    &= \diag\!\big(\diag(\ve{G}_c)\big),
-  &
-  \ve{L}_c
-    &= \ve{U}_c\ve{D}_{g,c}^{-1}.
-  \label{eq:approx-gain}
+  \ve{o}_t&=\ve{S}_t^{\tr}\ve{q}_t .
+  \label{eq:token-read}
 \end{align}
-Column \(t\) of \(\ve{L}_c\) is
-\begin{equation}
-  \ve{\ell}_t
-  =
-  \frac{\ve{P}_c^-\ve{k}_t}
-       {r_t+\ve{k}_t^{\tr}\ve{P}_c^-\ve{k}_t}.
-\end{equation}
-It is the scalar-observation Kalman gain for token \(t\), evaluated from the chunk-entry prior.
-All columns can therefore be computed together with one dense covariance--key product and a
-diagonal normalization.
+The covariance is dense.  The challenge is not the formula but the tokenwise chain of dense
+$d\times d$ updates.
 
-For the chunk-static model, the exact joint block gain would be
-\begin{equation}
-  \ve{L}_{c,\mathrm{block}}
-    = \ve{U}_c\ve{G}_c^{-1}.
-\end{equation}
-Equation~\eqref{eq:approx-gain} makes the explicit approximation
-\begin{equation}
-  \ve{G}_c^{-1}
-  \;\longrightarrow\;
-  \ve{D}_{g,c}^{-1}.
-\label{eq:diagonal-innovation}
-\end{equation}
-This substitution defines the \emph{raw} per-token gains: each token uses the correct dense
-boundary covariance but initially ignores innovation correlations with the other tokens. The
-causal WY transform below then incorporates earlier residual feedback, so the final effective gain
-is not simply \(\ve{U}_c\ve{D}_{g,c}^{-1}\). There is no innovation-covariance factorization. The
-mean update uses only the unit-lower solve already present in \texttt{chunk\_kalman}.
+\subsection{Damped rotational process}
 
-\subsection{Frozen-gain sequential residuals and the WY form}
-
-First compute the boundary residuals
+Partition the address dimension into fixed modes of size $d_m=2r_m$.  KDN-2 uses
 \begin{equation}
-  \ve{\Delta}_c
-  =\ve{V}_c-\ve{K}_c^{\tr}\ve{S}_c^- .
-\label{eq:residual}
-\end{equation}
-The raw gains are frozen, but the mean adapts causally inside the chunk:
-\begin{align}
-  \ve{S}_{c,0}^{\mathrm{virt}}
-    &=\ve{S}_c^-,
-  \\
-  \ve{e}_t
-    &=\ve{v}_t-(\ve{S}_{c,t-1}^{\mathrm{virt}})^{\tr}\ve{k}_t,
-  \\
-  \ve{S}_{c,t}^{\mathrm{virt}}
-    &=\ve{S}_{c,t-1}^{\mathrm{virt}}+\ve{\ell}_t\ve{e}_t^{\tr}.
-\label{eq:virtual-recurrence}
-\end{align}
-Only \(\ve{S}_{c,C_c}^{\mathrm{virt}}\) is committed; the earlier virtual states exist to define
-causal reads. This is a TTT-inspired minibatch update: the chunk is the minibatch, the memory is
-the adapted parameter, and the dense boundary covariance preconditions every write. Its
-approximation is freezing the gain, not freezing the residual.
-
-The recurrence has a compact affine/WY form. Define
-\begin{equation}
-  \ve{M}_c
-  =
-  \tril\!\left(\ve{K}_c^{\tr}\ve{L}_c,-1\right),
+  \ve{D}_t^{(m)}
+  =\rho_{t,m}\ve{R}(\theta_{t,m})\otimes\ve{I}_{r_m},
   \qquad
-  \ve{T}_c=\ve{I}+\ve{M}_c,
+  \ve{D}_t=\blockdiag_m\ve{D}_t^{(m)},
+  \label{eq:direction-a-transition}
+\end{equation}
+where
+\begin{equation}
+  \ve{R}(\theta)
+  =
+  \begin{bmatrix}
+    \cos\theta&-\sin\theta\\
+    \sin\theta& \cos\theta
+  \end{bmatrix}.
+\end{equation}
+The radius controls survival, the angle controls phase, and the key/query geometry controls
+visibility.  Process noise is block isotropic,
+\begin{equation}
+  \ve{\Omega}_t
+  =\blockdiag_m\bigl(\nu_{t,m}\ve{I}_{d_m}\bigr),
+  \qquad \nu_{t,m}\geq0.
+  \label{eq:block-noise}
+\end{equation}
+This structure is a model choice.  The covariance $\ve{P}_t$ itself is not projected: measurement
+updates create anisotropy and cross-mode correlations, and the panel boundary retains them.
+Ordinary learned transitions use $0<\rho_{t,m}\leq1$.  A hard reset is an explicit override
+$\ve{D}_t=\ve{0}$ while retaining $\ve{\Omega}_t$; it may occur inside a mathematical panel.
+At such a token, every effective mode radius used by the covariance builder is zero even if the
+network emitted a nonzero pre-reset radius.
+
+\section{One exact dynamic panel}
+
+Let a panel contain local tokens $1{:}b$ and begin after posterior
+$(\ve{S}_0,\ve{P}_0)$.  The first prediction occurs at its original time:
+\begin{equation}
+  \ve{X}^-=\ve{D}_1\ve{S}_0,
   \qquad
-  \overline{\ve{A}}_c=\ve{T}_c^{-1}.
-\label{eq:wy}
+  \ve{P}^-=\ve{D}_1\ve{P}_0\ve{D}_1^{\tr}+\ve{\Omega}_1.
+  \label{eq:first-prediction}
 \end{equation}
-Stacking the sequential innovations as rows of \(\ve{E}_c\) gives
+The token-one state is the common panel latent variable.  This convention makes $b=1$ exactly
+the tokenwise filter and leaves the later noises $\ve{w}_{2:b}$ to be handled dynamically.
+A partial final panel uses its actual token count as $b$; padding is excluded from every covariance,
+factorization, solve, and output rather than represented as a finite-noise observation.
+An implementation may use a fixed physical tile only if inactive rows are algebraically
+block-decoupled from the true $b\times b$ system.
+
+\subsection{Deterministic transport and dynamic residual state}
+
+Define forward products
 \begin{equation}
-  \ve{E}_c
-  =
-  \overline{\ve{A}}_c\ve{\Delta}_c,
+  \ve{\Phi}_1=\ve{I},
   \qquad
-  \ve{S}_c^+
-  =
-  \ve{S}_c^-+\ve{L}_c\ve{E}_c .
-\label{eq:mean-commit}
+  \ve{\Phi}_i=\ve{D}_i\ve{D}_{i-1}\cdots\ve{D}_2
+  \quad(i\geq2),
+  \label{eq:phi}
 \end{equation}
-The unit-lower solve is not the rejected exact Cholesky path: it contains no dynamic state
-cross-covariance and is the same WY transform used by the existing fast memory kernel. When
-reusing \texttt{chunk\_kalman}, set its within-chunk decay input to \(g=0\)
-(\(\alpha=1\)); the actual decay is applied only by equation~\eqref{eq:chunk-dynamics}. Passing
-tokenwise decay into that kernel would define a different mean estimator and require a different
-boundary-covariance derivation.
-
-Let row \(j\) of \(\ve{O}_c\) be \(\ve{o}_j^{\tr}\). Then
+and transport the observation and read addresses into the token-one frame:
 \begin{equation}
-  \ve{O}_c
-  =
-  \ve{Q}_c^{\tr}\ve{S}_c^-
-  +\tril\!\left(\ve{Q}_c^{\tr}\ve{L}_c\right)\ve{E}_c ,
-\label{eq:causal-output}
-\end{equation}
-where \(\tril\) includes the diagonal. Equivalently,
-\begin{equation}
-  \ve{o}_j
-  =
-  (\ve{S}_c^-)^{\tr}\ve{q}_j
-  +
-  \sum_{t=1}^{j}
-    \big(\ve{q}_j^{\tr}\ve{\ell}_t\big)\ve{e}_t .
-\end{equation}
-Thus token \(j\) reads its own write and all earlier writes, but no later key or value contributes
-to its output. The full update in~\eqref{eq:mean-commit} is exposed only to the next chunk.
-
-\subsection{Dense Joseph covariance at the boundary}
-
-Although the gain is approximate, the covariance carried to the next chunk should describe the
-error of the estimator that was actually used. The final mean is linear in the boundary residual:
-\begin{equation}
-  \ve{S}_c^+
-  =
-  \ve{S}_c^-+\ve{L}_{c,\mathrm{eff}}\ve{\Delta}_c,
+  \widetilde{\ve{k}}_i=\ve{\Phi}_i^{\tr}\ve{k}_i,
   \qquad
-  \ve{L}_{c,\mathrm{eff}}
-  =
-  \ve{L}_c\overline{\ve{A}}_c .
-\label{eq:effective-gain}
+  \widetilde{\ve{q}}_i=\ve{\Phi}_i^{\tr}\ve{q}_i.
+  \label{eq:transported-addresses}
 \end{equation}
-Define
-\begin{equation}
-  \ve{A}_c=\ve{I}-\ve{L}_{c,\mathrm{eff}}\ve{K}_c^{\tr}.
-\end{equation}
-The dense boundary covariance is
-\begin{equation}
-  \ve{P}_c^+
-  =
-  \ve{A}_c\ve{P}_c^-\ve{A}_c^{\tr}
-  +\ve{L}_{c,\mathrm{eff}}\ve{R}_c\ve{L}_{c,\mathrm{eff}}^{\tr}.
-\label{eq:joseph}
-\end{equation}
-This is positive semidefinite in exact arithmetic. More precisely, it is the ensemble
-estimation-error MSE averaged over prior observation histories and current noise, while treating
-the keys, gates, and noise parameters as fixed design quantities. It is not the Bayesian posterior
-covariance conditional on the realized \(\ve{V}_c\). Propagating it gives average calibration for
-the chosen linear estimator; it does not erase that estimator's realized conditional bias.
+No inverse transition or prefix ratio is used.
 
-Equation~\eqref{eq:joseph} must not be replaced by the exact-posterior downdate
-\(\ve{P}_c^--\ve{U}_c\ve{G}_c^{-1}\ve{U}_c^{\tr}\), because that covariance would correspond to a
-different estimator.
-
-Equation~\eqref{eq:joseph} has the low-rank expansion
+Separate the later process noise from the transported entry state:
 \begin{equation}
-  \boxed{
-  \ve{P}_c^+
-  =
-  \ve{P}_c^-
-  -\ve{L}_{c,\mathrm{eff}}\ve{U}_c^{\tr}
-  -\ve{U}_c\ve{L}_{c,\mathrm{eff}}^{\tr}
-  +\ve{L}_{c,\mathrm{eff}}\ve{G}_c\ve{L}_{c,\mathrm{eff}}^{\tr}}
-\label{eq:joseph-expanded}
-\end{equation}
-and therefore needs only GEMM-shaped products with width \(C_c\). The full
-\(\ve{G}_c=\ve{R}_c+\ve{K}_c^{\tr}\ve{U}_c\) is used in the covariance accounting, but it is never
-inverted or factored. Its off-diagonal entries correct the confidence carried forward even though
-the mean uses them only through causal lower-triangular residual feedback rather than the exact
-symmetric inverse.
-
-Repeated or collinear keys expose why this distinction matters. Sequential residuals prevent the
-undamped parallel update from multiplying one identical residual by \(C_c\), but the frozen gains
-still fail to contract after earlier observations. The estimator can therefore overweight later
-noise or become order-sensitive. The Joseph term reports the MSE of that behavior rather than
-pretending that the update was the exact block posterior.
-
-There is a closed-form scalar stability oracle. For \(C\) repeated unit keys, constant prior
-variance \(p\), and noise \(r\), let
-\begin{equation}
-  \ell=\frac{p}{p+r},
+  \ve{s}_i^\star
+  =\ve{\Phi}_i\ve{x}^\star+\ve{\xi}_i,
   \qquad
-  a=1-\ell=\frac{r}{p+r}.
-\end{equation}
-The frozen-gain sequential recurrence has prior-error multiplier \(a^C\) and boundary MSE
-\begin{equation}
-  P_C
-  =
-  a^{2C}p
-  +\ell^2r\frac{1-a^{2C}}{1-a^2}.
-\label{eq:repeated-key-oracle}
-\end{equation}
-This identity simultaneously checks WY orientation, the effective gain, and Joseph accounting.
-
-\subsection{Dynamics only at chunk boundaries}
-
-Chunk-KLA uses an update-then-predict convention. After
-\((\ve{S}_c^+,\ve{P}_c^+)\) is committed, apply one diagonal transition:
-\begin{equation}
-\begin{aligned}
-  \ve{S}_{c+1}^-
-    &= \ve{D}_c^{\mathrm{chunk}}\ve{S}_c^+,
-  \\
-  \ve{P}_{c+1}^-
-    &= \ve{D}_c^{\mathrm{chunk}}\ve{P}_c^+
-       (\ve{D}_c^{\mathrm{chunk}})^{\tr}
-       +\ve{\Omega}_c^{\mathrm{chunk}} .
-\end{aligned}
-\label{eq:chunk-dynamics}
-\end{equation}
-The first prototype reuses the existing token gates by aggregating their open-loop effect:
-\begin{align}
-  \ve{a}_c
-  &=
-  \bigodot_{t=1}^{C_c}\ve{\alpha}_t,
-  &
-  \ve{D}_c^{\mathrm{chunk}}
-  &=\diag(\ve{a}_c),
-  \\
-  \ve{\omega}_c^{\mathrm{chunk}}
-  &=
-  \sum_{s=1}^{C_c}
-    \left(
-      \bigodot_{u=s+1}^{C_c}\ve{\alpha}_u^2
-    \right)\odot\ve{\omega}_s,
-  &
-  \ve{\Omega}_c^{\mathrm{chunk}}
-  &=\diag(\ve{\omega}_c^{\mathrm{chunk}}).
-\end{align}
-These gates affect only the next chunk, so using all positions of the current chunk does not leak
-future information into a current output. They preserve the cumulative open-loop decay and process
-noise across one chunk interval, but they do not reproduce the original order of \(C_c\) alternating
-predict--update steps. In particular, the full chunk decay attenuates a final-position write by the
-same amount as a first-position write, whereas tokenwise KLA applies only the remaining tail decay.
-For \(C=1\), the gate is also shifted from predict-before-update to update-before-predict. The
-first prototype freezes the update--predict convention in
-equation~\eqref{eq:chunk-dynamics} and measures this positional bias explicitly. A causal pre-chunk
-gate or position-dependent tail transport would change the mean, effective gain, and process-noise
-covariance; either requires a new derivation before it becomes a later model ablation. Neither is
-an implementation option for the v0 kernel.
-
-\subsection{Initialization, tails, and complexity}
-
-Use \(\ve{S}_0^-=\ve{0}\) and \(\ve{P}_0^-=\mu^{-1}\ve{I}\). A final partial chunk uses its true
-length \(C_c\); padding must be masked from \(\ve{K},\ve{Q},\ve{V},\ve{R}\), the triangular output,
-and gate aggregation rather than represented as a finite-noise observation.
-
-For one full chunk, the leading dense work is
-\begin{equation}
-  O(d^2C+dC^2+dCm+C^2m+C^3),
-\end{equation}
-with recurrence depth \(T/C\). The \(O(Td^2)\) covariance--key arithmetic has not disappeared, but
-it becomes GEMM-shaped matrix multiplication; tensor-core acceleration remains conditional on the
-precision gate. The exact dynamic builder, factorization,
-and wide triangular solve are absent; the \(C^3\) term is the existing unit-lower WY transform.
-With the production geometry \(d=m=128\), \(C=32\) is the provisional first point because exact
-component evidence favors that tile and its local matrices remain small. The new dependent
-recurrence must select among \(C\in\{16,32,64\}\); the old exact-component optimum is not
-automatically the new optimum. The batching benefit primarily targets training and prefill.
-Autoregressive decode still needs a dense \(P\ve{k}_t\) product per token and can have a boundary
-Joseph-update latency spike.
-
-\section{What Is Exact and What Is Approximate}
-
-\subsection{Exact properties of the proposed estimator}
-
-For the stated chunk-static observation model, chosen raw gains \(\ve{L}_c\), and induced effective
-gain \(\ve{L}_{c,\mathrm{eff}}\):
-\begin{enumerate}
-  \item Equations~\eqref{eq:virtual-recurrence} and~\eqref{eq:causal-output} are exactly the
-        frozen-gain sequential-residual update and all of its causal prefixes.
-  \item Equation~\eqref{eq:joseph} is exactly the pre-observation ensemble MSE covariance of
-        equation~\eqref{eq:mean-commit}, averaged over modeled observation histories and current
-        noise for fixed design variables.
-  \item The dense covariance preserves cross-key-coordinate uncertainty between chunks.
-  \item With \(C_c=1\), the observation update is the ordinary scalar Kalman update. Full parity
-        with equation~\eqref{eq:token-exact} additionally requires the same placement of the
-        diagonal prediction.
-\end{enumerate}
-
-\subsection{Deliberate approximations}
-
-The model changes tokenwise ExactKLA in three places:
-\begin{enumerate}
-  \item Every raw gain is computed from the same boundary covariance, so it ignores covariance
-        contraction from earlier within-chunk observations.
-  \item The resulting effective block gain is the causal WY transform in
-        equation~\eqref{eq:effective-gain}, not the exact joint gain
-        \(\ve{U}_c\ve{G}_c^{-1}\).
-  \item The latent state is held fixed during the chunk and dynamics are applied only at the
-        boundary.
-\end{enumerate}
-The approximation should be easiest when within-chunk keys are weakly correlated or observation
-noise is large. Repeated keys, nearly collinear keys, small \(r_t\), abrupt dynamics, and tasks that
-need accurate uncertainty contraction are the required stress cases. Larger chunks improve
-parallelism but increase all three approximation errors.
-
-\subsection{Two bounded alternatives}
-
-The first alternative removes the WY dependency by taking a damped parallel Jacobi step
-\begin{equation}
-  \ve{S}_c^+
-  =
-  \ve{S}_c^-+\eta_C\ve{L}_c\ve{\Delta}_c .
-\end{equation}
-The first ablation fixes \(\eta_C=1/C_c\), using the true length for a partial chunk. It is only a
-speed/quality ablation. The undamped choice \(\eta_C=1\) is unsafe: with identical
-scalar keys, negligible noise, and identical targets, its error multiplier is \(1-C\). At
-\(C=32\) it can amplify the error by \(31\times\) in one chunk. Any damping must be fixed from
-causal-safe information such as \(C\); a rule based on future keys cannot affect earlier outputs.
-Use the corresponding effective gain \(\eta_C\ve{L}_c\) in Joseph accounting.
-
-The second fallback is for a speed failure dominated by dense \(P K\) work. Compress the chunk to
-rank \(r\ll C\) using a key- or position-dependent matrix
-\(\ve{W}_c\in\mathbb{R}^{C\times r}\) with
-\(\operatorname{rank}(\ve{W}_c)=r\). The projection may depend on conditioned keys and positions,
-but not on realized values or observation noise:
-\begin{equation}
-  \widetilde{\ve{K}}_c=\ve{K}_c\ve{W}_c,
+  \ve{\xi}_1=\ve{0},
   \qquad
-  \widetilde{\ve{V}}_c=\ve{W}_c^{\tr}\ve{V}_c,
+  \ve{\xi}_i=\ve{D}_i\ve{\xi}_{i-1}+\ve{w}_i .
+  \label{eq:state-decomposition}
+\end{equation}
+Here $\ve{x}^\star$ has conditional mean $\ve{X}^-$ and covariance $\ve{P}^-$.  Let
+\begin{equation}
+  \ve{Q}_1=\ve{0},
   \qquad
-  \widetilde{\ve{R}}_c=\ve{W}_c^{\tr}\ve{R}_c\ve{W}_c .
+  \ve{Q}_i
+  =\ve{D}_i\ve{Q}_{i-1}\ve{D}_i^{\tr}+\ve{\Omega}_i .
+  \label{eq:dynamic-q}
+\end{equation}
+For $i\geq j$, define
+\begin{equation}
+  \ve{\Phi}_{i:j}=\ve{D}_i\ve{D}_{i-1}\cdots\ve{D}_{j+1},
+  \qquad
+  \ve{\Phi}_{j:j}=\ve{I}.
 \end{equation}
 Then
 \begin{equation}
-  \widetilde{\ve{G}}_c
-  =
-  \widetilde{\ve{R}}_c
-  +\widetilde{\ve{K}}_c^{\tr}\ve{P}_c^-\widetilde{\ve{K}}_c,
-  \qquad
-  \widetilde{\ve{L}}_c
-  =
-  \ve{P}_c^-\widetilde{\ve{K}}_c\widetilde{\ve{G}}_c^{-1}.
+  \ve{Q}_{ij}^{W}
+  :=\Cov(\ve{\xi}_i,\ve{\xi}_j)
+  =\ve{\Phi}_{i:j}\ve{Q}_j .
+  \label{eq:cross-time-q}
 \end{equation}
-One rank-\(r\) block Kalman update then commits the boundary memory at cost
-\(O(d^2r+dr^2+r^3+drm+r^2m)\), plus summary construction. The shorter
-\(O(d^2r+dr^2+r^3)\) expression applies when \(m=d\) and only leading dense terms are counted.
-The projection must be matched across key, value, and noise; pooling keys and values independently
-is not a coherent observation model. Because the summary is available only at the boundary, this
-variant needs a separate local causal path for current-chunk outputs. Evaluate
-\(r\in\{1,4,8\}\) only after the full-\(C\) model establishes the quality ceiling.
+This identity remains valid for an exact-zero transition: earlier covariance is erased, and the
+current process noise starts a new independent component.
 
-\section{Kernel Architecture}
+\subsection{Joint innovation covariance}
 
-\subsection{Forward dataflow}
+Stack
+\begin{equation}
+  \widetilde{\ve{K}}
+  =[\widetilde{\ve{k}}_1,\ldots,\widetilde{\ve{k}}_b],
+  \qquad
+  \widetilde{\ve{Q}}
+  =[\widetilde{\ve{q}}_1,\ldots,\widetilde{\ve{q}}_b],
+\end{equation}
+and let row $i$ of $\ve{V}\in\R^{b\times d_v}$ be $\ve{v}_i^{\tr}$.  With
+$\ve{R}_v=\diag(r_1,\ldots,r_b)$, the innovation matrix is
+\begin{equation}
+  \ve{\Delta}
+  =\ve{V}-\widetilde{\ve{K}}^{\tr}\ve{X}^-.
+  \label{eq:panel-innovation}
+\end{equation}
 
-The Stage-5 feasibility prototype is a multi-launch CUDA/PyTorch decomposition at provisional
-\(C=32\). For each batch--head item it performs:
-\begin{enumerate}
-  \item Load the dense boundary \(\ve{S}_c^-\) and \(\ve{P}_c^-\).
-  \item Compute \(\ve{U}_c=\ve{P}_c^-\ve{K}_c\) with a GEMM-shaped operation.
-  \item Compute \(\ve{G}_c=\ve{R}_c+\ve{K}_c^{\tr}\ve{U}_c\), extract its diagonal, and scale
-        columns to obtain \(\ve{L}_c\).
-  \item Build the strictly lower \(\ve{M}_c\), apply the existing WY transform to obtain
-        \(\overline{\ve{A}}_c\) and \(\ve{E}_c\), and compute the causal outputs.
-  \item Form \(\ve{L}_{c,\mathrm{eff}}=\ve{L}_c\overline{\ve{A}}_c\), commit
-        \(\ve{S}_c^+\), and evaluate equation~\eqref{eq:joseph-expanded} with low-rank GEMMs.
-  \item Apply equation~\eqref{eq:chunk-dynamics}, retain the new dense boundaries, and advance to
-        the next chunk.
+The later process noises induce the observation covariance
+\begin{equation}
+  [\ve{\Sigma}_W]_{ij}
+  =\ve{k}_i^{\tr}\ve{Q}_{ij}^{W}\ve{k}_j
+  \quad(i\geq j),
+  \qquad
+  [\ve{\Sigma}_W]_{ji}=[\ve{\Sigma}_W]_{ij}.
+  \label{eq:sigma-w}
+\end{equation}
+Therefore the exact innovation covariance is
+\begin{equation}
+  \ve{G}
+  =\ve{R}_v
+   +\widetilde{\ve{K}}^{\tr}\ve{P}^-\widetilde{\ve{K}}
+   +\ve{\Sigma}_W.
+  \label{eq:dynamic-gram}
+\end{equation}
+Because $\ve{R}_v\succ0$, $\ve{G}$ is positive definite in exact arithmetic.  Factor and whiten
+the innovations:
+\begin{equation}
+  \ve{G}=\ve{J}\ve{J}^{\tr},
+  \qquad
+  \ve{Z}=\ve{J}^{-1}\ve{\Delta},
+  \label{eq:chol-z}
+\end{equation}
+where $\ve{J}$ is lower triangular.
+
+\subsection{All causal outputs}
+
+For $j\leq i$, the state--observation cross-covariance is
+\begin{equation}
+  \ve{C}_{i,j}
+  =\Cov(\ve{s}_i^\star,v_j)
+  =\ve{\Phi}_i\ve{P}^-\widetilde{\ve{k}}_j
+   +\ve{Q}_{ij}^{W}\ve{k}_j .
+  \label{eq:state-observation-cross}
+\end{equation}
+Define a lower-triangular read--observation matrix
+\begin{equation}
+  [\ve{H}]_{ij}
+  =
+  \begin{cases}
+    \ve{q}_i^{\tr}\ve{C}_{i,j},&j\leq i,\\
+    0,&j>i.
+  \end{cases}
+  \label{eq:read-observation-cross}
+\end{equation}
+Every read-after-write output is then produced by
+\begin{equation}
+  \boxed{
+  \ve{O}
+  =\widetilde{\ve{Q}}^{\tr}\ve{X}^-
+   +\tril\!\left(\ve{H}\ve{J}^{-\tr}
+   \right)\ve{Z}.}
+  \label{eq:causal-outputs}
+\end{equation}
+The triangular mask is essential.  For row $i$, the first $i$ columns of the full triangular
+solve equal the solve using the leading $i\times i$ Cholesky block.  Hence output $i$ is the
+conditional mean using observations $1{:}i$ and cannot depend on a future token.  Masking a full
+$\ve{G}^{-1}$ update is not equivalent.
+
+\subsection{Dense boundary posterior}
+
+At the terminal token, collect
+\begin{equation}
+  \ve{C}_b=[\ve{C}_{b,1},\ldots,\ve{C}_{b,b}],
+  \qquad
+  \ve{B}_b=\ve{C}_b\ve{J}^{-\tr}.
+  \label{eq:boundary-factor}
+\end{equation}
+The exact posterior mean and covariance are
+\begin{equation}
+  \boxed{
+  \ve{S}_b
+  =\ve{\Phi}_b\ve{X}^-+\ve{B}_b\ve{Z},}
+  \label{eq:boundary-mean}
+\end{equation}
+\begin{equation}
+  \boxed{
+  \ve{P}_b
+  =\ve{\Phi}_b\ve{P}^-\ve{\Phi}_b^{\tr}
+   +\ve{Q}_b
+   -\ve{B}_b\ve{B}_b^{\tr}.}
+  \label{eq:boundary-covariance}
+\end{equation}
+The next panel consumes this dense $\ve{P}_b$ without projection.  Because terminal process noise
+also appears in the observations, the ordinary independent-noise Joseph formula is not the right
+reference.  Let
+\begin{equation}
+  \ve{\Pi}_b
+  =\ve{\Phi}_b\ve{P}^-\ve{\Phi}_b^{\tr}+\ve{Q}_b,
+  \qquad
+  \ve{L}_b=\ve{C}_b\ve{G}^{-1}=\ve{B}_b\ve{J}^{-1}.
+\end{equation}
+The generalized estimator-error form
+\begin{equation}
+  \ve{P}_b
+  =\ve{\Pi}_b
+   -\ve{L}_b\ve{C}_b^{\tr}
+   -\ve{C}_b\ve{L}_b^{\tr}
+   +\ve{L}_b\ve{G}\ve{L}_b^{\tr}
+  \label{eq:generalized-error-covariance}
+\end{equation}
+is an independent FP64 numerical reference and reduces algebraically to
+equation~\eqref{eq:boundary-covariance}.  The direct downdate is admitted to an FP32 candidate only
+if the full-sequence numerical gate accepts it.
+
+A stronger positive-semidefinite reference exposes the independent Gaussian sources.  For
+$s=2{:}b$, let $\ve{T}_s=\ve{\Phi}_{b:s}$ and let
+$\ve{A}_s\in\R^{b\times d}$ have row
+\begin{equation}
+  [\ve{A}_s]_{i,:}
+  =
+  \begin{cases}
+    \ve{k}_i^{\tr}\ve{\Phi}_{i:s},&i\geq s,\\
+    \ve{0}^{\tr},&i<s.
+  \end{cases}
+\end{equation}
+Then
+\begin{align}
+  \ve{P}_b
+  ={}&
+  (\ve{\Phi}_b-\ve{L}_b\widetilde{\ve{K}}^{\tr})
+  \ve{P}^-
+  (\ve{\Phi}_b-\ve{L}_b\widetilde{\ve{K}}^{\tr})^{\tr}
+  \nonumber\\
+  &+\sum_{s=2}^{b}
+  (\ve{T}_s-\ve{L}_b\ve{A}_s)
+  \ve{\Omega}_s
+  (\ve{T}_s-\ve{L}_b\ve{A}_s)^{\tr}
+  +\ve{L}_b\ve{R}_v\ve{L}_b^{\tr}.
+  \label{eq:source-square-covariance}
+\end{align}
+This square-sum form, rather than an independent-noise Joseph formula on the terminal state, is the
+PSD oracle.
+
+\section{Direction-A makes the dynamic builder structured}
+
+The apparent obstacle is the family $\ve{Q}_{ij}^{W}$.  A generic implementation could
+materialize $b^2$ vectors of width $d$, reproducing the expensive dynamic builder that made the
+earlier ExactKLA kernel unattractive.  Equations~\eqref{eq:direction-a-transition} and
+\eqref{eq:block-noise} remove the need for dense covariance propagation inside the panel.
+
+For mode $m$,
+\begin{equation}
+  \ve{Q}_i^{(m)}=\tau_{i,m}\ve{I}_{d_m},
+  \qquad
+  \tau_{1,m}=0,
+  \qquad
+  \tau_{i,m}=\rho_{i,m}^2\tau_{i-1,m}+\nu_{i,m}.
+  \label{eq:tau-recurrence}
+\end{equation}
+Here $\rho_{i,m}$ means the effective radius after applying the reset override, so it is zero at a
+hard reset.  Equivalently, equation~\eqref{eq:tau-recurrence} is the blockwise form of
+equation~\eqref{eq:dynamic-q} using the effective $\ve{D}_i$.
+For each source observation $j$, initialize
+\begin{equation}
+  \ve{u}_{j,j}^{(m)}=\tau_{j,m}\ve{k}_j^{(m)}
+  \label{eq:u-initialize}
+\end{equation}
+and propagate forward without a ratio,
+\begin{equation}
+  \ve{u}_{i,j}^{(m)}
+  =\ve{D}_i^{(m)}\ve{u}_{i-1,j}^{(m)},
+  \qquad i>j.
+  \label{eq:u-propagate}
+\end{equation}
+Then
+\begin{align}
+  [\ve{\Sigma}_W]_{ij}
+    &=\sum_m
+      \ve{k}_i^{(m)\tr}\ve{u}_{i,j}^{(m)},
+  \label{eq:structured-sigma}\\
+  [\ve{H}_W]_{ij}
+    &=\sum_m
+      \ve{q}_i^{(m)\tr}\ve{u}_{i,j}^{(m)},
+  \label{eq:structured-h}\\
+  [\ve{C}_W]_{:,j}
+    &=\ve{u}_{b,j}.
+  \label{eq:structured-c}
+\end{align}
+
+The contribution of the dense incoming covariance is computed separately.  Form
+\begin{equation}
+  \ve{U}=\ve{P}^-\widetilde{\ve{K}}.
+  \label{eq:dense-u}
+\end{equation}
+Then
+\begin{align}
+  \ve{G}
+    &=\ve{R}_v+\widetilde{\ve{K}}^{\tr}\ve{U}+\ve{\Sigma}_W,
+  \label{eq:assembled-g}\\
+  \ve{H}
+    &=\tril\!\left(
+      \widetilde{\ve{Q}}^{\tr}\ve{U}+\ve{H}_W
+      \right),
+  \label{eq:assembled-h}\\
+  \ve{C}_b
+    &=\ve{\Phi}_b\ve{U}+\ve{C}_W.
+  \label{eq:assembled-c}
+\end{align}
+
+The factor and all right-hand sides can be expressed as one combined solve,
+\begin{equation}
+  [\ve{Y}_H\mid\ve{Y}_C\mid\ve{Z}]
+  =\ve{J}^{-1}
+   [\ve{H}^{\tr}\mid\ve{C}_b^{\tr}\mid\ve{\Delta}],
+  \qquad
+  \ve{A}_{\mathrm{out}}=\tril(\ve{Y}_H^{\tr}),
+  \qquad
+  \ve{B}_b=\ve{Y}_C^{\tr}.
+  \label{eq:combined-solve}
+\end{equation}
+Its right-hand-side width is $b+d+d_v$.  At $b=32$ and $d=d_v=128$, the solve is
+$32\times288$.  The delayed-noise exact-static path solved only $d+d_v=256$ right-hand sides;
+its solver timing is therefore not a matched proxy for the dynamic algorithm.
+
+The reference implementation may materialize $\ve{u}_{i,j}$ for clarity.  A measured kernel must
+not store a $b\times b\times d$ tensor in global memory.  It should propagate a tiled set of live
+source vectors, accumulate the two $b\times b$ lower triangles, and retain only the $d\times b$
+terminal columns.
+
+Crucially, $\ve{\Sigma}_W$, $\ve{H}_W$, and $\ve{C}_W$ depend only on
+$(\ve{D},\ve{\Omega},\ve{k},\ve{q})$, not on the recurrent dense
+$(\ve{S},\ve{P})$ boundary.  One implementation arm may therefore construct the dynamic
+corrections for all sequence panels in parallel before the dependent dense-boundary loop.  The
+alternative is to fuse their construction into each resident panel.  The first arm spends global
+traffic on packed triangles and terminal columns; the second spends registers and recomputation.
+Both implement the same equations and must be compared as complete dependent recurrences.
+A candidate GPU mapping assigns one warp or cooperative tile to each source $j$, retains one live
+$d$-vector, advances it over $i=j{:}b$, emits packed lower-triangular entries of
+$\ve{\Sigma}_W$ and $\ve{H}_W$, and writes $\ve{C}_{W,:,j}$ only at $i=b$.  Radius/angle
+parameterization is converted to $\rho\cos\theta$ and $\rho\sin\theta$ before this inner source
+loop; it may not execute a transcendental operation for every $(i,j,m)$ triple.
+
+For the production training shape $B=4,H=16,T=4096,b=32,d=128$ and $64$ mode variances, a fully
+materialized FP32 prepass stores, per panel--head, two packed $528$-entry triangles, one
+$128\times32$ terminal matrix, and $64$ variance scalars.  This is $20{,}864$ bytes per
+panel--head and exactly $163$ MiB over $8{,}192$ panel--heads.  This is only the dynamic-prepass
+payload, not the total layer workspace.  It is transient and preallocated; backward recomputes it
+rather than checkpointing another copy.  The dependent state/factor arenas and backward
+checkpoint/replay storage require a new complete liveness witness.  The existing
+$248.03125$ MiB core witness belongs to the rejected static schedule and cannot be reused as the
+new total.  End-to-end timing includes both the prepass writes and the dependent consumer reads.
+This schedule targets training and prefill.  Token-at-a-time decode remains the $b=1$ recurrence
+unless a real token block is available.
+
+\subsection{Cost}
+
+For one panel, excluding value-width products, the leading work is
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Region & Arithmetic \\
+\midrule
+transition prefixes and mode variances & $O(bd)$ \\
+dense $\ve{P}^-\widetilde{\ve{K}}$ and boundary downdate & $O(bd^2)$ \\
+static and dynamic Gram/read systems & $O(b^2d)$ \\
+factorization and address-side triangular solves & $O(b^3+b^2d)$ \\
+value solve, outputs, and mean commit & $O(b^2d_v+b d d_v)$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The forward live workspace is $O(d^2+d d_v+bd+b^2+bd_v)$ per batch--head item; this excludes
+batch--head replication and backward checkpoints.  The dynamic correction is lower-order
+than the dense covariance products when $b<d$; in the intended first regime,
+$b\leq32<128=d$.  This is an arithmetic observation, not a speed result: synchronization, factor
+latency, register pressure, occupancy, and the number of dependent panels must be measured on H200.
+
+\section{Exactness and causality}
+
+\paragraph{Proposition 1 (panel equivalence).}
+Under equations~\eqref{eq:process}--\eqref{eq:observation}, exact arithmetic evaluation of
+equations~\eqref{eq:first-prediction}--\eqref{eq:boundary-covariance} gives the same outputs,
+terminal posterior mean, and terminal posterior covariance as the tokenwise recursion
+\eqref{eq:token-predict}--\eqref{eq:token-read}, for every panel width and every positive
+observation-noise variance.
+
+\paragraph{Reason.}
+The panel equations construct the joint Gaussian distribution of the panel states and
+observations.  Conditioning this joint distribution on the first $i$ observations gives the same
+conditional distribution as applying $i$ scalar Gaussian conditioning steps.  The leading block
+of a lower Cholesky factor is the Cholesky factor of the corresponding leading principal block,
+so equation~\eqref{eq:causal-outputs} selects exactly those prefix conditionals.  The terminal
+Schur complement gives equations~\eqref{eq:boundary-mean} and
+\eqref{eq:boundary-covariance}.  A complete algebraic proof appears in Appendix~\ref{app:proof}.
+
+\paragraph{Proposition 2 (causality).}
+Changing any future $\ve{k}_t,\ve{v}_t,\ve{q}_t,\ve{D}_t,\ve{\Omega}_t$, or $r_t$ with $t>i$
+cannot change output $\ve{o}_i$.
+
+\paragraph{Reason.}
+The first $i$ rows and columns of $\ve{G}$ and $\ve{J}$ use only tokens $1{:}i$; the first $i$
+entries of $\ve{Z}$ solve the corresponding leading triangular system.  Row $i$ of
+$\tril(\ve{H}\ve{J}^{-\tr})$ has support only on columns $1{:}i$.  The full-panel boundary becomes
+visible only to the next panel.
+
+\section{Where approximation is allowed}
+
+No statistical approximation is required by panelization itself.  If the exact structured
+builder misses the end-to-end speed target, approximation is confined to the within-panel
+process-noise kernel.
+
+Let $\mathcal A$ be a fixed union of complete rotational modes and decompose
+\begin{equation}
+  \ve{Q}_{ij}^{W}
+  =\ve{Q}_{ij}^{W,\mathcal A}
+   +\ve{Q}_{ij}^{W,\overline{\mathcal A}}.
+\end{equation}
+Use $\ve{Q}^{W,\mathcal A}$ consistently in all three inferential objects:
+\begin{equation}
+  \ve{\Sigma}_W,
+  \qquad
+  \ve{H}_W,
+  \qquad
+  \ve{C}_W,
+  \label{eq:matched-approximation}
+\end{equation}
+while retaining the full $\ve{Q}_b$ in the unconditional terminal covariance.  This defines a
+coherent surrogate: active-mode noise occurs at its original token and is inferred, whereas
+inactive-mode noise is injected independently at the boundary.  The family is nested:
+\begin{equation}
+  d_{\mathrm{active}}=0
+  \quad\Longleftrightarrow\quad
+  \text{delayed-noise exact-static ablation},
+\end{equation}
+\begin{equation}
+  d_{\mathrm{active}}=d
+  \quad\Longleftrightarrow\quad
+  \text{exact dynamic conditioning}.
+\end{equation}
+
+The active set must be fixed before timing and training; selecting it using future panel values
+would be noncausal.  A temporal approximation is also possible, but an arbitrary banding of a
+covariance matrix need not remain positive semidefinite.  It must therefore be derived from an
+explicit truncated-noise generative model rather than imposed entrywise.
+
+The following shortcuts are not allowed:
+\begin{enumerate}[leftmargin=1.8em,itemsep=2pt]
+  \item adding only $\diag(\ve{\Sigma}_W)$ without matching state--observation terms;
+  \item adding $\ve{C}_W$ without the corresponding innovation covariance;
+  \item correcting terminal conditioning while leaving causal reads under a different model;
+  \item moving all dynamics to the panel boundary; or
+  \item claiming that the delayed-noise covariance is calibrated to the tokenwise process.
 \end{enumerate}
 
-The exact \(C=32\) work showed that one launch per chunk and materialized intermediate systems are
-not viable. The intended final schedule is therefore one persistent launch per sequence region,
-with one or two cooperative CTAs per batch--head item. The existing two-CTA evidence informs tile
-ownership and synchronization, but the new kernel contains no factor/inverse or \(288\)-RHS path.
-Grouped library GEMMs are allowed only in the Stage-5 multi-launch roofline decomposition. They
-cannot be called from a persistent device kernel. Stage 6 must use in-kernel MMA/CuTe/Triton dot
-operations; the materialized graph remains a feasibility artifact and cannot qualify as the
-production path. Ordinary Triton is initially a one-CTA option. A cooperative two-CTA design must
-use the demonstrated SM90 cluster/DSM mechanism in raw CUDA/CuTe unless equivalent cluster
-synchronization is independently proven for the chosen Triton path.
+\section{Why the delayed-noise ablation fails}
 
-At \(d=m=128\), FP32 \(\ve{P}+\ve{S}\) already require \(128\) KiB per head before
-\(\ve{K},\ve{Q},\ve{V},\ve{U},\ve{L},\ve{E}\), and small matrices. Before implementing the
-complete persistent body, freeze row/tile ownership and compile a representative spine. Report
-registers, static and dynamic shared memory, stack/local/spill/global scratch, active clusters for
-batch--head \(64\), and a synchronization/state-publication-only \(T=4096\) control. Compare one
-CTA and two CTAs in the same run; the prepared exact solver does not establish occupancy for this
-larger state. The representative spine advances only with zero stack/local/spill/global scratch
-and capacity for at least \(64\) active programs or clusters at batch--head \(64\). Stage 5 must
-also assign a numeric median/minimum budget to the synchronization/state-publication control from
-the complete-layer latency budget.
+The exact-static ablation makes the replacement
+\begin{equation}
+  \ve{\Sigma}_W\leftarrow\ve{0},
+  \qquad
+  \ve{H}_W\leftarrow\ve{0},
+  \qquad
+  \ve{C}_W\leftarrow\ve{0},
+  \label{eq:delayed-noise}
+\end{equation}
+but still adds $\ve{Q}_b$ at publication.  It preserves the open-loop amount of terminal process
+uncertainty, yet discards the fact that observations reveal part of that uncertainty.  No later
+boundary addition can reconstruct the missing conditional mean.
 
-\subsection{Numerical policy}
+The sealed FP64 decision used widths $1,2,4,8,16,32$, twenty held-out seeds, nine regimes, and
+$T=256$.  The key failures were
+\begin{center}
+\begin{tabular}{crrr}
+\toprule
+Regime and width & output median & output p95 & final-mean median \\
+\midrule
+near-zero transition, $b=2$ & $0.6972$ & $0.7356$ & $1.0000$ \\
+aggressive decay, $b=2$ & $0.0069$ & $0.0090$ & $0.3707$ \\
+near-zero transition, $b=8$ & $0.9378$ & $0.9502$ & $1.0000$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+For the near-zero case at $b=2$, the sealed per-position output medians were $0.00057$ at position
+one and $0.999996$ at position two---exactly where equation~\eqref{eq:delayed-noise} removes the
+newly injected state from conditioning.  Independent token-loop and panel implementations agree on
+the surrogate, and deterministic panels with $\ve{\Omega}_{2:b}=0$ recover tokenwise ExactKLA.
+These controls localize the discrepancy to the intended approximation.
+This historical decision is bound to manifest
+\texttt{f21efd8a7725...5923215}, source seal
+\texttt{603ae064682a...84a87b}, result body
+\texttt{bd255dbaa235...84f111}, and repository commit
+\texttt{923695601543711c3a7afbcde256ea2435b6dd9d}.  The sealed source bytes still match, but the
+repository HEAD has since advanced; the current verifier therefore rejects the environment binding
+unless run from the sealed checkout.  The table reports that historical verified decision rather
+than claiming a fresh result at the current HEAD.
 
-Store and accumulate \(\ve{P}\), \(\ve{G}\), gain denominators, the WY transform, and the Joseph
-update in FP32 initially. IEEE FP32, TF32, TF32x3/B3, and BF16-input GEMMs are separate measured
-arms; no operation is called tensor-core-safe before a full boundary/output/gradient gate promotes
-its instruction precision. These are numerical implementation arms, not a license to change the
-layer's dtype contract or rescue a slow design by lowering precision; the performance levers are
-tiling, fusion, launch structure, and recomputation. Tests must be invariant to the ambient
-PyTorch matmul policy, and every precision arm must report full-\(T\) boundary, output, gradient,
-and same-run latency results.
-Symmetrize the stored boundary covariance as
-\(\tfrac12(\ve{P}+\ve{P}^{\tr})\) to remove antisymmetric roundoff. Do not silently add jitter,
-clip eigenvalues, or project to the positive semidefinite cone. If stress tests require such a
-modification, record it as a model/numerical change and evaluate it explicitly.
+\section{Implementation and evidence plan}
 
-The expanded Joseph expression can suffer cancellation even though the mathematical result is
-positive semidefinite. Compare it with direct Joseph evaluation in FP64 and with a square-root
-reference. Before custom kernels, freeze the full-\(T\) IEEE-FP32 tensorized implementation against
-the FP64 Chunk-KLA reference; this is the named FP32 numerical baseline. The production path
-advances only if symmetry error and minimum-eigenvalue drift are no worse than that baseline over
-full training-length sequences.
+All development occurs under a new sandbox.  Existing production mixers and the sealed
+delayed-noise evidence are read-only.
 
-\subsection{Backward and checkpointing}
+\subsection{Stage 1: independent FP64 references}
 
-Automatic differentiation through the tensorized PyTorch model is the first gradient oracle. A
-custom backward recomputes
-\(\ve{U},\ve{G},\ve{L},\overline{\ve{A}},\ve{E},\ve{L}_{\mathrm{eff}}\), output tiles, and
-Joseph terms inside each chunk. Storing every dense \((\ve{S},\ve{P})\) boundary is too expensive:
-at \(B=4,H=16,T=4096,C=32,d=m=128\), it is approximately \(1\) GiB per layer before other
-activations. Use two-level checkpointing:
-\begin{enumerate}
-  \item store one boundary pair every \(J\) chunks;
-  \item during backward, replay the \(J\)-chunk superchunk once and retain only its local
-        boundaries;
-  \item reverse those local chunks, release them, and move to the preceding superchunk.
+Implement three paths:
+\begin{enumerate}[leftmargin=1.8em,itemsep=2pt]
+  \item the dense tokenwise recursion in equations~\eqref{eq:token-predict}--\eqref{eq:token-read};
+  \item a source-loading joint-Gaussian oracle that does not use filtering or the panel
+        identities; and
+  \item the structured panel equations, first with explicit $\ve{u}_{i,j}$ and then with the
+        intended streaming builder.
 \end{enumerate}
-Sweep \(J\in\{4,8,16\}\) and report the memory--recompute curve in a full 16-layer
-forward--backward run, including peak allocated, reserved, and external memory. No per-token dense
-covariance is ever stored.
-
-\section{Replacement Implementation Plan}
-
-\subsection{Stage 0: Freeze the decision and baselines}
-
-Create \texttt{sanboxes/kernels/chunk\_kla\_dense\_boundary\_v0/}. Production
-\texttt{lit\_gpt/} files remain unchanged through the correctness, quality, and speed screens.
-Pin the following same-process baselines at
-\(B=4,T=4096,D=2048,H=16,d=m=128\):
-\begin{enumerate}
-  \item KDA and production DiagKLA;
-  \item the runnable exact direct-conditioning layer;
-  \item the best available \(C=32\) exact component, labeled explicitly as a component rather than
-        a layer.
-\end{enumerate}
-The fused recurrent ExactKLA backend is \(d=64\)-only, so use it at reduced shapes for correctness
-and approximation curves, not as a production \(d=128\) timing baseline. Record forward,
-forward--backward, peak memory, launch count, and allocator traffic. Use a source-pinned,
-same-process balanced A/B schedule (prefer the existing eight-position Latin cycle) with the same
-stream, warmup, and input tensors. Report both
-\(\operatorname{median}(\mathrm{Chunk})/\operatorname{median}(\mathrm{KDA})\) and
-\(\min(\mathrm{Chunk})/\min(\mathrm{KDA})\).
-
-\subsection{Stage 1: Independent FP64 references}
-
-Implement two independent references:
-\begin{enumerate}
-  \item a token-loop reference that forms each frozen-prior gain, residual, causal prefix output,
-        mean commit, and chunk transition directly. It propagates the estimator-error covariance
-        independently at each token as
-        \[
-          \ve{P}^{\mathrm{err}}_t
-          =
-          (\ve{I}-\ve{\ell}_t\ve{k}_t^{\tr})
-          \ve{P}^{\mathrm{err}}_{t-1}
-          (\ve{I}-\ve{\ell}_t\ve{k}_t^{\tr})^{\tr}
-          +r_t\ve{\ell}_t\ve{\ell}_t^{\tr},
-        \]
-        while keeping the raw \(\ve{\ell}_t\) frozen from the chunk-entry \(\ve{P}_c^-\);
-  \item a tensorized FP64 reference that explicitly forms the unit-lower WY inverse and implements
-        equations~\eqref{eq:u-g}--\eqref{eq:chunk-dynamics}.
-\end{enumerate}
-The tokenwise error-covariance endpoint must match the effective-gain Joseph expression. The two
-references must otherwise agree, but neither is required to equal tokenwise ExactKLA for
-\(C>1\). Compare to ExactKLA only as a measured approximation gap. The \(C=1\), no-dynamics case
-must match one scalar ExactKLA measurement update to FP64 tolerance.
-
-\subsection{Stage 2: Semantic and numerical gates}
-
-Before any custom kernel, test:
-\begin{enumerate}
-  \item random dense positive-definite and highly anisotropic boundary covariances;
-  \item \(C\in\{1,2,4,16,32,64\}\), partial tails, and multiple batch--head layouts;
-  \item tiny and large \(r\), repeated and nearly collinear keys, zero keys, and large residuals;
-  \item decay gates near zero and one and small/large process noise;
-  \item equality of direct and expanded Joseph forms, covariance symmetry, and PSD behavior;
-  \item a Monte Carlo check that empirical estimation error matches the Joseph covariance for the
-        stated static chunk model;
-  \item an op-level causality mutation test: changing any
-        \((\ve{k}_t,\ve{v}_t,\ve{q}_t,r_t,\ve{\alpha}_t,\ve{\omega}_t)\) with \(t>j\) cannot
-        change output \(j\);
-  \item a slow reference full-layer streaming-versus-full-sequence causality check, including
-        projections and short convolution; this is not the production cache promised in Stage 7;
-  \item chunk-boundary shifts, random offsets, and aligned versus layer-staggered boundaries;
-  \item a binding injected at each within-chunk position and queried in the next chunk for
-        \(\alpha\in\{0.5,0.9,0.99\}\), to expose the boundary-dynamics phase bias;
-  \item undamped Jacobi's repeated-key failure, plus finite/norm-growth checks for frozen-gain
-        sequential residuals and the \(\eta_C=1/C_c\) Jacobi ablation through \(T=4096\);
-  \item exact agreement with equation~\eqref{eq:repeated-key-oracle} across \(p,r,C\).
-\end{enumerate}
-The future-key mutation may change the covariance committed for the next chunk; it must not change
-an earlier output in the current chunk.
-
-\subsection{Stage 3: Gradient gates}
-
-Run FP64 \texttt{gradcheck} on small cases and independent direct comparisons on larger cases.
-Check gradients separately with respect to
-\(\ve{q},\ve{k},\ve{v},r,\ve{\alpha},\ve{\omega},\mu,\ve{S}_0\), and a general dense
-\(\ve{P}_0\). Parameterize the latter through a Cholesky factor or symmetric perturbation so
-gradcheck stays inside the SPD contract. Include losses on current outputs, final mean, and final covariance so no boundary
-adjoint is accidentally omitted. Repeat the repeated-key and small-noise stresses because they are
-the hardest cases for the approximate gain and Joseph cancellation.
-
-\subsection{Stage 4: Early quality screen}
-
-Run the tensorized reference, before writing a persistent kernel, on:
-\begin{enumerate}
-  \item MQAR with repeated and colliding keys;
-  \item a short-range task that exposes within-chunk adaptation;
-  \item NIAH or an equivalent long-range retrieval probe;
-  \item a short language-model training smoke test.
-\end{enumerate}
-Compare frozen-gain sequential residuals and damped Jacobi at
-\(C\in\{4,16,32,64\}\) against ExactKLA, DiagKLA, and KDA at matched parameter count. Report fixed
-and randomized offsets and the boundary-position survival probe. Add same-model ablations that
-replace only the carried boundary covariance by
-\(\diag(\ve{P}_c)\) and by
-\(\operatorname{tr}(\ve{P}_c)\ve{I}/d\); keep sequential residuals, dynamics, peripherals, and
-boundaries identical so the value of dense anisotropy can be isolated.
-
-Before running this stage, freeze a manifest of numerical go/no-go thresholds for repeated-key
-state/covariance growth, MQAR and collision accuracy, short-range loss, NIAH accuracy, and a
-fixed-token language-model loss/perplexity gap. Derive thresholds from baseline seed variance;
-qualitative labels are not pass criteria. Select the update semantics and the quality-eligible
-width set before Stage 5; the dependent performance gate makes the final width decision.
-
-\subsection{Stage 5: Tensorized GPU feasibility}
-
-Build a batched PyTorch/CUDA decomposition with no Cholesky, \(LDL^{\tr}\), or exact-innovation
-solve. Reuse or adapt the unit-lower WY transform from \texttt{chunk\_kalman}.
-Profile the complete recurrence and these regions:
-\begin{enumerate}
-  \item dense \(\ve{P}\ve{K}\);
-  \item \(\ve{K}^{\tr}\ve{U}\), normalization, and \(\ve{L}\);
-  \item WY transform, residual, and causal output;
-  \item mean and Joseph boundary commits;
-  \item chunk dynamics and boundary traffic.
-\end{enumerate}
-Benchmark \(C=16,32,64\), beginning with provisional \(C=32\). The timed call must be one literal
-\(T=4096\) recurrence in which chunk \(c+1\) consumes the actual \((\ve{S},\ve{P})\) emitted by
-chunk \(c\). Add poisoned-boundary and transitive-mutation checks; independently prepared systems,
-repeated buffers, and sums of component minima are not recurrence evidence.
-
-After a fresh KDA measurement, freeze numeric budgets for the guards-off dependent core, mandatory
-tail/symmetrization work, layer peripherals, forward--backward, peak memory, and the resource
-control above. Freeze the forward--backward/KDA target and memory ceiling here, before either
-custom kernel is written. A component timing is never promoted to a layer claim. The complete-layer
-target for this approximate model is below \(3\times\) KDA at matched \(d=128\); the old
-\(5\)--\(6\times\) allowance applied to a model that preserved exact inference. A
-\(3\)--\(5\times\) approximate result advances only under a predeclared quality exception, and a
-result at or above \(5\times\) is rejected. This stricter target is the required return for giving
-up exact tokenwise semantics.
-
-Define runtime guards before timing: gain denominators must be positive and finite, and WY,
-boundary-mean, and boundary-covariance intermediates must remain finite. A device failure flag is
-fail-closed and raises an explicit training error before the optimizer step; v0 has no silent
-jitter, clipping, retry, or exact fallback. PSD and symmetry are full-sequence numerical gates,
-not an unpriced per-chunk eigensolve. Final timing includes predicate evaluation, flag
-bookkeeping, the empty failure path, masks, and tails.
-
-The final compiled candidate uses a source-pinned, same-process balanced interleave with
-15 warmups and 40 measured samples. The chosen threshold or quality exception must hold separately
-for both median/median and minimum/minimum ratios, and separately for forward and
-forward--backward.
-
-\subsection{Stage 6: Persistent forward and custom backward}
-
-Implement the persistent forward at the width selected in Stages 4--5. Start with one CTA per batch--head item,
-then test the measured two-CTA ownership pattern for the \(P K\), output, and Joseph tiles. Remove
-global materialization of
-\(\ve{U},\ve{G},\ve{L},\overline{\ve{A}},\ve{E},\ve{L}_{\mathrm{eff}}\), and
-\(\ve{\Delta}\) across kernel boundaries.
-Use current-stream execution and test arbitrary positive batch--head counts, 64-bit offsets,
-redzones, active-range aliases, allocator lifetime, and producer/consumer ordering.
-
-After the forward passes all gates, implement the reverse chunk recurrence with superchunk
-checkpointing. Measure \(J\in\{4,8,16\}\), validate every input gradient independently, and report
-forward--backward latency and peak memory against the Stage-5 frozen targets; forward speed alone
-cannot qualify a training kernel. The final timed layer call includes masks, tails, symmetrization,
-boundary publication, mandatory dispatches, and the complete layer shell.
-
-\subsection{Stage 7: Integration and ablation}
-
-Only after correctness, quality, forward--backward speed, and memory gates pass:
-\begin{enumerate}
-  \item add a new op under \texttt{lit\_gpt/kla\_ops/};
-  \item add a separate layer and \texttt{mixer\_type}, never an
-        \texttt{exact\_kla} mode alias;
-  \item preserve explicit eager/reference and persistent modes;
-  \item run full-layer parity, a multi-step optimizer smoke test, and a short resumed training job;
-  \item ablate \(C\), boundary offset, Joseph versus any approved numerical variant, and chunk-gate
-        parameterization;
-  \item define the streaming cache and measure per-token \(P\ve{k}_t\), boundary-update spikes,
-        reset/tail behavior, and p50/p99 decode latency before claiming decode speed;
-  \item only then evaluate the rank-\(r\) boundary-summary fallback.
+Compare all outputs, every true panel boundary, and the final state for widths
+$1,2,3,4,8,16,32$; angles $0,\pi/2,\pi$, random angles, and time-varying angles; radii
+$0,0.05,0.999$ and random contractions; zero, small, and high process noise; repeated, collinear,
+and zero keys; partial tails; arbitrary dense incoming covariance; and interior resets.  Required
+controls are
+\begin{enumerate}[leftmargin=1.8em,itemsep=1pt]
+  \item $b=1$ equals tokenwise filtering;
+  \item $\nu_{2:b}=0$ equals exact-static conditioning;
+  \item the pair-tied $\theta=0$ case equals the frozen diagonal-transition direct-conditioning
+        reference; and
+  \item independent mutations deleting $\ve{\Sigma}_W$, $\ve{H}_W$, or $\ve{C}_W$ are each
+        detected by a named failing test.
 \end{enumerate}
 
-\section{Paths Explicitly Not in This Plan}
+\subsection{Stage 2: causality and gradients}
 
-The following have already been explored or contradict the new model and must not silently
-reappear:
-\begin{enumerate}
-  \item exact tokenwise dense Riccati recurrence inside each chunk;
-  \item exact prefix conditioning with the dynamic cross-covariance \(G/J/B\) builder;
-  \item batched vendor POTRF/TRSM or a custom Cholesky/\(LDL^{\tr}\) solver;
-  \item the register-resident \(C=32\) factor/inverse and \(288\)-RHS schedule;
-  \item using a full post-chunk memory to produce every current-chunk output, which is noncausal;
-  \item using the exact-posterior covariance downdate with the approximate mean gain;
-  \item claiming ExactKLA equivalence for \(C>1\).
+Mutate every future input independently and prove that earlier outputs are unchanged.  Poison
+future triangular storage and inactive tail lanes.  Run FP64 \texttt{gradcheck} and independent
+vector--Jacobian comparisons for
+\begin{equation}
+  \ve{q},\ \ve{k},\ \ve{v},\ r,\ \rho,\ \theta,\ \nu,
+  \ \ve{S}_0,\ \ve{P}_0,
+\end{equation}
+reporting every input separately.  Losses must touch current outputs, terminal mean, and terminal
+covariance.  Symmetric $\ve{P}_0$ cotangents are part of the contract.
+
+\subsection{Stage 3: FP32 numerical gate}
+
+Use BF16 layer inputs promoted to FP32 state arithmetic.  Begin with IEEE FP32 and TF32 disabled.
+Compare full $T=4096$ dependent sequences and gradients with FP64.  Immediately before Cholesky,
+form $\ve{G}=\tfrac12(\ve{G}_{\mathrm{raw}}+\ve{G}_{\mathrm{raw}}^{\tr})$ from the fully
+assembled static and dynamic terms.  Apart from this Gram symmetrization, symmetrize only complete
+physical covariance matrices; do not silently jitter, clamp, or project eigenvalues.  Any retry
+or fallback is part of the declared algorithm and final timing.  Causal prefix factors use an
+unpivoted chronological Cholesky.  A panel-global jitter, pivot, or precision decision triggered by
+a future row may not revise an earlier output; any causal-output retry must itself be prefix-local,
+while a terminal-only retry may affect only the boundary published after the panel.
+For a tensor with $n$ entries, require
+\begin{equation}
+  \|x-x_{\mathrm{ref}}\|_F
+  \leq \mathrm{atol}\sqrt n+\mathrm{rtol}\|x_{\mathrm{ref}}\|_F.
+\end{equation}
+The proposed limits, to be sealed in a new manifest before any candidate results are inspected,
+are $(2\times10^{-5},5\times10^{-4})$ for random outputs/means,
+$(5\times10^{-5},10^{-3})$ for random covariances,
+$(2\times10^{-4},5\times10^{-3})$ for stress outputs/means,
+$(5\times10^{-4},10^{-2})$ for stress covariances, and
+$(10^{-4},10^{-2})$ for each VJP.  Every boundary must satisfy
+$\lambda_{\min}(\ve{P})\geq-10^{-5}\max(1,\lambda_{\max}(\ve{P}))$, with normalized
+pre-symmetrization antisymmetric residual at most $10^{-4}$.  Any nonfinite value or Cholesky
+failure rejects the arm.
+
+\subsection{Stage 4: H200 feasibility attribution}
+
+At production geometry $B=4,T=4096,D=2048,H=16,d=d_v=128$, compare five named arms:
+the complete KDA layer; the runnable exact direct-conditioning fallback; the fastest same-source
+delayed-noise solve with $256$ right-hand sides; a schedule-matched delayed-noise control padded to
+$288$ right-hand sides; and structured-exact dynamic conditioning with $288$ right-hand sides.
+The existing G5 work is a scheduling ancestor and a $\theta=0$ semantic/resource control, not a
+headline speed baseline until its own full qualification is complete.  For context only, the old
+runnable generic exact layer measured $77.3749$ ms versus $2.63338$ ms for KDA in a non-final
+screen; its materializing builder/factor/solve/epilogue medians were
+$54.937/7.600/6.980/4.659$ ms, while a prepared two-CTA $32$-row solve alone measured
+$1.3401$ ms.  None of those historical component numbers is new candidate evidence.
+The historical fallback uses the older transition model.  Before it can define a speed ratio, add
+or rerun a correctness-qualified exact fallback on the identical rotational inputs and layer
+peripherals; otherwise report the historical row only as context.
+
+Attribute
+\begin{enumerate}[leftmargin=1.8em,itemsep=2pt]
+  \item transport and mode-variance prefixes;
+  \item dense $\ve{P}^-\widetilde{\ve{K}}$;
+  \item static Gram/read construction;
+  \item the structured dynamic correction;
+  \item factorization and combined triangular solve;
+  \item causal output, mean commit, and dense covariance downdate; and
+  \item the complete dependent panel loop.
 \end{enumerate}
-If the approximation misses its quality target, the response is to reduce \(C\), test the
-specified damped-Jacobi ablation, or evaluate a local path plus rank-\(r\) boundary summary.
-It is not to restore the failed exact chunk implementation under a new name.
+Profile $b\in\{4,8,16,32\}$, mode counts $M\in\{8,16,64\}$,
+$T\in\{128,512,1024,4096\}$, and batch--head counts $1,6,16,64$.  The primary decision point is
+$B=4,H=16,T=4096,b=32,d=d_v=128$.  A component sum is not a performance claim.  The decisive call is
+one literal recurrence in which every panel consumes the actual dense boundary emitted by its
+predecessor.  Report compiler resources, spills, allocator traffic, launch count, peak memory,
+and achieved throughput.  A persistent outer scheduling tile may contain several statistical
+panels, but it may not change equations~\eqref{eq:causal-outputs}--\eqref{eq:boundary-covariance}.
+Compare an all-panels-parallel dynamic prepass with inline construction.  Attribute its packed
+global storage and traffic explicitly; a fast prepass timed without its consumption by the
+boundary recurrence is only a component result.
+The inline arm must report zero unintended stack, local, spill, or global scratch and capacity for
+at least $64$ active programs or clusters at batch--head $64$; the prepass arm targets at least two
+resident CTAs per SM.  Both must account for the raw $(\rho,\theta)$ to rotation-coefficient
+transform.  Phase-dead storage may be aliased only after a liveness audit proves the alias.
+
+\subsection{Stage 5: exact versus controlled approximation}
+
+First benchmark the structured-exact builder.  Only if it misses the frozen complete-layer target
+should the mode-selective family in equation~\eqref{eq:matched-approximation} be evaluated.  Freeze
+the active-mode sets and quality thresholds before reading held-out results.  A nontrivial
+approximation must pass sequence-level output, boundary-mean, true-MSE, and language-model quality
+gates; one-panel covariance agreement is insufficient.  The already rejected
+$d_{\mathrm{active}}=0$ endpoint cannot be reconsidered under a new name.
+
+\subsection{Stage 6: production admission}
+
+Use a source-pinned, allocation-free, same-process interleaved AB/BA benchmark against the real
+incumbent ExactKLA path and the complete KDA layer.  Median and minimum ratios must agree on the
+decision.  Forward and forward--backward are separate gates, and mandatory predicates, tails,
+symmetrization, empty fallback dispatches, and layer peripherals remain inside the timed call.
+Use $15$ AB/BA warm-up pairs followed by $40$ measured pairs over identical preallocated inputs,
+with a KDA sentinel every five pairs; reject more than $5\%$ first-to-last-quartile sentinel drift.
+The following are new proposed admission gates for structured dynamic panels.  They are not
+inherited from the historical ExactKLA contract and must be sealed before timing.  The complete
+forward and forward--backward paths must each be at most $3.0\times$ KDA by both
+median/median and minimum/minimum ratios, at least $4.0\times$ faster than the runnable exact
+fallback, peak at most $2.0\times$ KDA allocated memory and below the fallback, and perform no
+steady-state allocator calls.  ``Allocation-free'' means no calls after setup with the complete
+workspace declared by the new forward/backward liveness witness; this includes, but is not limited
+to, the $163$ MiB prepass payload.  A prepass design may use at most two forward core
+launches (prepass plus dependent core); an inline persistent design may use one.  Backward
+recomputes dynamic corrections and has its own complete timing and memory gate.
+Only after correctness, gradients, numerical behavior, resources, memory, and speed pass may the
+candidate be copied into \texttt{lit\_gpt/}.
+
+\section{Limits}
+
+The derivation does not prove that a fast kernel exists.  It removes a statistical approximation
+by exploiting model structure, but still retains dense $O(Td^2)$ covariance arithmetic and a
+dependent boundary recurrence.  Small-panel Cholesky latency, the $b+d+d_v$ right-hand-side solve,
+limited batch--head parallelism, prepass traffic, rotation-coefficient preparation,
+and backward checkpointing may dominate despite favorable operation counts.  Conversely, the
+old generic dynamic builder timings do not directly reject this formulation because they
+materialized substantially more transition-conditioned data and targeted larger dense solves.
+Only the complete dependent measurement can decide.
+
+The block-isotropic restriction applies to process noise, not to the posterior covariance.  A
+general dense $\ve{\Omega}_t$ destroys the scalar mode recurrence in
+equation~\eqref{eq:tau-recurrence}; it remains mathematically compatible with the panel equations
+but not with the claimed structured-builder cost.  Likewise, state-dependent transitions that
+are unknown before the scan fall outside this formulation.
 
 \appendix
 
-\section{Derivation of the Boundary Covariance}
+\section{Proof of panel equivalence}
+\label{app:proof}
 
-For one value coordinate, suppress the chunk subscript and treat the keys, gates, and noise
-parameters as fixed design quantities. The expectation below averages over the modeled prior
-observation histories and current noise, not merely the current noise conditional on a realized
-approximate entry state. Write the boundary estimation error as
+For one value coordinate, stack the observations
+$\ve{y}=[v_1,\ldots,v_b]^{\tr}$.  Equations~\eqref{eq:state-decomposition} and
+\eqref{eq:observation} give
 \begin{equation}
-  \ve{e}^-=\ve{s}^\star-\ve{s}^-,
-  \qquad
-  \E[\ve{e}^-]=\ve{0},
-  \qquad
-  \E[\ve{e}^-(\ve{e}^-)^{\tr}]=\ve{P}^- .
+  v_i
+  =\widetilde{\ve{k}}_i^{\tr}\ve{x}^\star
+   +\ve{k}_i^{\tr}\ve{\xi}_i+e_i.
 \end{equation}
-The residual vector is
-\begin{equation}
-  \ve{\delta}
-  =\ve{v}-\ve{K}^{\tr}\ve{s}^-
-  =\ve{K}^{\tr}\ve{e}^-+\ve{\epsilon},
-  \qquad
-  \E[\ve{\epsilon}\ve{\epsilon}^{\tr}]=\ve{R}.
-\end{equation}
-For an arbitrary chosen block gain \(\ve{L}\), the estimator and its error are
+The conditional mean of $\ve{y}$ before observing the panel is
+$\widetilde{\ve{K}}^{\tr}\ve{X}^-$.  Independence of the entry-state error
+$\ve{x}^\star-\ve{X}^-$, $\ve{w}_{2:b}$, and $\ve{e}_{1:b}$ gives
 \begin{align}
-  \ve{s}^+
-    &=\ve{s}^-+\ve{L}\ve{\delta},
-  \\
-  \ve{e}^+
-    &=(\ve{I}-\ve{L}\ve{K}^{\tr})\ve{e}^-
-      -\ve{L}\ve{\epsilon}.
+  \Cov(v_i,v_j)
+  &=\widetilde{\ve{k}}_i^{\tr}\ve{P}^-
+    \widetilde{\ve{k}}_j
+    +\ve{k}_i^{\tr}\ve{Q}_{ij}^{W}\ve{k}_j
+    +\mathbf{1}_{\{i=j\}}r_i,
 \end{align}
-The prior error and observation noise are independent, so
-\begin{equation}
-  \ve{P}^+
-  =
-  (\ve{I}-\ve{L}\ve{K}^{\tr})
-  \ve{P}^-
-  (\ve{I}-\ve{L}\ve{K}^{\tr})^{\tr}
-  +\ve{L}\ve{R}\ve{L}^{\tr}.
-\end{equation}
-Let \(\ve{U}=\ve{P}^-\ve{K}\) and
-\(\ve{G}=\ve{R}+\ve{K}^{\tr}\ve{U}\). Expanding gives
+for $i\geq j$, with the other triangle obtained by symmetry.  This is
+equation~\eqref{eq:dynamic-gram}.  For $j\leq i$,
 \begin{align}
-  \ve{P}^+
-  &=
-  \ve{P}^-
-  -\ve{L}\ve{K}^{\tr}\ve{P}^-
-  -\ve{P}^-\ve{K}\ve{L}^{\tr}
-  +\ve{L}
-   (\ve{K}^{\tr}\ve{P}^-\ve{K}+\ve{R})
-   \ve{L}^{\tr}
-  \\
-  &=
-  \ve{P}^-
-  -\ve{L}\ve{U}^{\tr}
-  -\ve{U}\ve{L}^{\tr}
-  +\ve{L}\ve{G}\ve{L}^{\tr},
+  \Cov(\ve{s}_i^\star,v_j)
+  &=\Cov(\ve{\Phi}_i\ve{x}^\star+\ve{\xi}_i,
+    \widetilde{\ve{k}}_j^{\tr}\ve{x}^\star
+    +\ve{k}_j^{\tr}\ve{\xi}_j+e_j)\\
+  &=\ve{\Phi}_i\ve{P}^-\widetilde{\ve{k}}_j
+    +\ve{Q}_{ij}^{W}\ve{k}_j,
 \end{align}
-which proves equation~\eqref{eq:joseph-expanded}. The result holds for the proposed diagonal-
-innovation effective gain, the exact block gain, or any other gain. In the proposed model,
-substitute \(\ve{L}=\ve{L}_{\mathrm{eff}}\). The expectation averages over the current prior error
-and observation noise. Conditional on a realized observation, the approximate estimator generally
-has a nonzero error bias relative to the exact posterior mean.
+which is equation~\eqref{eq:state-observation-cross}.
 
-\section{Relation to the Exact Block Posterior}
-
-For the chunk-static Gaussian model, the conditional mean minimizes
+For any jointly Gaussian variables $a$ and $y$,
 \begin{equation}
-  \frac12
-  \operatorname{Tr}\!\left[
-    (\ve{S}-\ve{S}^-)^{\tr}
-    (\ve{P}^-)^{-1}
-    (\ve{S}-\ve{S}^-)
-  \right]
-  +
-  \frac12
-  \left\|
-    \ve{R}^{-1/2}
-    (\ve{V}-\ve{K}^{\tr}\ve{S})
-  \right\|_F^2 .
+  \E[a\mid y]
+  =\E[a]+\Cov(a,y)\Cov(y)^{-1}(y-\E[y]),
+  \label{eq:gaussian-conditional-mean}
 \end{equation}
-Solving the normal equations yields
+and
 \begin{equation}
-  \ve{S}_{\mathrm{block}}^+
-  =
-  \ve{S}^-
-  +
-  \ve{P}^-\ve{K}
-  \left(
-    \ve{R}+\ve{K}^{\tr}\ve{P}^-\ve{K}
-  \right)^{-1}
-  (\ve{V}-\ve{K}^{\tr}\ve{S}^-).
+  \Cov(a\mid y)
+  =\Cov(a)-\Cov(a,y)\Cov(y)^{-1}\Cov(y,a).
+  \label{eq:gaussian-conditional-covariance}
 \end{equation}
-Chunk-KLA first forms independent scalar gains and then applies the causal WY transform:
+Taking $a=\ve{s}_b^\star$, using
+$\ve{G}^{-1}=\ve{J}^{-\tr}\ve{J}^{-1}$, and defining
+$\ve{B}_b=\ve{C}_b\ve{J}^{-\tr}$ yields
+equations~\eqref{eq:boundary-mean}--\eqref{eq:boundary-covariance}.
+
+For output $i$, apply equation~\eqref{eq:gaussian-conditional-mean} to
+$a=\ve{q}_i^{\tr}\ve{s}_i^\star$ and the prefix $\ve{y}_{1:i}$.  The leading principal block
+$\ve{J}_{1:i,1:i}$ factors $\ve{G}_{1:i,1:i}$.  The first $i$ entries of
+$\ve{Z}$ equal $\ve{J}_{1:i,1:i}^{-1}\ve{\Delta}_{1:i}$, and the first $i$ entries of row $i$
+of $\ve{H}\ve{J}^{-\tr}$ equal
+$\ve{H}_{i,1:i}\ve{J}_{1:i,1:i}^{-\tr}$.  Equation~\eqref{eq:causal-outputs} follows.
+
+Sequential Kalman filtering and joint Gaussian conditioning are two factorizations of the same
+conditional distribution.  Applying the argument panel by panel proves equality for a complete
+sequence, including partial final panels.
+
+\section{The exact-static discrepancy}
+
+Let $\ve{L}_X=\ve{P}^-\widetilde{\ve{K}}
+(\ve{R}_v+\widetilde{\ve{K}}^{\tr}\ve{P}^-
+\widetilde{\ve{K}})^{-1}$ be the block gain used by the delayed-noise surrogate, and set
 \begin{equation}
-  \ve{L}_{\mathrm{eff}}
-  =
-  \ve{U}\ve{D}_g^{-1}
-  \left[
-    \ve{I}
-    +\tril\!\left(\ve{K}^{\tr}\ve{U}\ve{D}_g^{-1},-1\right)
-  \right]^{-1}.
+  \ve{L}_b=\ve{\Phi}_b\ve{L}_X,
+  \qquad
+  \ve{A}_b=\ve{\Phi}_b
+  (\ve{I}-\ve{L}_X\widetilde{\ve{K}}^{\tr}).
 \end{equation}
-This generally differs from \(\ve{U}\ve{G}^{-1}\), so the proposed mean is not the minimizer of
-the full block objective. It is the exact result of sequential residual updates with gains frozen
-at the boundary. Even when \(\ve{G}\) is not diagonal, this causal transform can suppress repeated
-identical residuals; it does not reproduce the exact covariance contraction or the exact block
-posterior.
-
-\section{Causality}
-
-Fix an output position \(j\). The boundary variables
-\((\ve{S}_c^-,\ve{P}_c^-)\) depend only on preceding chunks. For every \(t\leq j\),
-\(\ve{\ell}_t\) depends only on \(\ve{P}_c^-\), \(\ve{k}_t\), and \(r_t\), while
-\(\ve{\Delta}_{c,t}\) depends only on \(\ve{S}_c^-\), \(\ve{k}_t\), and \(\ve{v}_t\).
-The leading \(j\times j\) block of the unit-lower
-\(\overline{\ve{A}}_c\) depends only on positions at or before \(j\). Equation~\eqref{eq:causal-output}
-masks all terms \(t>j\). Hence changing a future key, value, query, noise value, or gate cannot
-change \(\ve{o}_j\).
-
-The dense boundary covariance uses the entire chunk through \(\ve{G}_c\), and the aggregated
-dynamics use the entire chunk through its gates. Both become visible only to chunk \(c+1\), after
-all of chunk \(c\) is in the causal past. This is why a dense post-chunk commit is causal even
-though substituting that same post-chunk state into earlier outputs would not be.
+If $\ve{E}^-$ is the actual incoming estimation-error second moment and
+$\ve{P}^-$ is the covariance published by the surrogate, define
+$\ve{\Delta}_P^-=\ve{E}^--\ve{P}^-$.  The true terminal MSE of the surrogate differs from its
+published covariance by
+\begin{equation}
+  \ve{E}_b-\ve{P}_b^{\mathrm{static}}
+  =\ve{A}_b\ve{\Delta}_P^-\ve{A}_b^{\tr}
+   -\ve{L}_b\ve{C}_W^{\tr}
+   -\ve{C}_W\ve{L}_b^{\tr}
+   +\ve{L}_b\ve{\Sigma}_W\ve{L}_b^{\tr}.
+\end{equation}
+The difference need not be positive semidefinite: intermediate process noise both contaminates
+the observations and contains information about the terminal state.  This identity explains why
+adding the correct open-loop $\ve{Q}_b$ cannot calibrate a gain that ignored how the same noise
+entered the observations.
 
 \end{document}

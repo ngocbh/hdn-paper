@@ -640,52 +640,119 @@ increase the number of independent values that a fixed-size memory can store.
 \subsection{Relation to Mamba-3: Equivalent Rotational Coordinates, Different Updates}
 \label{sec:kdn2-mamba3}
 
-KDN-2 and Mamba-3 place phase in apparently different parts of their recurrences. KDN-2
-transports the associative state with incremental rotations, whereas Mamba-3 applies accumulated
-rotary maps to its write and read addresses \citep{lahoti2026mamba3}. The two parameterizations
-are exactly related by a time-dependent orthogonal change of coordinates.
+KDN-2 and Mamba-3 are not equivalent as complete sequence models. The exact statement is narrower:
+KDN-2's incremental rotational state transport and Mamba-3's accumulated rotary addressing are
+two coordinate representations of the same deterministic dynamics. We first make this identity
+explicit for KDN-2, including its covariance state, and then identify the corresponding Mamba-3
+special case.
 
-To make the relation explicit, consider one Mamba-3 SISO head and transpose its recurrent state
-into the address-by-value convention used here. After absorbing address normalization and biases
-into the keys and queries, and omitting only the direct skip and output gate, its memory recurrence
-can be written
+For \eqref{eq:kdn2-rotational-D}, define the radial part and an accumulated orthogonal frame by
 \begin{equation}
 \begin{aligned}
-  \ve{A}_t
+  \ve{\Lambda}_t
   &=
-  \alpha_t\ve{A}_{t-1}
-  +\beta_t\widetilde{\ve{k}}_{t-1}\ve{v}_{t-1}^{\tr}
-  +\gamma_t\widetilde{\ve{k}}_t\ve{v}_t^{\tr},
+  \blockdiag_{a=1}^{M}
+  \left[\rho_{t,a}\ve{I}_{2r_a}\right],
+  \\
+  \mc R_t
+  &=
+  \blockdiag_{a=1}^{M}
+  \left[\Rot(\phi_{t,a})\otimes\ve{I}_{r_a}\right],
+  &
+  \phi_{t,a}&=\phi_{t-1,a}-\theta_{t,a}.
+\end{aligned}
+\label{eq:kdn2-accumulated-frame}
+\end{equation}
+Since the radial factors commute with the rotations,
+\begin{equation}
+  \boxed{
+  \ve{D}_t=\mc R_t^{\tr}\ve{\Lambda}_t\mc R_{t-1}.
+  }
+  \label{eq:kdn2-gauge-factorization}
+\end{equation}
+Transform the Kalman quantities as
+\begin{equation}
+\begin{gathered}
+  \bar{\ve{S}}_t=\mc R_t\ve{S}_t,
+  \qquad
+  \bar{\ve{P}}_t=\mc R_t\ve{P}_t\mc R_t^{\tr},
+  \qquad
+  \bar{\ve{h}}_t=\mc R_t\ve{h}_t,
+  \qquad
+  \bar{\ve{g}}_t=\mc R_t\ve{g}_t,
+  \\
+  \bar{\ve{\Omega}}_t=\mc R_t\ve{\Omega}_t\mc R_t^{\tr},
+  \qquad
+  \bar{\ve{\kappa}}_t=\mc R_t\ve{\kappa}_t.
+\end{gathered}
+\label{eq:kdn2-gauge-variables}
+\end{equation}
+Substitution into \eqref{eq:kdn2-exact-recurrence} gives
+\begin{equation}
+\begin{aligned}
+  \widehat{\bar{\ve{S}}}_t
+  &=\ve{\Lambda}_t\bar{\ve{S}}_{t-1},
+  &
+  \widehat{\bar{\ve{P}}}_t
+  &=\ve{\Lambda}_t\bar{\ve{P}}_{t-1}\ve{\Lambda}_t^{\tr}
+    +\bar{\ve{\Omega}}_t,
+  \\
+  \bar{\ve{\kappa}}_t
+  &=
+  \frac{\widehat{\bar{\ve{P}}}_t\bar{\ve{h}}_t}
+  {r_t+\bar{\ve{h}}_t^{\tr}\widehat{\bar{\ve{P}}}_t\bar{\ve{h}}_t},
+  &
+  \bar{\ve{S}}_t
+  &=
+  \widehat{\bar{\ve{S}}}_t
+  +\bar{\ve{\kappa}}_t
+  \left(
+    \ve{v}_t-\widehat{\bar{\ve{S}}}_t^{\tr}\bar{\ve{h}}_t
+  \right)^{\tr},
+  \\
+  \ve{o}_t&=\bar{\ve{S}}_t^{\tr}\bar{\ve{g}}_t.
+\end{aligned}
+\label{eq:kdn2-gauge-filter}
+\end{equation}
+The Joseph covariance update transforms in the same way. Thus incremental rotation of the state
+is exactly equivalent to radial state transport with accumulated rotary measurement and read
+addresses. This is a change of coordinates, not an approximation; for the block-isotropic noise
+in \eqref{eq:kdn2-process-noise}, \(\bar{\ve{\Omega}}_t=\ve{\Omega}_t\).
+
+Now consider one Mamba-3 SISO head. Transpose its recurrent state into the address-by-value
+convention used here, denote its projected input and output addresses by \(\ve{b}_t\) and
+\(\ve{c}_t\), and omit the direct skip and output gate, which lie outside the recurrent core.
+Using the same symbol \(\mc R_t\) for Mamba-3's accumulated rotary map, its memory recurrence is
+\begin{equation}
+\begin{aligned}
+  \ve{M}_t
+  &=
+  \alpha_t\ve{M}_{t-1}
+  +w_t^-\mc R_{t-1}\ve{b}_{t-1}(\ve{x}^{\mathrm{M3}}_{t-1})^{\tr}
+  +w_t^+\mc R_t\ve{b}_t(\ve{x}^{\mathrm{M3}}_t)^{\tr},
   &
   \ve{o}^{\mathrm{mem}}_t
   &=
-  \ve{A}_t^{\tr}\widetilde{\ve{q}}_t,
-  \\
-  \widetilde{\ve{k}}_t
-  &=\ve{R}_t\ve{k}_t,
-  &
-  \widetilde{\ve{q}}_t
-  &=\ve{R}_t\ve{q}_t,
+  \ve{M}_t^{\tr}\mc R_t\ve{c}_t,
 \end{aligned}
 \label{eq:mamba3-siso-memory}
 \end{equation}
-where $\ve{R}_t$ is the block-orthogonal map formed from accumulated phases. Mamba-3's learned
-exponential--trapezoidal discretization uses
+where Mamba-3's learned exponential--trapezoidal discretization uses
 \begin{equation}
   \alpha_t=\exp(a_t\Delta_t),
   \qquad
-  \beta_t=\alpha_t\Delta_t(1-\eta_t),
+  w_t^-=\alpha_t\Delta_t(1-\eta_t),
   \qquad
-  \gamma_t=\Delta_t\eta_t,
+  w_t^+=\Delta_t\eta_t,
   \qquad a_t<0,\quad 0\leq\eta_t\leq1.
   \label{eq:mamba3-trapezoidal-weights}
 \end{equation}
 
 Define a moving-frame state and the relative rotation
 \begin{equation}
-  \ve{S}^{\mathrm{M3}}_t=\ve{R}_t^{\tr}\ve{A}_t,
+  \ve{S}^{\mathrm{M3}}_t=\mc R_t^{\tr}\ve{M}_t,
   \qquad
-  \ve{U}_t=\ve{R}_t^{\tr}\ve{R}_{t-1}.
+  \mc T_t=\mc R_t^{\tr}\mc R_{t-1}.
   \label{eq:mamba3-moving-frame}
 \end{equation}
 Substituting \eqref{eq:mamba3-moving-frame} into \eqref{eq:mamba3-siso-memory} gives, without
@@ -695,31 +762,34 @@ approximation,
 \begin{aligned}
   \ve{S}^{\mathrm{M3}}_t
   &=
-  \underbrace{\alpha_t\ve{U}_t}_{\ve{D}^{\mathrm{M3}}_t}
+  \underbrace{\alpha_t\mc T_t}_{\ve{D}^{\mathrm{M3}}_t}
   \left[
     \ve{S}^{\mathrm{M3}}_{t-1}
-    +\Delta_t(1-\eta_t)\ve{k}_{t-1}\ve{v}_{t-1}^{\tr}
+    +\Delta_t(1-\eta_t)
+     \ve{b}_{t-1}(\ve{x}^{\mathrm{M3}}_{t-1})^{\tr}
   \right]
-  +\Delta_t\eta_t\ve{k}_t\ve{v}_t^{\tr},
+  +\Delta_t\eta_t\ve{b}_t(\ve{x}^{\mathrm{M3}}_t)^{\tr},
   \\
   \ve{o}^{\mathrm{mem}}_t
   &=
-  (\ve{S}^{\mathrm{M3}}_t)^{\tr}\ve{q}_t.
+  (\ve{S}^{\mathrm{M3}}_t)^{\tr}\ve{c}_t.
 \end{aligned}}
 \label{eq:mamba3-rotational-form}
 \end{equation}
-If the planes of $\ve{R}_t$ have accumulated angles $\phi_{t,a}$, then
+If the planes of $\mc R_t$ have accumulated angles $\phi_{t,a}$, then
 \begin{equation}
-  \ve{U}_t
+  \mc T_t
   =
   \blockdiag_a\!\left[
     \Rot(\phi_{t-1,a}-\phi_{t,a})
   \right].
   \label{eq:mamba3-relative-rotation}
 \end{equation}
-Thus $\ve{D}^{\mathrm{M3}}_t=\alpha_t\ve{U}_t$ is exactly a damped rotational transition of the
-form in \eqref{eq:kdn2-rotational-D}; the sign of the angle only records whether phase is assigned
-to the addresses or the state.
+Thus $\ve{D}^{\mathrm{M3}}_t=\alpha_t\mc T_t$ is exactly a damped rotational transition of the
+form in \eqref{eq:kdn2-rotational-D} with the shared-radius restriction
+$\rho_{t,a}=\alpha_t$ for every mode. The sign of the angle only records whether phase is assigned
+to the addresses or the state. KDN-2's mode-specific radii are more general than this SISO
+Mamba-3 transition.
 
 The same identity appears directly in the open-loop kernel. For
 $\ve{\Phi}^{\mathrm{M3}}_{t:\tau}
@@ -729,14 +799,14 @@ $\ve{\Phi}^{\mathrm{M3}}_{t:\tau}
   \ve{\Phi}^{\mathrm{M3}}_{t:\tau}
   &=
   \left(\prod_{s=\tau+1}^{t}\alpha_s\right)
-  \ve{R}_t^{\tr}\ve{R}_{\tau},
+  \mc R_t^{\tr}\mc R_{\tau},
   \\
-  \ve{k}_{\tau}^{\tr}
-  (\ve{\Phi}^{\mathrm{M3}}_{t:\tau})^{\tr}\ve{q}_t
+  \ve{b}_{\tau}^{\tr}
+  (\ve{\Phi}^{\mathrm{M3}}_{t:\tau})^{\tr}\ve{c}_t
   &=
   \left(\prod_{s=\tau+1}^{t}\alpha_s\right)
-  (\ve{R}_{\tau}\ve{k}_{\tau})^{\tr}
-  (\ve{R}_t\ve{q}_t).
+  (\mc R_{\tau}\ve{b}_{\tau})^{\tr}
+  (\mc R_t\ve{c}_t).
 \end{aligned}
 \label{eq:mamba3-relative-phase-kernel}
 \end{equation}
@@ -763,10 +833,11 @@ KDN-2 mean correction gives
 Mamba-3 instead uses additive trapezoidal outer-product writes; it has no innovation subtraction,
 Riccati covariance, or covariance-shaped gain. Its MIMO variant replaces a SISO write with a
 rank-$R$ sum but remains additive. Mamba-3 also uses a scalar radius per SISO head in this
-recurrence, while KDN-2 permits mode-specific radii and process uncertainty. Hence the models
-share an exactly equivalent rotational geometry, but not an equivalent correction rule. KDN-2's
-distinction is coupling that geometry to uncertainty-shaped residual correction and closed-loop
-associative memory.
+recurrence, while KDN-2 permits mode-specific radii and process uncertainty. Geometrically,
+Mamba-3's input address corresponds to KDN-2's actual write direction $\ve{\kappa}_t$, which is
+not generally its measurement address $\ve{h}_t$. Hence the models share an exactly equivalent
+rotational geometry, but not an equivalent correction rule. KDN-2's distinction is coupling that
+geometry to uncertainty-shaped residual correction and closed-loop associative memory.
 
 \subsection{Hidden Quadratures and Cue-Controlled Recall}
 \label{sec:kdn2-observability}

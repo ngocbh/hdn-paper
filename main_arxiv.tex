@@ -19,7 +19,7 @@
   }%
 }
 
-\author{Ngoc Bui\yale, Rex Ying\yale\\
+\author{Ngoc Bui\yale, Tinglin Huang\yale, Rex Ying\yale\\
 \yale Department of Computer Science, Yale University\\
 \faGithub~\textbf{Source Code:} \href{https://github.com/ngocbh/kalman-delta-networks}{\texttt{https://github.com/ngocbh/kalman-delta-networks}}
 }
@@ -99,7 +99,7 @@ $d_k\times d_k$ covariance per head, and its gain depends on a Riccati recurrenc
 token-local nor directly scan-computable. We make the filter tractable by restricting the
 predictive covariance, transition, and process noise to the diagonal family. Although a
 measurement immediately produces a dense exact posterior, an online mean-field variational
-update returns the best diagonal approximation while preserving the exact posterior mean. In
+update returns the best diagonal approximation while preserving the exact one-step posterior mean. In
 information form, each channel then follows a M\"obius recurrence. M\"obius maps compose by
 $2\times2$ matrix multiplication, so the full uncertainty trajectory can be evaluated by an
 associative prefix scan. We further introduce a protection--write information scale: the
@@ -224,6 +224,21 @@ $\ve{D}_t=\diag(\ve{\alpha}_t)$, giving each key channel its own decay rate
   the evidence accumulated in memory, it cannot distinguish a well-supported association from
   an uncertain one.
 
+\paragraph{Notation.}
+For matrices $\ve{X}=[\ve{x}_1,\ldots,\ve{x}_{d_v}]$ and
+$\ve{M}=[\ve{m}_1,\ldots,\ve{m}_{d_v}]$, we write
+\begin{equation}
+  \ve{X}\sim\N_{\mathrm{col}}(\ve{M},\ve{P})
+  \quad\Longleftrightarrow\quad
+  \ve{x}_j\sim\N(\ve{m}_j,\ve{P})
+  \ \text{independently for }j=1,\ldots,d_v.
+  \label{eq:columnwise-gaussian-notation}
+\end{equation}
+Equivalently,
+$\operatorname{vec}(\ve{X})\sim
+\N(\operatorname{vec}(\ve{M}),\ve{I}_{d_v}\otimes\ve{P})$.
+Thus $\ve{P}$ denotes the key-space covariance shared across value coordinates.
+
 % =============================================================================
 \section{Kalman Associative Memory}
 \label{sec:memory-kalman}
@@ -256,32 +271,44 @@ Let $\ve{S}_t^\star$ be the latent associative map the recurrent state is trying
 transition describes how stored associations persist, decay, or drift before the next
 measurement arrives:
 \begin{equation}
-  \ve{S}_t^\star = \ve{D}_t \ve{S}_{t-1}^\star + \ve{W}_t,\qquad \ve{W}_t\sim\N(0,\ve{\Omega}_t).
+  \ve{S}_t^\star = \ve{D}_t \ve{S}_{t-1}^\star + \ve{W}_t,
+  \qquad
+  \ve{W}_t\sim\N_{\mathrm{col}}(\ve{0},\ve{\Omega}_t).
   \label{eq:mem-update-dynamics}
 \end{equation}
 The operator $\ve{D}_t$ is the process model: it is the formal object corresponding to forgetting
 under information drift, topic drift, and other non-stationarity in the stream. For DeltaNet
 $\ve{D}_t=\ve{I}$; for Gated DeltaNet $\ve{D}_t=\alpha_t \ve{I}$; for KDA
 $\ve{D}_t=\diag(\ve{\alpha}_t)$. The process noise $\ve{W}_t$ represents memory drift not captured
-by deterministic decay, while $\ve{\Omega}_t$ is its covariance. In a language model, this
-corresponds to changes in the latent discourse state that the deterministic retention model
-$\ve{D}_t$ does not predict. For example, a sentence may reveal that an entity previously in
-Paris has moved to Rome; decay can weaken the old location binding but cannot predict the new
-one before observing it.
+by deterministic decay, while $\ve{\Omega}_t$ quantifies uncertainty about that drift. In a
+language model, this accounts for changes in the latent discourse state that cannot be inferred
+from retention alone. If an incoming sentence reveals that an entity has moved from Paris to
+Rome, $\ve{D}_t$ can attenuate the stale Paris binding, but only the observation can establish the
+new Rome binding.
+In the main development, $\ve{W}_t$ denotes the centered unpredictable component of this drift.
+Appendix~\ref{app:nonzero-mean-process-noise} derives the extension in which the process
+disturbance has a known rank-one conditional mean, which acts as a predictable low-rank control.
 
 \paragraph{Observation.}
 The current key reads one direction of the latent map. The observed value is
 \begin{equation}
-  \ve{v}_t = \ve{S}_t^{\star\tr}\ve{k}_t + \ve{e}_t,\qquad \ve{e}_t\sim\N(0,r_t \ve{I}).
+  \ve{v}_t = \ve{S}_t^{\star\tr}\ve{k}_t + \ve{e}_t,
+  \qquad
+  \ve{e}_t\sim\N(0,r_t \ve{I}_{d_v}).
   \label{eq:mem-update-observation}
 \end{equation}
 Thus $\ve{k}_t^{\tr}$ is the observation map and $\ve{v}_t$ is the measurement. The noise term $\ve{e}_t$
 captures the part of the token value that should \emph{not} be treated as a clean memory
 target. In language modeling, $\ve{v}_t$ is a contextual feature produced from a noisy token embedding,
 local syntax, position, layer mixing, and finite model capacity; not all of it is a stable
-fact that can be stored under key $\ve{k}_t$. The covariance $r_t\ve{I}$ sets how reliable this value
+fact that can be stored under key $\ve{k}_t$. The covariance $r_t\ve{I}_{d_v}$ sets how reliable this value
 observation is: small $r_t$ means trust the token and write strongly, while large $r_t$ means
 treat much of $\ve{v}_t$ as context-specific noise.
+We assume
+$\ve{S}_0^\star\sim\N_{\mathrm{col}}(\ve{S}_0,\ve{P}_0)$. Conditional on the known model
+coefficients, the pairs $\{(\ve{W}_t,\ve{e}_t)\}_{t\geq1}$ are independent across time,
+$\ve{W}_t$ and $\ve{e}_t$ are independent at each step, and all noises are independent of
+$\ve{S}_0^\star$.
 
 \paragraph{Online filtering problem.}
 Let $\mathcal{F}_t=\sigma\{(\ve{k}_\tau,\ve{v}_\tau):\tau\leq t\}$ denote the observations
@@ -308,8 +335,11 @@ Equation~\eqref{eq:online-filtering-objective} defines the target posterior mean
 memory. Under the linear--Gaussian assumptions in \eqref{eq:mem-update-dynamics} and
 \eqref{eq:mem-update-observation}, the Kalman filter computes this expectation exactly by first
 predicting the latent memory and then conditioning that prediction on the current token. It carries
-$\ve{S}_t=\E[\ve{S}_t^\star\mid\mathcal{F}_t]$ together with the key-space posterior covariance
-$\ve{P}_t\in\R^{d_k\times d_k}$, shared across value coordinates.
+the filtering law
+$\ve{S}_t^\star\mid\mathcal{F}_t
+\sim\N_{\mathrm{col}}(\ve{S}_t,\ve{P}_t)$, where
+$\ve{S}_t=\E[\ve{S}_t^\star\mid\mathcal{F}_t]$ and
+$\ve{P}_t\in\R^{d_k\times d_k}$ is the common key-space posterior covariance.
 
 Tracking $\ve{P}_t$ is necessary because each token observes the associative map only at one key
 direction $\ve{k}_t$, and the value $\ve{v}_t$ is noisy. After many tokens, some key directions are
@@ -525,21 +555,22 @@ scan.
 We first restrict what the filter tracks. Let
 $\mathcal{D}_{++}^{d_k}=\{\diag(\ve{p}):\ve{p}\in\R_{++}^{d_k}\}$ and require
 \begin{equation}
-  \ve{P}_t\in\mathcal{D}_{++}^{d_k},
+  \ve{P}_t^{\mathrm{VI}}\in\mathcal{D}_{++}^{d_k},
   \qquad
   \ve{D}_t=\diag(\ve{\alpha}_t),
   \qquad
   \ve{\Omega}_t=\diag(\ve{\omega}_t)\in\mathcal{D}_{++}^{d_k}.
   \label{eq:diag-cov-info}
 \end{equation}
-Write $\ve{P}_{t-1}=\diag(\ve{p}_{t-1})$ and
-$\ve{C}_{t-1}=\ve{P}_{t-1}^{-1}=\diag(\ve{c}_{t-1})$. The covariance prediction then stays in
-the diagonal family and costs only $O(d_k)$ memory,
+Write $\ve{P}_{t-1}^{\mathrm{VI}}=\diag(\ve{p}_{t-1}^{\mathrm{VI}})$ and
+$\ve{C}_{t-1}^{\mathrm{VI}}=(\ve{P}_{t-1}^{\mathrm{VI}})^{-1}
+=\diag(\ve{c}_{t-1}^{\mathrm{VI}})$. The covariance prediction then stays in the diagonal
+family and costs only $O(d_k)$ memory,
 \begin{equation}
   \widehat{\ve{P}}_t=\diag(\widehat{\ve{p}}_t),
   \qquad
   \widehat{\ve{p}}_t
-  =\ve{\alpha}_t^2\odot\ve{p}_{t-1}+\ve{\omega}_t.
+  =\ve{\alpha}_t^2\odot\ve{p}_{t-1}^{\mathrm{VI}}+\ve{\omega}_t.
   \label{eq:diag-covariance-prediction}
 \end{equation}
 Conditioned on this diagonal predictive covariance, the Kalman gain is still exact:
@@ -553,14 +584,14 @@ Thus the process model and process noise that predict the memory also determine 
 key channel is written. The difficulty appears after the measurement: even though
 $\widehat{\ve{P}}_t$ is diagonal, the exact posterior is
 \begin{equation}
-  \ve{P}_t
+  \ve{P}_t^\star
   =\widehat{\ve{P}}_t
    -\frac{\widehat{\ve{P}}_t\ve{k}_t\ve{k}_t^{\tr}\widehat{\ve{P}}_t}
     {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}
   \notin\mathcal{D}_{++}^{d_k}.
   \label{eq:diag-exact-info-update}
 \end{equation}
-The rank-one term is generally dense, so exact filtering immediately leaves
+The rank-one term is generally dense, so the exact measurement update immediately leaves
 $\mathcal{D}_{++}^{d_k}$.
 
 \paragraph{Online variational inference.}
@@ -585,9 +616,9 @@ the variational state retained by the filter.
 \begin{proposition}[Online diagonal variational update]
 \label{prop:diag-variational-inference}
 Let $\pi_{t,j}$ denote the exact one-step filtering posterior
-$p(\ve{s}_{t,j}^\star\mid v_{t,j},\mathcal{F}_{t-1})$ under
-\eqref{eq:diag-variational-model}, with conditioning on the known $\ve{k}_t$ and $r_t$
-suppressed. The variational approximation is the solution of
+$p(\ve{s}_{t,j}^\star\mid v_{t,j},\mathcal{F}_{t-1},\ve{k}_t,r_t)$ under
+\eqref{eq:diag-variational-model}, where $\ve{k}_t$ and $r_t$ are treated as known at step $t$.
+The variational approximation is the solution of
 \begin{equation}
   q_{t,j}^{\mathrm{VI}}
   =\argmin_{q\in\mathcal{Q}}
@@ -870,15 +901,16 @@ We study both recurrent-only and hybrid architectures. At each scale, all recurr
 use the same backbone; only the token mixer and the feed-forward width required to match parameter
 count vary. Recurrent-state size is additionally matched at $220$M and $750$M. At $1.3$B/$100$B,
 we evaluate a hybrid architecture that alternates nine recurrent mixer layers with nine
-sliding-window-attention (SWA) layers using a $2$K window. For hybrid GDN-2, KDA, and Isotropic
-KDN, we calibrate the feed-forward widths to match non-embedding parameter count within $0.03\%$.
+sliding-window-attention (SWA) layers using a $2$K window. For hybrid GDN-2, Mamba-3 (SISO), KDA,
+and Isotropic KDN, we calibrate the feed-forward widths to match non-embedding parameter count
+within $0.03\%$.
 
 \paragraph{Baselines.}
 We compare with DeltaNet~\citep{schlag2021linear}, Gated DeltaNet~\citep{yang2024gdn},
 GDN-2~\citep{hatamizadeh2026gdn2}, KDA~\citep{kimiteam2025kimilinear}, and the SISO and MIMO
 variants of Mamba-3~\citep{lahoti2026mamba3}. Our models are the Isotropic and Diagonal Kalman
 Delta Networks developed above. The available baselines differ by scale, as reported in the result
-tables; the hybrid comparison includes GDN-2, KDA, and Isotropic KDN.
+tables; the hybrid comparison includes GDN-2, Mamba-3 (SISO), KDA, and Isotropic KDN.
 
 \paragraph{Implementation details.}
 We use the same training recipe as GDN-2~\citep{hatamizadeh2026gdn2} for all models: AdamW with a
@@ -920,13 +952,16 @@ is large and reproducible at both scales, while the extra structure of the diago
 yet pay for itself over a single scalar on this suite. The $750$M and $1.3$B blocks disagree on
 which KDN leads, which is the expected signature of a difference inside noise rather than a trend.
 
-In the hybrid block, the 32-GPU Isotropic KDN $+$ SWA run improves on GDN-2 $+$ SWA in every
+In the hybrid block, Mamba-3 (SISO) $+$ SWA reaches $59.16$ average accuracy, $1.39$ points above
+GDN-2 $+$ SWA and $0.96$ points above recurrent-only Mamba-3 (SISO); it ranks second on PIQA,
+WinoGrande, and ARC-easy. The 32-GPU Isotropic KDN $+$ SWA run improves on GDN-2 $+$ SWA in every
 reported column, raising average accuracy from $57.77$ to $59.38$. KDA $+$ SWA also improves on
 GDN-2 in every column and has the highest observed average ($59.94$), but its differently sharded
-training stream precludes a controlled architectural ordering. The $0.56$-point observed
-KDA--Isotropic KDN gap is also modest relative to the per-task standard errors. All three hybrid
-averages are $0.34$--$0.97$ points below their recurrent-only counterparts at the same scale and
-token budget, with the KDA comparison subject to the same sharding caveat.
+training stream precludes a controlled architectural ordering. Its $0.56$-point gap over Isotropic
+KDN and $0.78$-point gap over Mamba-3 (SISO) are modest relative to the per-task standard errors.
+The GDN-2, KDA, and Isotropic KDN hybrid averages are $0.34$--$0.97$ points below their
+recurrent-only counterparts at the same scale and token budget, whereas the Mamba-3 (SISO) hybrid
+average is $0.96$ points higher.
 
 \begin{table}[t]
 \centering
@@ -964,8 +999,9 @@ Diagonal KDN    & \textbf{15.02} & 10.60 & 49.91 & 73.88 & 60.29 & 60.14 & 73.32
 \midrule
 \multicolumn{10}{@{}l}{\emph{Hybrid, 1.3B parameters, 100B tokens}}\\
 GDN-2 $+$ SWA         & 16.06 & 11.12 & 49.54 & 71.82 & 58.44 & 57.77 & 71.42 & 37.63 & 57.77 \\
-KDA $+$ SWA           & \underline{15.08} & \textbf{10.81} & \textbf{51.23} & \underline{72.14} & \textbf{60.33} & \textbf{61.64} & \textbf{72.77} & \textbf{41.55} & \textbf{59.94} \\
-Isotropic KDN $+$ SWA & \textbf{14.98} & \underline{10.90} & \underline{50.49} & \textbf{72.85} & \underline{60.31} & \underline{59.12} & \underline{72.64} & \underline{40.87} & \underline{59.38} \\
+Mamba-3 (SISO) $+$ SWA & 15.87 & 11.38 & 50.46 & \underline{72.80} & 59.59 & \underline{59.27} & \underline{72.73} & 40.10 & 59.16 \\
+KDA $+$ SWA           & \underline{15.08} & \textbf{10.81} & \textbf{51.23} & 72.14 & \textbf{60.33} & \textbf{61.64} & \textbf{72.77} & \textbf{41.55} & \textbf{59.94} \\
+Isotropic KDN $+$ SWA & \textbf{14.98} & \underline{10.90} & \underline{50.49} & \textbf{72.85} & \underline{60.31} & 59.12 & 72.64 & \underline{40.87} & \underline{59.38} \\
 \bottomrule
 \end{tabular}
 \caption{Language modeling and zero-shot commonsense reasoning. Perplexity on WikiText and LAMBADA
@@ -995,11 +1031,13 @@ Diagonal KDN's 14-cell average is $70.3$, versus $62.4$ for the Isotropic KDN, $
 $60.0$ for Mamba-3 (MIMO), and $52.5$ each (rounded) for GDN-2 and Mamba-3 (SISO).
 This is consistent with an anisotropic gain protecting stored associations under interference.
 
-At $1.3$B/$100$B the picture is mixed. GDN-2 and the Diagonal KDN tie on aggregate ($71.0$ and
-$70.6$); the Diagonal KDN leads long S-NIAH-2, KDA leads S-NIAH-3, and GDN-2 leads two of three
-multi-key lengths. Mamba-3 (SISO) averages $63.1$, below KDA's $64.3$, with strong short-context
-S-NIAH-1/2 recall but a sharper drop at 8K ($62.6$/$20.6$) and on S-NIAH-3. KDA again degrades
-sharply on the easiest S-NIAH-1 probe. The previously observed
+At $1.3$B/$100$B, GDN-2 and the Diagonal KDN remain strongest in the 14-cell aggregate ($71.0$
+and $70.6$), followed by the Isotropic KDN ($68.7$), KDA ($64.3$), Mamba-3 (SISO) ($63.1$),
+and Mamba-3 (MIMO) ($62.1$). The Diagonal KDN leads S-NIAH-2 at 4K--8K, KDA leads
+S-NIAH-3, and Mamba-3 (MIMO) leads S-NIAH-2 at 1K--2K and MK-NIAH-1 at 1K; GDN-2 leads
+the other two multi-key lengths. MIMO's short-context wins do not translate to length
+extrapolation: it falls to $15.4$ on both 8K single-key tasks, the lowest scores in those columns.
+KDA again degrades sharply on the easiest S-NIAH-1 probe. The previously observed
 short-context collapse of the 1.3B Diagonal KDN disappears under randomized essay windows
 (S-NIAH-2 @ 1K: $21.4\to88.0$; S-NIAH-3 @ 1K: $3.6\to82.4$), showing that it was an interaction
 with the fixed opening essay rather than a short-memory failure. These are single checkpoints and one
@@ -1033,11 +1071,12 @@ Isotropic KDN & \textbf{100.0} & \textbf{100.0} & 98.2 & \underline{89.4} & 96.0
 Diagonal KDN  & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{98.6} & \underline{91.4} & \textbf{71.2} & \textbf{29.0} & \textbf{84.2} & \textbf{71.0} & \textbf{32.2} & 41.0 & \textbf{36.4} & \textbf{29.6} \\
 \midrule
 \multicolumn{15}{@{}l}{\emph{Recurrent-only, 1.3B parameters, 100B tokens}}\\
-GDN-2         & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{99.8} & \textbf{98.6} & 92.4 & 67.4 & \underline{28.0} & \underline{88.0} & 64.4 & 29.4 & \underline{50.6} & \textbf{44.0} & \textbf{31.4} \\
-Mamba-3 (SISO) & \textbf{100.0} & \underline{99.8} & \underline{98.2} & 62.6 & \textbf{98.6} & \underline{93.6} & 62.6 & 20.6 & 69.0 & 50.2 & 16.6 & 46.6 & 38.4 & \underline{27.2} \\
-KDA           & \underline{99.8} & 99.2 & 66.6 & 30.2 & 98.0 & \textbf{95.0} & 62.2 & 23.6 & \textbf{92.6} & \textbf{77.2} & \textbf{43.2} & 47.4 & 38.8 & 26.6 \\
+GDN-2         & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{99.8} & \underline{98.6} & 92.4 & 67.4 & \underline{28.0} & \underline{88.0} & 64.4 & 29.4 & 50.6 & \textbf{44.0} & \textbf{31.4} \\
+Mamba-3 (SISO) & \textbf{100.0} & \underline{99.8} & \underline{98.2} & 62.6 & \underline{98.6} & 93.6 & 62.6 & 20.6 & 69.0 & 50.2 & 16.6 & 46.6 & 38.4 & 27.2 \\
+Mamba-3 (MIMO) & \underline{99.8} & 99.4 & 75.2 & 15.4 & \textbf{99.6} & \textbf{96.0} & 64.8 & 15.4 & 85.8 & 63.6 & 29.8 & \textbf{51.6} & \underline{42.4} & \underline{30.4} \\
+KDA           & \underline{99.8} & 99.2 & 66.6 & 30.2 & 98.0 & \underline{95.0} & 62.2 & 23.6 & \textbf{92.6} & \textbf{77.2} & \textbf{43.2} & 47.4 & 38.8 & 26.6 \\
 Isotropic KDN & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & 94.6 & \underline{98.4} & 91.8 & \underline{68.4} & 24.2 & 86.8 & \underline{67.6} & 34.6 & 41.6 & 29.8 & 23.4 \\
-Diagonal KDN  & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \underline{99.6} & 88.0 & 91.0 & \textbf{77.2} & \textbf{29.4} & 82.4 & 65.0 & \underline{36.0} & \textbf{51.0} & \underline{42.2} & \underline{27.2} \\
+Diagonal KDN  & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \underline{99.6} & 88.0 & 91.0 & \textbf{77.2} & \textbf{29.4} & 82.4 & 65.0 & \underline{36.0} & \underline{51.0} & 42.2 & 27.2 \\
 \midrule
 \multicolumn{15}{@{}l}{\emph{Hybrid, 1.3B parameters, 100B tokens}}\\
 GDN-2 $+$ SWA
@@ -1213,28 +1252,24 @@ The linear--Gaussian state-space model is
   \ve{S}_t^\star
   &= \ve{D}_t\ve{S}_{t-1}^\star+\ve{W}_t,
   &
-  \ve{W}_t&\sim\mathcal{N}(0,\ve{\Omega}_t), \\
+  \ve{W}_t&\sim\N_{\mathrm{col}}(\ve{0},\ve{\Omega}_t), \\
   \ve{v}_t
   &= \ve{S}_t^{\star\tr}\ve{k}_t+\ve{e}_t,
   &
-  \ve{e}_t&\sim\mathcal{N}(0,r_t\ve{I}).
+  \ve{e}_t&\sim\mathcal{N}(0,r_t\ve{I}_{d_v}).
 \end{align}
-Here and throughout the proof, the matrix-Gaussian notation is columnwise: the $d_v$ value
-columns are conditionally independent and share the displayed key-space covariance. The current
-model quantities $\ve{D}_t$, $\ve{\Omega}_t$, $r_t$, and $\ve{k}_t$ are treated as known when the
-gain is selected.
+The current model quantities $\ve{D}_t$, $\ve{\Omega}_t$, $r_t$, and $\ve{k}_t$ are treated as
+known when the gain is selected.
 At the end of step $t-1$, the Kalman filter represents the posterior over the latent
 memory as a Gaussian,
 \begin{equation}
   p(\ve{S}_{t-1}^\star\mid \mc F_{t-1})
   =
-  \mathcal{N}(\ve{S}_{t-1},\ve{P}_{t-1}),
+  \N_{\mathrm{col}}(\ve{S}_{t-1},\ve{P}_{t-1}),
   \label{eq:previous-filtering-posterior}
 \end{equation}
 where $\ve{S}_{t-1}$ is the posterior mean, i.e.\ the point estimate of the memory after
 processing the first $t-1$ key--value pairs, and $\ve{P}_{t-1}$ is its key-space uncertainty.
-For the matrix memory, this covariance is understood per value coordinate, with the same
-key-space covariance shared across value columns.
 
 Before observing token $t$, the filter first predicts the next latent memory by marginalizing
 over the previous posterior:
@@ -1251,7 +1286,7 @@ Because both factors are linear--Gaussian, the predicted distribution is Gaussia
 \begin{equation}
   p(\ve{S}_t^\star\mid \mc F_{t-1})
   =
-  \mathcal{N}(\widehat{\ve{S}}_t,\widehat{\ve{P}}_t).
+  \N_{\mathrm{col}}(\widehat{\ve{S}}_t,\widehat{\ve{P}}_t).
   \label{eq:predicted-prior}
 \end{equation}
 Its mean and covariance are the exact Kalman prediction:
@@ -1459,7 +1494,7 @@ functions of the Gaussian prediction error and measurement noise. Equation
   \label{eq:kam-optimal-zero-conditional-error}
 \end{equation}
 Since $\delta_{t,j}$ and $v_{t,j}$ carry the same information given
-$(\mc F_{t-1},\ve{k}_t)$, and the value columns are conditionally independent,
+$(\mc F_{t-1},\ve{k}_t)$, and the predictive prior and likelihood factorize across memory columns,
 \begin{equation}
   \ve{s}_{t,j}
   :=\widehat{\ve{s}}_{t,j}+\ve{\kappa}_t\delta_{t,j}
@@ -1824,8 +1859,9 @@ while the uncertainty tracker retains its closest isotropic covariance under
 \eqref{eq:iso-trace-projection}.
 
 \paragraph{Posterior-update approximation.}
-Consider value coordinate $j$, and let $\widehat{\ve{s}}_{t,j}$ be column $j$ of the predicted
-memory $\widehat{\ve{S}}_t$. Under the isotropic predictive state, the one-step model is
+By the columnwise factorization, it suffices to consider value coordinate $j$. Let
+$\widehat{\ve{s}}_{t,j}$ be column $j$ of the predicted memory $\widehat{\ve{S}}_t$. Under the
+isotropic predictive state, the one-step model is
 \begin{equation}
   \ve{s}_{t,j}^\star\mid\mathcal{F}_{t-1}
   \sim\mathcal{N}(\widehat{\ve{s}}_{t,j},\widehat b_t\ve{I}),
@@ -1888,8 +1924,8 @@ has the unique solution
 \end{aligned}
   \label{eq:iso-variational-solution}
 \end{equation}
-Thus the variational approximation preserves the exact filtering mean and retains one scalar
-posterior variance. Its precision coincides with the trace projection in
+Thus the variational approximation preserves the exact mean of the one-step posterior and retains
+one scalar posterior variance. Its precision coincides with the trace projection in
 \eqref{eq:iso-information-projection}.
 \end{proposition}
 
@@ -2160,6 +2196,171 @@ $\ve{\kappa}_t$ as the write direction and $\ve{k}_t$ as the erase direction. Al
 factors are computed in parallel; only $\ve{S}^{\mathrm{in}}$ is carried across memory chunks.
 The implementation forms decay ratios from cumulative log-decay differences for numerical
 stability and uses $C_m\in\{32,64\}$, independently of the gain-chunk length.
+
+
+% =============================================================================
+\section{Known Rank-One Process Drift}
+\label{app:nonzero-mean-process-noise}
+
+The state model in \eqref{eq:mem-update-dynamics} uses centered process noise. A useful
+lowest-rank specialization of a nonzero conditional mean is a single predicted key--value write.
+Let $\mc G_t\supseteq\mc F_{t-1}$ denote the information available when the predictive prior is
+formed. We require the current model quantities
+$\ve{D}_t,\ve{\Omega}_t,\ve{k}_t,r_t,\ve{a}_t,$ and $\ve{b}_t$ to be
+$\mc G_t$-measurable, while $\ve{v}_t$ has not yet been incorporated as a measurement. Here
+$\ve{a}_t\in\R^{d_k}$ and $\ve{b}_t\in\R^{d_v}$.
+
+\paragraph{Rank-one conditional mean.}
+Suppose
+\begin{equation}
+  \ve{S}_t^\star
+  =\ve{D}_t\ve{S}_{t-1}^\star+\ve{W}_t,
+  \qquad
+  \ve{W}_t\mid\mc G_t
+  \sim\N_{\mathrm{col}}
+  \!\left(\ve{a}_t\ve{b}_t^{\tr},\ve{\Omega}_t\right).
+  \label{eq:nonzero-mean-process-model}
+\end{equation}
+This assumption concerns only the conditional mean: the realized process disturbance remains a
+random matrix. Defining
+\begin{equation}
+  \widetilde{\ve{W}}_t
+  :=\ve{W}_t-\ve{a}_t\ve{b}_t^{\tr},
+  \qquad
+  \widetilde{\ve{W}}_t\mid\mc G_t
+  \sim\N_{\mathrm{col}}(\ve{0},\ve{\Omega}_t),
+  \label{eq:nonzero-mean-process-centering}
+\end{equation}
+gives
+$\ve{S}_t^\star=\ve{D}_t\ve{S}_{t-1}^\star
++\ve{a}_t\ve{b}_t^{\tr}+\widetilde{\ve{W}}_t$.
+The outer product is therefore a predictable control, while
+$\widetilde{\ve{W}}_t$ is the unpredictable process noise. The vector $\ve{a}_t$ selects a
+key-space direction and $\ve{b}_t$ specifies its value-space displacement. This is the
+lowest nonzero-rank extension that can encode one predicted association, and its mean is
+represented by $d_k+d_v$ token-local numbers rather than a dense $d_kd_v$ matrix. Producing the
+two factors independently may nevertheless require additional learned projections. This
+theoretical extension is not instantiated in the KDNs evaluated in Section~\ref{sec:experiments}.
+
+\paragraph{Prediction and correction.}
+Assume that, conditional on $\mc G_t$, the previous filtering law is columnwise Gaussian with
+mean $\ve{S}_{t-1}$ and key-space covariance $\ve{P}_{t-1}$. Assume also that
+$\widetilde{\ve{W}}_t$ is independent of the previous estimation error and measurement noise.
+The predictive moments are
+\begin{equation}
+  \widehat{\ve{S}}_t
+  =\ve{D}_t\ve{S}_{t-1}+\ve{a}_t\ve{b}_t^{\tr},
+  \qquad
+  \widehat{\ve{P}}_t
+  =\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t.
+  \label{eq:nonzero-mean-prediction}
+\end{equation}
+The $\mc G_t$-measurable mean shifts $\widehat{\ve{S}}_t$ but contributes no conditional
+covariance term. Under the observation model \eqref{eq:mem-update-observation}, the innovation
+expands as
+\begin{equation}
+  \ve{\delta}_t
+  =\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t
+  =\ve{v}_t
+   -\ve{S}_{t-1}^{\tr}\ve{D}_t^{\tr}\ve{k}_t
+   -(\ve{k}_t^{\tr}\ve{a}_t)\ve{b}_t.
+  \label{eq:nonzero-mean-innovation}
+\end{equation}
+The Kalman gain, posterior mean, and posterior covariance are consequently
+\begin{equation}
+\begin{aligned}
+  \ve{\kappa}_t
+  &=\frac{\widehat{\ve{P}}_t\ve{k}_t}
+    {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t},
+  &
+  \ve{S}_t
+  &=\widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr},
+  \\
+  \ve{P}_t
+  &=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t.
+\end{aligned}
+  \label{eq:nonzero-mean-kalman-update}
+\end{equation}
+Thus the mean changes only the predicted memory and its innovation. The diagonal and isotropic
+variational projections, information recurrences, and M\"obius gain scans are unchanged.
+
+\paragraph{Corrected low-rank source.}
+Expanding the posterior mean in \eqref{eq:nonzero-mean-kalman-update} yields
+\begin{equation}
+  \ve{S}_t
+  =\ve{A}_t\ve{S}_{t-1}+\ve{B}_t,
+  \qquad
+  \ve{A}_t
+  =(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\ve{D}_t,
+  \label{eq:nonzero-mean-memory-scan}
+\end{equation}
+where
+\begin{equation}
+\begin{aligned}
+  \ve{a}_t^{\mathrm{eff}}
+  &:=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\ve{a}_t
+    =\ve{a}_t-\ve{\kappa}_t(\ve{k}_t^{\tr}\ve{a}_t), \\
+  \ve{B}_t
+  &:=\ve{a}_t^{\mathrm{eff}}\ve{b}_t^{\tr}
+     +\ve{\kappa}_t\ve{v}_t^{\tr}
+   =[\,\ve{a}_t^{\mathrm{eff}}\ \ \ve{\kappa}_t\,]
+    [\,\ve{b}_t\ \ \ve{v}_t\,]^{\tr}.
+\end{aligned}
+  \label{eq:nonzero-mean-affine-coefficients}
+\end{equation}
+The source therefore has rank at most two: one corrected predictable write and the usual
+observation-driven Kalman write. Its component visible at the current key satisfies
+\begin{equation}
+  \ve{k}_t^{\tr}\ve{a}_t^{\mathrm{eff}}
+  =\left(1-\ve{k}_t^{\tr}\ve{\kappa}_t\right)
+    \ve{k}_t^{\tr}\ve{a}_t
+  =\frac{r_t}{r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}
+    \ve{k}_t^{\tr}\ve{a}_t.
+  \label{eq:nonzero-mean-observed-drift}
+\end{equation}
+Hence, when observation noise is small relative to predictive uncertainty, the correction
+strongly attenuates the predicted write as read along $\ve{k}_t$. Predicted changes in directions
+not exposed by $\ve{k}_t$ pass through the correction. This predict--then--correct behavior is the
+principal modeling motivation for placing the rank-one term in the process mean rather than
+simply adding it after the Kalman update.
+
+Algebraically, \eqref{eq:nonzero-mean-memory-scan} remains an associative affine recurrence. The
+rank-one drift preserves fixed recurrent-state size and adds one outer-product source rather than
+a dense source. It is not computationally free, however: the compact-WY memory scan in
+Appendix~\ref{sec:chunkwise-memory} assumes only the source
+$\ve{\kappa}_t\ve{v}_t^{\tr}$. Supporting an independent
+$\ve{a}_t^{\mathrm{eff}}\ve{b}_t^{\tr}$ requires a generalized two-source kernel or two virtual
+writes per token. The uncertainty scan itself is unchanged.
+
+\paragraph{Algebraic redundancy and causality.}
+The two-source term in \eqref{eq:nonzero-mean-affine-coefficients} has rank two only when both its
+left factors and its right factors span two dimensions. For example, if
+$\ve{b}_t=\ve{v}_t$, then
+\begin{equation}
+  \ve{B}_t
+  =\left[\ve{a}_t
+    +\ve{\kappa}_t(1-\ve{k}_t^{\tr}\ve{a}_t)\right]\ve{v}_t^{\tr},
+  \label{eq:nonzero-mean-redundant-source}
+\end{equation}
+which is one rank-one write with an effective direction. The rank also collapses when
+$\ve{a}_t^{\mathrm{eff}}$ is collinear with $\ve{\kappa}_t$, or more generally when
+$\ve{b}_t$ is collinear with $\ve{v}_t$. Such algebraic collapse does not imply that the effective
+factor adds no function capacity relative to the base KDN; it means only that the update can be
+represented by one outer product. Its interpretation as a process model instead depends on
+whether $\ve{a}_t\ve{b}_t^{\tr}$ contains genuinely pre-measurement predictive information.
+
+The pre-measurement requirement is also essential. If $\ve{a}_t$ or $\ve{b}_t$ depends on the
+realized $\ve{v}_t$ or its residual, the term is observation-conditioned and should not be called
+a process prior. Neural parameterizations may derive both factors from the same causal pre-update
+covariates used by the key and value projections, but not from the realized measurement noise or
+the innovation (measurement residual) $\ve{\delta}_t$. If the factors are uncertain rather than known conditional on
+$\mc G_t$, their prediction error must be included in a suitably generalized process covariance
+or represented by an augmented state; it can be absorbed into $\ve{\Omega}_t$ only when that
+uncertainty retains the $\N_{\mathrm{col}}$ structure. Otherwise the filter is overconfident. A
+genuinely random outer product generally induces cross-column correlations outside this family.
+Finally, only the product is identifiable under
+$(\ve{a}_t,\ve{b}_t)\mapsto(c\ve{a}_t,\ve{b}_t/c)$; the individual factor norms therefore have no
+intrinsic interpretation without an additional normalization.
 
 
 % =============================================================================
