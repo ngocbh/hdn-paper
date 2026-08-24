@@ -1416,6 +1416,301 @@ the whole context and nothing must be overwritten, which is exactly the regime i
 least squares is optimal. For a streaming memory it is the degenerate corner that $\omega_{\min}$
 exists to exclude.
 
+% =============================================================================
+\section{Overwrite, Overconfidence, and Bounded Writes}
+\label{sec:discussion-bounded-overwrite}
+
+The information-scale results expose a distinction that is easy to miss. Increasing the
+protection scale $s$ records more confidence after a write and, by
+Equation~\eqref{eq:discussion-delayed-scale-effect}, lowers the effective gains of later tokens.
+Better accuracy at larger $s$ is therefore consistent with an overwrite-limited memory: stronger
+confidence protects existing associations from subsequent write--erase updates. It is not evidence
+of a better calibrated posterior. The reverse-KL state at $s=1$ is already overconfident relative
+to the exact marginal by Equation~\eqref{eq:discussion-conditional-versus-marginal-variance}, and
+$s>1$ decreases its retained variance further. Statistical overconfidence and excessive overwrite
+are thus different, and often opposing, failure modes. The former suppresses future plasticity;
+the latter changes the current memory too aggressively.
+
+\subsection{A bounded residual can hide an unbounded channel gain}
+
+Let
+\begin{equation}
+  \Delta_t
+  =r_t+\sum_j\widehat p_{t,j}k_{t,j}^2,
+  \qquad
+  \beta_{t,i}^{\mathrm{ch}}
+  =\frac{\widehat p_{t,i}}{\Delta_t},
+  \qquad
+  \kappa_{t,i}=\beta_{t,i}^{\mathrm{ch}}k_{t,i}.
+  \label{eq:discussion-channel-write-strength}
+\end{equation}
+Here $\beta_{t,i}^{\mathrm{ch}}$ is the per-channel write multiplier, not a probability or a
+residual-contraction fraction. For an $\ell_2$-normalized key, its key-energy-weighted average is
+the effective write strength
+\begin{equation}
+  \beta_t^{\mathrm{eff}}
+  =\vct{k}_t^\top\vct{\kappa}_t
+  =\sum_i\beta_{t,i}^{\mathrm{ch}}k_{t,i}^2
+  =\frac{\sum_i\widehat p_{t,i}k_{t,i}^2}{\Delta_t}
+  \in[0,1).
+  \label{eq:discussion-channel-effective-write}
+\end{equation}
+Consequently the residual at the current key contracts safely by
+$1-\beta_t^{\mathrm{eff}}$. This scalar guarantee does not bound any individual
+$\beta_{t,i}^{\mathrm{ch}}$, the gain norm, or the effect at another key.
+
+The failure is structural. Fix $b\in(0,1)$, set $z=b/(1-b)$ and $r_t=1$, and consider
+\begin{equation}
+  \vct{k}_\epsilon
+  =\begin{bmatrix}\epsilon&\sqrt{1-\epsilon^2}\end{bmatrix}^{\!\top},
+  \qquad
+  \widehat{\vct{p}}_\epsilon
+  =\begin{bmatrix}
+      \dfrac{z}{2\epsilon^2}&\dfrac{z}{2(1-\epsilon^2)}
+    \end{bmatrix}^{\!\top}.
+  \label{eq:discussion-unbounded-channel-construction}
+\end{equation}
+For every $\epsilon\in(0,1)$, the key is normalized and
+$\sum_i\widehat p_i k_i^2=z$, so $\beta^{\mathrm{eff}}=b$ is fixed. Nevertheless,
+\begin{equation}
+  \beta_1^{\mathrm{ch}}=\frac{b}{2\epsilon^2}\longrightarrow\infty,
+  \qquad
+  \kappa_1=\frac{b}{2\epsilon}\longrightarrow\infty
+  \qquad(\epsilon\to0).
+  \label{eq:discussion-unbounded-channel-limit}
+\end{equation}
+A small key coordinate can therefore hide arbitrarily large channel uncertainty from the shared
+denominator. With residual
+$\vct{e}_t=\vct{v}_t-\widetilde{\vct{S}}_t^\top\vct{k}_t$, the induced change at a unit read key
+$\vct{q}$ is
+\begin{equation}
+  (\vct{S}_t-\widetilde{\vct{S}}_t)^\top\vct{q}
+  =\vct{e}_t(\vct{\kappa}_t^\top\vct{q}).
+  \label{eq:discussion-cross-key-overwrite}
+\end{equation}
+Thus the same-key residual can remain contractive while an off-key read, or the nonnormal erase
+operator $\vct{I}-\vct{\kappa}_t\vct{k}_t^\top$, is arbitrarily amplified. This is the
+channelwise overwrite failure that $\beta_t^{\mathrm{eff}}$ alone cannot detect.
+
+\subsection{Hello}
+
+A direct trust region clips the channel multipliers before the memory update:
+\begin{equation}
+  \overline\beta_{t,i}^{\mathrm{ch}}
+  =\operatorname{clip}_{[0,B]}\!\left(\beta_{t,i}^{\mathrm{ch}}\right),
+  \qquad
+  \overline\kappa_{t,i}
+  =\overline\beta_{t,i}^{\mathrm{ch}}k_{t,i}.
+  \label{eq:discussion-channel-gain-cap}
+\end{equation}
+The lower bound is automatic under the positive covariance model; it is written explicitly to
+state the admissible gain class. Because the cap only decreases nonnegative coefficients,
+\begin{equation}
+  0\leq\overline\beta_t^{\mathrm{eff}}
+  :=\vct{k}_t^\top\overline{\vct{\kappa}}_t
+  \leq\beta_t^{\mathrm{eff}}<1.
+  \label{eq:discussion-capped-effective-write}
+\end{equation}
+The capped update therefore preserves same-key residual contraction and cannot overshoot that
+residual. More importantly, unit-normalized keys give the new gain-norm bound
+\begin{equation}
+  \|\overline{\vct{\kappa}}_t\|_2^2
+  =\sum_i(\overline\beta_{t,i}^{\mathrm{ch}})^2k_{t,i}^2
+  \leq B\sum_i\overline\beta_{t,i}^{\mathrm{ch}}k_{t,i}^2
+  =B\overline\beta_t^{\mathrm{eff}}<B.
+  \label{eq:discussion-capped-gain-norm}
+\end{equation}
+For the proposed $B=2$, the gain norm is strictly below $\sqrt{2}$. If
+$\overline{\vct{\kappa}}_t
+=\overline\beta_t^{\mathrm{eff}}\vct{k}_t
++\overline{\vct{\kappa}}_{t,\perp}$, then
+\begin{equation}
+  \|\overline{\vct{\kappa}}_{t,\perp}\|_2^2
+  \leq2\overline\beta_t^{\mathrm{eff}}
+       -(\overline\beta_t^{\mathrm{eff}})^2
+  \leq1.
+  \label{eq:discussion-capped-off-key-gain}
+\end{equation}
+Moreover,
+$\|(\vct{I}-\overline{\vct{\kappa}}_t\vct{k}_t^\top)\vct{k}_t\|_2\leq1$
+and
+$\|\vct{I}-\overline{\vct{\kappa}}_t\vct{k}_t^\top\|_2\leq\sqrt{2}$.
+The operator need not be nonexpansive when an off-key component remains, but it is now uniformly
+bounded. The realized correction at any unit read key satisfies
+\begin{equation}
+  \|(\vct{S}_t-\widetilde{\vct{S}}_t)^\top\vct{q}\|_2
+  \leq\sqrt{2}\,\|\vct{e}_t\|_2.
+  \label{eq:discussion-capped-cross-key-write}
+\end{equation}
+The value $B=2$ is also permissive around the isotropic regime: if
+$\widehat p_{t,i}=\widehat p_t$ for every channel, then
+$\beta_{t,i}^{\mathrm{ch}}=\widehat p_t/(r_t+\widehat p_t)<1$, so the cap is inactive. It targets
+only anisotropic amplification beyond the scalar-gain range.
+
+The cap has a constrained estimation interpretation. For any linear gain $\vct{g}$, let
+$\mathcal{R}_t(\vct{g})$ be the trace of its conditional estimation-error covariance. Completing
+the square around the Kalman gain $\vct{\kappa}_t$ gives
+\begin{equation}
+  \mathcal{R}_t(\vct{g})
+  =\mathcal{R}_t(\vct{\kappa}_t)
+   +\Delta_t\|\vct{g}-\vct{\kappa}_t\|_2^2.
+  \label{eq:discussion-capped-gain-risk}
+\end{equation}
+Minimizing this risk over
+$g_i=\gamma_i k_{t,i}$ with $0\leq\gamma_i\leq B$ yields
+$\gamma_i=\operatorname{clip}_{[0,B]}(\beta_{t,i}^{\mathrm{ch}})$, exactly
+Equation~\eqref{eq:discussion-channel-gain-cap}. The cap is therefore the minimum-risk linear
+correction within this bounded channel-aligned class.
+
+This constrained correction is no longer the unconstrained Kalman posterior mean when the cap is
+active. Retaining the original information update also leaves the confidence state unchanged even
+though less of the residual was assimilated, so the mean and covariance no longer describe one
+Gaussian posterior. The cap should therefore be presented as an overwrite guardrail, not as a
+solution to reverse-KL overconfidence. A covariance update consistent with the capped gain would
+use its Joseph error covariance and would generally couple channels, forfeiting the independent
+M\"obius scan. The gain-only cap is token-local after that scan and before the affine memory scan,
+so it preserves the current parallel algorithm. A hard cap has zero gain-path gradient in saturated
+channels; a smooth saturation is an alternative if this impedes training.
+
+\subsection{Available controls and what each one solves}
+
+The principal interventions are as follows.
+\begin{description}
+  \item[Future-protection scale.]
+  Increasing $s_{\mathrm{protect}}$ leaves the current write unchanged locally and suppresses later
+  gains. It directly addresses repeated overwrite, but deliberately increases confidence and can
+  freeze rewriting if taken too far.
+
+  \item[Coherent current-write temperature.]
+  Increasing $r_t$, or equivalently reducing a likelihood-precision multiplier in both the gain
+  and posterior update, weakens current assimilation under a valid Gaussian observation model.
+  Because it also leaves more posterior uncertainty, it need not protect against later writes.
+
+  \item[Effective-write cap.]
+  Rescaling the complete gain by
+  $\min\{1,\beta_{\max}/\beta_t^{\mathrm{eff}}\}$ for
+  $0<\beta_{\max}<1$ directly limits same-key overwrite while preserving the gain direction. It
+  does not control a large off-key component when $\beta_t^{\mathrm{eff}}$ is already below the
+  threshold.
+
+  \item[Channel, radial, or off-key control.]
+  These are three different constraints on the gain geometry. The coordinatewise cap in
+  Equation~\eqref{eq:discussion-channel-gain-cap} bounds every multiplier
+  $\beta_{t,i}^{\mathrm{ch}}$. It gives the strongest per-channel guarantee, but is basis dependent,
+  as is the diagonal covariance itself.
+
+  A basis-invariant alternative projects the entire gain onto an $\ell_2$ ball. Define
+  \begin{equation}
+    m_t=\operatorname{RMS}(\vct{\kappa}_t)
+       =\frac{\|\vct{\kappa}_t\|_2}{\sqrt{d_k}},
+    \qquad
+    a_t^{\mathrm{rad}}
+       =\min\!\left\{1,\frac{\tau_{\mathrm{rms}}}{m_t}\right\},
+    \qquad
+    \vct{\kappa}_t^{\mathrm{rad}}
+       =a_t^{\mathrm{rad}}\vct{\kappa}_t,
+    \label{eq:discussion-radial-rms-cap}
+  \end{equation}
+  with $a_t^{\mathrm{rad}}=1$ when $m_t=0$. This one-sided RMS cap is exactly radial norm clipping
+  with radius $\tau_2=\sqrt{d_k}\tau_{\mathrm{rms}}$. It preserves the gain direction and satisfies
+  \begin{equation}
+    \|\vct{\kappa}_t^{\mathrm{rad}}\|_2\leq\tau_2,
+    \qquad
+    \beta_{t,\mathrm{rad}}^{\mathrm{eff}}
+      =a_t^{\mathrm{rad}}\beta_t^{\mathrm{eff}}
+      \leq\beta_t^{\mathrm{eff}}<1.
+    \label{eq:discussion-radial-rms-guarantees}
+  \end{equation}
+  It therefore bounds every cross-key correction, but also weakens the intended same-key write
+  whenever active. Choosing $\tau_{\mathrm{rms}}=\sqrt{2/d_k}$ matches the
+  $\|\overline{\vct{\kappa}}_t\|_2<\sqrt{2}$ ceiling of the $B=2$ channel cap. A raw RMS threshold
+  of $2$ would instead permit norm $2\sqrt{d_k}$ and is not comparable to a channel cap of $2$.
+
+  To change only the anisotropic component, decompose
+  \begin{equation}
+    \vct{\kappa}_{t,\perp}
+      =\vct{\kappa}_t-\beta_t^{\mathrm{eff}}\vct{k}_t,
+    \qquad
+    a_t^\perp
+      =\min\!\left\{1,
+        \frac{\tau_{\perp,t}}{\|\vct{\kappa}_{t,\perp}\|_2}\right\},
+    \qquad
+    \vct{\kappa}_t^{\mathrm{off}}
+      =\beta_t^{\mathrm{eff}}\vct{k}_t
+       +a_t^\perp\vct{\kappa}_{t,\perp},
+    \label{eq:discussion-off-key-gain-cap}
+  \end{equation}
+  taking $a_t^\perp=1$ when the off-key norm is zero. This preserves
+  $\vct{k}_t^\top\vct{\kappa}_t^{\mathrm{off}}=\beta_t^{\mathrm{eff}}$ exactly, so the current
+  residual contraction is unchanged, while every unit
+  $\vct{q}\perp\vct{k}_t$ obeys
+  $|\vct{q}^\top\vct{\kappa}_t^{\mathrm{off}}|\leq\tau_{\perp,t}$.
+  A fixed $\tau_\perp$ gives a direct cross-talk budget. The adaptive choice
+  \begin{equation}
+    \tau_{\perp,t}
+      =\sqrt{2\beta_t^{\mathrm{eff}}
+             -(\beta_t^{\mathrm{eff}})^2}
+    \label{eq:discussion-off-key-adaptive-radius}
+  \end{equation}
+  yields
+  $\|\vct{\kappa}_t^{\mathrm{off}}\|_2^2
+    \leq2\beta_t^{\mathrm{eff}}$ and
+  $\|(\vct{I}-\vct{\kappa}_t^{\mathrm{off}}\vct{k}_t^\top)\vct{k}_t\|_2\leq1$,
+  matching the useful $B=2$ envelope without changing the scalar write strength. Setting
+  $\tau_{\perp,t}=0$ recovers the key-aligned gain
+  $\beta_t^{\mathrm{eff}}\vct{k}_t$; a learned shrinkage between these extremes is the continuous
+  version of the $\eta\in\{0,1\}$ ablation in
+  Equation~\eqref{eq:discussion-gain-direction-ablation}.
+
+  Full RMS normalization is qualitatively different and is not recommended here. For a nonzero
+  gain, setting
+  \begin{equation}
+    \vct{\kappa}_t^{\mathrm{RMSNorm}}
+      =\frac{\rho}{\operatorname{RMS}(\vct{\kappa}_t)}\vct{\kappa}_t
+    \label{eq:discussion-full-rms-normalization}
+  \end{equation}
+  forces $\|\vct{\kappa}_t^{\mathrm{RMSNorm}}\|_2=\rho\sqrt{d_k}$ and replaces the effective
+  write by
+  $\rho\sqrt{d_k}\,\beta_t^{\mathrm{eff}}/\|\vct{\kappa}_t\|_2$. It rescales small and large
+  gains alike and can amplify a nearly zero gain that the uncertainty state intentionally
+  suppressed. In the isotropic case
+  $\vct{\kappa}_t=\beta_t^{\mathrm{eff}}\vct{k}_t$, every nonzero write becomes
+  $\beta_{t,\mathrm{RMSNorm}}^{\mathrm{eff}}=\rho\sqrt{d_k}$, independent of its original
+  confidence. Hence a conventional unit-RMS normalization can destroy residual contraction. The
+  one-sided cap in Equation~\eqref{eq:discussion-radial-rms-cap} is preferable because it never
+  amplifies a gain. All three clipping operations remain token-local and preserve the two scans
+  when the information recurrence is left unchanged; when active, however, they share the
+  mean--covariance inconsistency noted above.
+
+  \item[Better calibrated uncertainty.]
+  Reducing $s_{\mathrm{protect}}$, inflating the retained covariance, or keeping a positive process
+  noise floor prevents the state from becoming too confident. The process-floor approximation is
+  the tighter scan-compatible projection developed above; the moment projection matches the exact
+  one-step marginal variances but loses the independent M\"obius scan; structured or dense
+  covariance tracking is more faithful still and more expensive. These changes can increase future
+  gains, so better posterior calibration need not reduce overwrite.
+
+  \item[Noise-scale and gauge controls.]
+  Fixing $r=1$ and $\mu=1$, bounding relative observation reliability, and starting process noise
+  isotropically improve identifiability and avoid extreme gain temperatures. Reducing process
+  noise can suppress future writes but risks covariance windup; increasing transition decay is not
+  clean protection because it erases the stored memory directly.
+
+  \item[Residual, update, or erase clipping.]
+  Clipping $\|\vct{e}_t\|_2$ or the realized rank-one update controls large values as well as large
+  gains. Separating the write and erase gates can limit destructive editing directly. Both options
+  depart further from the Kalman residual update, and residual-dependent nonlinearities generally
+  lose the input-only affine memory scan.
+\end{description}
+
+The clean experiment crosses one confidence-state intervention
+($s=1$, $s=d_k$, process-floor, or moment projection) with one current-write intervention
+(uncapped, an effective-write cap, the $B=2$ channel cap, or off-key shrinkage). It should report
+$\beta_t^{\mathrm{eff}}$, $\max_i\beta_{t,i}^{\mathrm{ch}}$,
+$\|\vct{\kappa}_t\|_2$, $\|\vct{\kappa}_{t,\perp}\|_2$, cap activation rate, residual magnitude,
+and write--erase magnitude. This factorial comparison separates posterior calibration from
+overwrite control instead of asking one scalar information scale to solve both.
+
 \section{Conclusion}
 
 The diagonal KDN has a genuine common-scale non-identifiability in
@@ -1434,5 +1729,10 @@ Equation~\eqref{eq:discussion-diagonal-exactness-condition} and is unaffected by
 either way. Fixing $r$ and $\mu$ while keeping a positive, isotropically initialized
 $\vct{\omega}$ is therefore the design that removes the flat direction without removing the
 mechanism.
+
+Finally, reverse-KL overconfidence and anisotropic overwrite require separate controls. The
+proposed $B=2$ channel cap is a scan-compatible guardrail against unbounded current-write geometry;
+it should be evaluated alongside off-key shrinkage and explicit effective-write caps rather than
+interpreted as a more faithful covariance approximation.
 
 \end{document}

@@ -36,19 +36,26 @@
 Linear attention replaces the growing key--value cache of softmax attention with a fixed-size
 recurrent memory, but this compression turns attention into an online memory-editing problem:
 each token must decide not only what to write, but how strongly new evidence should overwrite
-past associations. Delta-rule models learn a write gate from the current token while discarding
-the uncertainty accumulated by the memory. We formulate recurrent associative memory as a
-linear--Gaussian state-space model and introduce Kalman Delta Networks (KDNs), in which the
-transition predicts both the memory and its uncertainty and a Kalman gain weights each residual
-write by accumulated evidence and observation reliability. Exact filtering requires a dense
-covariance and a state-dependent Riccati recursion. We derive a tractable diagonal KDN through
-online mean-field variational inference. Its information-state recurrence is a per-channel
-M\"obius map, enabling an associative scan with linear state size and logarithmic parallel depth;
-an information scale further decouples the protection of past writes from the strength of the
-current write. Across controlled pretraining from 220M to 1.3B parameters, KDN variants
-consistently improve perplexity and average downstream accuracy over GDN-2. At 750M parameters,
-the diagonal KDN attains the best average downstream accuracy and the strongest aggregate
-long-context retrieval, while at 1.3B the isotropic and diagonal variants are closely matched.
+past associations. Delta-rule models address this question by adaptively learning the strength
+of each residual write to balance new and past information. However, without an explicit
+uncertainty state, this strength cannot reflect the confidence accumulated in memory. We formulate
+recurrent associative memory
+as a linear--Gaussian state-space model, for which the Kalman filter is the optimal recursive
+estimator, and introduce a new family of models, Kalman Delta Networks (KDNs). Within KDNs, the
+transition propagates both the memory state and its uncertainty, allowing the Kalman gain to
+weight each residual write by
+accumulated evidence and observation reliability. Under this formulation, Delta-style updates
+emerge as a special case that substitutes a token-wise isotropic surrogate for predictive
+covariance and omits covariance tracking. Exact tracking, however, entails a dense,
+state-dependent Riccati recursion that is poorly suited to GPU-parallel linear-attention scans.
+To address this issue, we derive a diagonal KDN by projecting each one-step posterior onto the
+diagonal Gaussian family through online mean-field variational inference. The resulting
+per-channel information recurrences are M\"obius maps, enabling an associative scan with
+$O(d_k)$ auxiliary state and logarithmic parallel depth. Across controlled pretraining from
+220M to 1.3B parameters, KDN variants consistently improve perplexity and mean downstream
+accuracy over state-of-the-art linear-attention models. At 750M, the diagonal KDN achieves the
+best mean downstream accuracy and the strongest aggregate long-context retrieval among the
+evaluated models.
 \end{abstract}
 
 
@@ -62,67 +69,105 @@ long-context retrieval, while at 1.3B the isotropic and diagonal variants are cl
 \section{Introduction}
 \label{sec:intro}
 
-Self-attention is the central content-addressing mechanism of modern sequence models: every
-query can retrieve the values associated with all preceding keys
-\citep{vaswani2017attention}. This flexibility comes from retaining the token history itself.
-Consequently, the autoregressive key--value cache grows with context length, and computing all
-query--key interactions remains quadratic in the sequence length. Linear attention offers a
-different scaling regime. It compresses the prefix into a fixed-size recurrent state that can
-be updated online and evaluated in parallel by a scan
-\citep{katharopoulos2020transformers}. The computational problem is reduced, but a modeling
-problem takes its place: once the token history is compressed into one state, how should that
-state be edited without corrupting useful associations?
+Linear attention trades storage for judgment. Softmax attention can revisit every preceding key
+and value, but its cache grows with context and its full-sequence cost is
+quadratic~\citep{vaswani2017attention}. Linear attention instead compresses the prefix into a
+fixed-size recurrent matrix for constant-memory decoding and scan-parallel
+training~\citep{katharopoulos2020transformers}. Once history is compressed, every edit is
+consequential: the model must decide not only what is new, but whether stored evidence should
+yield to it.
 
-DeltaNet treats the recurrent state as an associative memory and replaces additive writes with
-error-correcting writes: it reads the value currently stored at a key and writes only the
-residual \citep{schlag2021linear,yang2024parallelizing}. Gated DeltaNet and KDA additionally
-predict how the memory should decay before the next write, using scalar or channel-wise
-transitions to represent multiple retention timescales
-\citep{yang2024gdn,kimiteam2025kimilinear}. Yet these models use a write direction of the form
-$\beta_t\ve{k}_t$. Its strength is predicted from the current token, independently of how much
-evidence the memory has accumulated in different key directions. A well-supported association
-and an uncertain or stale association can therefore receive the same correction.
+Delta-rule mixers make this edit error-correcting. DeltaNet writes only the prediction
+residual~\citep{schlag2021linear,yang2024parallelizing}; Gated DeltaNet and KDA precede it with
+scalar or channel-wise forgetting~\citep{yang2024gdn,kimiteam2025kimilinear}. Their shared
+correction direction $\beta_t\ve{k}_t$ is predicted from the current token. The delta rule thus
+sees the error, but maintains no explicit same-layer confidence state: it carries the memory
+contents forward, not how much evidence supports each key direction. It cannot modulate a write
+according to whether that association is well supported or uncertain.
 
-We argue that uncertainty is the missing state variable. The recurrent memory can be viewed as
-an estimate of a latent, non-stationary key--value map. Each token supplies a noisy observation
-of that map at one key, while the learned transition describes how the map persists or drifts
-between observations. This is precisely an online filtering problem. Under a linear--Gaussian
-model, the Kalman filter predicts both the memory and its covariance, then uses the covariance
-to determine how strongly the new value should correct the prediction. The resulting update is
-still a residual delta write, but its gain is larger in uncertain directions and smaller where
-past evidence should be protected. DeltaNet, Gated DeltaNet, and KDA emerge as fixed-gain
-approximations that retain different memory transitions while omitting this uncertainty
-recursion.
+We instead derive this family from an inference problem. Treat the recurrent matrix as an estimate
+of a latent, time-varying associative map: a transition predicts persistence or drift, and the
+current key--value pair is a noisy linear observation. Under this linear--Gaussian model, the
+MMSE-optimal Kalman correction is
+\begin{equation}
+  \ve{S}_t
+  =\widehat{\ve{S}}_t
+   +\ve{\kappa}_t
+    \bigl(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\bigr)^{\tr},
+  \qquad
+  \ve{\kappa}_t
+  =\frac{\widehat{\ve{P}}_t\ve{k}_t}
+   {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}.
+  \label{eq:intro-kalman-residual}
+\end{equation}
+Here $\widehat{\ve{S}}_t$ is the predicted memory, $\widehat{\ve{P}}_t$ its key-space
+covariance, and $r_t$ the observation noise. The familiar delta recurrence is therefore the
+Kalman mean-update algebra. Replacing the covariance-derived gain by
+$\ve{\kappa}_t=\beta_t\ve{k}_t$, then choosing the transition as $\ve{I}$,
+$\alpha_t\ve{I}$, or $\diag(\ve{\alpha}_t)$, recovers DeltaNet, Gated DeltaNet, or KDA,
+respectively. These are fixed-gain special cases in the filtering sense: $\beta_t$ may vary with
+the token, but is prescribed independently of the covariance accumulated from history.
 
-The exact Kalman update is not a practical linear-attention layer. It carries a dense
-$d_k\times d_k$ covariance per head, and its gain depends on a Riccati recurrence that is neither
-token-local nor directly scan-computable. We make the filter tractable by restricting the
-predictive covariance, transition, and process noise to the diagonal family. Although a
-measurement immediately produces a dense exact posterior, an online mean-field variational
-update returns the best diagonal approximation while preserving the exact one-step posterior mean. In
-information form, each channel then follows a M\"obius recurrence. M\"obius maps compose by
-$2\times2$ matrix multiplication, so the full uncertainty trajectory can be evaluated by an
-associative prefix scan. We further introduce a protection--write information scale: the
-current-token gain is computed before the new information is added, allowing the information
-carried to future tokens to be calibrated without changing the current residual write.
+This equivalence isolates the missing state. The predictive covariance records confidence
+accumulated from past observations and reshaped by the transition and process noise; the gain
+combines that confidence with the current observation noise $r_t$. Delta-style models preserve the
+optimal residual algebra but sever it from this uncertainty recursion. In this sense, they are
+covariance-free specializations of the Kalman mean update.
 
-This construction yields \emph{Kalman Delta Networks} (KDNs): uncertainty-aware recurrent
-mixers that preserve fixed-size autoregressive state and scan-parallel training. We study both
-an isotropic restriction with one uncertainty value per head and a diagonal variant with one
-value per key channel. Our contributions are:
+Why not retain the exact filter? Its dense covariance costs $O(d_k^2)$ state per head, and its
+state-dependent Riccati recursion makes future gains depend on a nonlinear uncertainty
+trajectory. Although parallel Kalman formulations exist, this dense recursion is not directly
+compatible with the low-rank affine scan and $O(d_k)$ auxiliary state targeted by
+linear-attention kernels. The covariance is the bottleneck between the statistical optimum and
+the desired computational form.
+
+We approximate the uncertainty, not the residual-update principle. Restricting the covariance,
+transition, and process-noise covariance to the diagonal family keeps prediction diagonal, but
+conditioning on a key still produces a dense posterior. We project each exact one-step posterior
+back to the diagonal Gaussian family by online reverse-KL variational inference across key
+coordinates; the value columns already factorize under the model. Given the diagonal predictive
+prior, the optimum preserves the exact one-step posterior mean and sets each retained variance to
+the reciprocal diagonal posterior precision. Reusing it as the next prior yields an $O(d_k)$
+uncertainty state.
+
+The information parameterization turns this statistical approximation into a parallel algorithm.
+For key channel $i$, the retained precision obeys
+\begin{equation}
+  c_{t,i}
+  =\frac{c_{t-1,i}}
+    {\alpha_{t,i}^2+\omega_{t,i}c_{t-1,i}}
+   +\frac{k_{t,i}^2}{r_t}.
+  \label{eq:intro-mobius}
+\end{equation}
+This is a M\"obius map of $c_{t-1,i}$: each token contributes one $2\times2$ matrix per channel, and
+temporal composition becomes associative matrix multiplication. A prefix scan first recovers the
+uncertainty trajectory and Kalman gains; its input-only coefficients then drive the usual affine
+memory scan. The dense Riccati state has become a per-channel associative recurrence without
+discarding the link between accumulated uncertainty and write strength.
+
+This construction gives \emph{Kalman Delta Networks} (KDNs). Diagonal KDN retains one uncertainty
+value per key channel and therefore permits anisotropic write directions; Isotropic KDN uses one
+uncertainty scalar per head. In parameter-matched recurrent-only pretraining on
+FineWeb-Edu~\citep{penedo2024fineweb}, both variants obtain lower WikiText and LAMBADA perplexity
+and a higher unweighted mean of six zero-shot accuracies than GDN-2~\citep{hatamizadeh2026gdn2} at
+220M, 750M, and 1.3B parameters. Among the evaluated 750M models, Diagonal KDN achieves the highest
+observed 14-cell RULER aggregate~\citep{hsieh2024ruler}; at 1.3B, the results do not establish a
+stable ordering among KDA and the two KDN variants.
+
+Our contributions are:
 
 \begin{itemize}[leftmargin=1.4em,itemsep=3pt,topsep=2pt]
-  \item We formulate delta-rule associative memory as a linear--Gaussian state-space model,
-  derive its optimal Kalman residual write, and identify existing delta-rule mixers as
-  fixed-gain special cases.
-  \item We derive an online variational diagonal filter whose information dynamics form an
-  associative M\"obius scan, reducing the carried uncertainty from a dense matrix to $d_k$
-  scalars while retaining transition-aware gains.
-  \item In controlled pretraining at 220M, 750M, and 1.3B parameters, KDNs consistently improve
-  over Gated DeltaNet-2 (GDN-2; \citealp{hatamizadeh2026gdn2}) in language modeling and average
-  downstream accuracy. At 750M, the diagonal KDN attains the best average accuracy and aggregate
-  score on interference-heavy long-context retrieval, while the two KDN variants remain close
-  at 1.3B.
+  \item \textbf{Emergence and diagnosis.} We derive the exact Kalman residual update for a latent
+  associative memory and show that DeltaNet, Gated DeltaNet, and KDA emerge as fixed-gain special
+  cases of its mean-update algebra. This identifies their missing mechanism: an explicit
+  covariance recursion whose confidence combines with observation noise to set the write.
+  \item \textbf{Approximation and algorithm.} We derive an online reverse-KL projection of each
+  dense one-step posterior onto a diagonal family. Given the retained diagonal predictive prior,
+  it preserves that step's exact mean while reducing auxiliary uncertainty state from $O(d_k^2)$
+  to $O(d_k)$. In information form, the resulting per-channel M\"obius maps admit an associative
+  gain scan followed by an affine memory scan.
+  \item \textbf{Empirical evidence.} At every evaluated scale, both KDN variants improve the two
+  reported perplexities and mean six-task zero-shot accuracy over GDN-2.
 \end{itemize}
 
 
@@ -286,9 +331,6 @@ from retention alone. If an incoming sentence reveals that an entity has moved f
 Rome, $\ve{D}_t$ can attenuate the stale Paris binding, but only the observation can establish the
 new Rome binding.
 In the main development, $\ve{W}_t$ denotes the centered unpredictable component of this drift.
-Appendix~\ref{app:nonzero-mean-process-noise} derives the extension in which the process
-disturbance has a known rank-one conditional mean, which acts as a predictable low-rank control.
-
 \paragraph{Observation.}
 The current key reads one direction of the latent map. The observed value is
 \begin{equation}
@@ -311,9 +353,10 @@ $\ve{W}_t$ and $\ve{e}_t$ are independent at each step, and all noises are indep
 $\ve{S}_0^\star$.
 
 \paragraph{Online filtering problem.}
-Let $\mathcal{F}_t=\sigma\{(\ve{k}_\tau,\ve{v}_\tau):\tau\leq t\}$ denote the observations
-available through step $t$. The filtering objective is to estimate the \emph{current} latent
-memory from this history with minimum mean-squared error:
+Let $\mathcal{F}_t=\sigma\{(\ve{k}_\tau,\ve{v}_\tau):\tau\leq t\}$ denote the observation
+history through step $t$. At each step, we seek a point estimate of the current latent memory
+$\ve{S}_t^\star$, rather than its full trajectory. Under squared-error loss, the optimal estimate
+is the posterior mean:
 \begin{equation}
   \ve{S}_t
   =\argmin_{\widetilde{\ve{S}}}
@@ -321,10 +364,8 @@ memory from this history with minimum mean-squared error:
   =\E\!\left[\ve{S}_t^\star\mid\mathcal{F}_t\right].
   \label{eq:online-filtering-objective}
 \end{equation}
-Each step therefore first propagates the previous posterior through the state dynamics to form a
-predictive prior for $\ve{S}_t^\star$, then conditions that prior on the new measurement
-$(\ve{k}_t,\ve{v}_t)$. Forgetting is thus part of the prediction model for how memory changes in
-a non-stationary stream, rather than an auxiliary gate appended to attention.
+In this formulation, forgetting belongs to the prediction model for a non-stationary memory,
+rather than acting as an auxiliary gate appended to attention.
 
 
 % =============================================================================
@@ -841,6 +882,13 @@ delta-rule models while keeping the training primitive unchanged: the memory is 
 through $\ve{D}_t$, and the residual write is weighted by a transition-aware uncertainty
 estimate.
 
+\paragraph{Hardware-efficient chunkwise implementation.}
+The diagonal approximation directly yields a two-stage parallel implementation. Its per-channel
+information recurrence is a M\"obius map, enabling an associative chunkwise kernel that computes
+all Kalman gains; once those gains are available, the memory update becomes an input-only
+asymmetric delta rule handled by a compact-WY kernel. Appendix~\ref{sec:chunkwise-algorithm}
+provides the derivation and implementation details.
+
 \subsection{Isotropic Kalman Delta Network}
 \label{sec:isotropic-kdn}
 
@@ -1015,9 +1063,9 @@ parameter count within each block. Best per column within each block in \textbf{
 
 \paragraph{In-context retrieval.}
 Table~\ref{tab:pretrain-niah} reports RULER single- and multi-key needle-in-a-haystack accuracy
-for recurrent-only models across context lengths from 1K to 8K and for hybrid models from 1K to
-4K~\citep{hsieh2024ruler}. The 8K recurrent-only setting exceeds the 4K training length and tests
-length extrapolation; the hybrid 8K evaluations did not complete and are marked with dashes. We
+for recurrent-only and hybrid models across context lengths from 1K to 8K on S-NIAH-1/2 and
+from 1K to 4K on S-NIAH-3/MK-NIAH-1~\citep{hsieh2024ruler}.
+The 8K setting exceeds the 4K training length and tests length extrapolation. We
 correct two issues in the released generator: essay contexts are fitted in
 $25$-word rather than $500$-word increments, and each sample uses a deterministic random window from
 the essay corpus instead of its fixed opening prefix. We also seed all keys, values, and needle depths,
@@ -1043,13 +1091,14 @@ short-context collapse of the 1.3B Diagonal KDN disappears under randomized essa
 with the fixed opening essay rather than a short-memory failure. These are single checkpoints and one
 window seed, so small differences should be read as directional.
 
-In the hybrid block, the observed means over the 12 completed cells are $81.12$ for the Isotropic
-KDN, $78.82$ for KDA, and $74.05$ for GDN-2; KDA comparisons carry the stream-sharding caveat
-above. The advantage is concentrated on the
-interference-heavy S-NIAH-3 and multi-key cells: the three hybrids remain clustered at
-$47.4$--$53.4$ on S-NIAH-1/2 at 4K. The Isotropic KDN leads S-NIAH-3 at 1K--2K and
-multi-key recall at 2K--4K, while KDA leads S-NIAH-3 at 4K. Because no hybrid 8K result is
-available, this block supports no claim about length extrapolation.
+In the hybrid block, the full 14-cell means are $73.49$ for the Isotropic KDN, $70.93$ for KDA,
+$67.43$ for GDN-2, and $64.73$ for Mamba-3 (SISO); KDA comparisons carry the stream-sharding
+caveat above. The advantage is concentrated on the interference-heavy S-NIAH-3 and multi-key
+cells: the GDN-2, KDA, and Isotropic KDN hybrids remain clustered at $47.4$--$53.4$ on
+S-NIAH-1/2 at 4K, while Mamba-3 (SISO) reaches $29.4$ and $52.2$. The Isotropic KDN leads
+S-NIAH-3 at 1K--2K and multi-key recall at 2K--4K, while KDA leads S-NIAH-3 at 4K and
+multi-key recall at 1K. At 8K, GDN-2 and the Isotropic KDN tie at $28.4$ on S-NIAH-1 and
+$27.6$ on S-NIAH-2, ahead of KDA ($21.2$/$25.4$) and Mamba-3 (SISO) ($15.0$/$21.8$).
 
 \begin{table}[t]
 \centering
@@ -1080,28 +1129,33 @@ Diagonal KDN  & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \underline{99
 \midrule
 \multicolumn{15}{@{}l}{\emph{Hybrid, 1.3B parameters, 100B tokens}}\\
 GDN-2 $+$ SWA
-  & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & --
-  & \textbf{100.0} & \underline{99.6} & \textbf{53.4} & --
-  & 83.8 & 67.6 & 24.8
-  & 84.2 & 77.2 & \underline{45.6} \\
+  & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & \textbf{28.4}
+  & \textbf{100.0} & \underline{99.8} & \textbf{53.4} & \textbf{27.6}
+  & 83.0 & 67.8 & 25.2
+  & 84.0 & 76.8 & \underline{45.6} \\
+Mamba-3 (SISO) $+$ SWA
+  & \underline{99.4} & 73.8 & 29.4 & 15.0
+  & 99.6 & 99.2 & \underline{52.2} & 21.8
+  & 96.4 & 86.2 & 43.4
+  & 74.8 & 76.0 & 39.0 \\
 KDA $+$ SWA
-  & \textbf{100.0} & \underline{88.0} & \underline{47.4} & --
-  & \underline{99.8} & \textbf{100.0} & \textbf{53.4} & --
-  & \underline{99.2} & \underline{96.8} & \textbf{48.6}
-  & \textbf{86.4} & \underline{82.0} & 44.2 \\
+  & \textbf{100.0} & \underline{87.8} & \underline{47.4} & \underline{21.2}
+  & \underline{99.8} & \textbf{100.0} & \textbf{53.4} & \underline{25.4}
+  & \underline{99.2} & \underline{97.0} & \textbf{48.6}
+  & \textbf{86.0} & \underline{83.0} & 44.2 \\
 Isotropic KDN $+$ SWA
-  & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & --
-  & \textbf{100.0} & \textbf{100.0} & \textbf{53.4} & --
-  & \textbf{99.8} & \textbf{98.4} & \underline{44.4}
-  & \underline{85.8} & \textbf{89.8} & \textbf{49.4} \\
+  & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & \textbf{28.4}
+  & \textbf{100.0} & \textbf{100.0} & \textbf{53.4} & \textbf{27.6}
+  & \textbf{99.8} & \textbf{98.4} & \underline{44.6}
+  & \underline{85.4} & \textbf{89.0} & \textbf{49.8} \\
 \bottomrule
 \end{tabular}%
 }
 \caption{In-context retrieval accuracy (\%) on RULER single- and multi-key needle-in-a-haystack
 tasks~\citep{hsieh2024ruler}. The upper two blocks are recurrent-only; the final block alternates
-nine recurrent mixer layers with nine $2$K sliding-window-attention layers. Hybrid 8K results are
-unavailable and marked with dashes. Essay contexts use deterministic random corpus windows and a
-25-word fitting increment; all models receive the same 500 samples per completed cell. Best per
+nine recurrent mixer layers with nine $2$K sliding-window-attention layers. S-NIAH-1/2 include
+8K evaluation; S-NIAH-3 and MK-NIAH-1 stop at 4K. Essay contexts use deterministic random corpus
+windows and a 25-word fitting increment; all models receive the same 500 samples per cell. Best per
 column within each block in \textbf{bold}, second best \underline{underlined}.}
 \label{tab:pretrain-niah}
 \end{table}
@@ -2198,169 +2252,6 @@ The implementation forms decay ratios from cumulative log-decay differences for 
 stability and uses $C_m\in\{32,64\}$, independently of the gain-chunk length.
 
 
-% =============================================================================
-\section{Known Rank-One Process Drift}
-\label{app:nonzero-mean-process-noise}
-
-The state model in \eqref{eq:mem-update-dynamics} uses centered process noise. A useful
-lowest-rank specialization of a nonzero conditional mean is a single predicted key--value write.
-Let $\mc G_t\supseteq\mc F_{t-1}$ denote the information available when the predictive prior is
-formed. We require the current model quantities
-$\ve{D}_t,\ve{\Omega}_t,\ve{k}_t,r_t,\ve{a}_t,$ and $\ve{b}_t$ to be
-$\mc G_t$-measurable, while $\ve{v}_t$ has not yet been incorporated as a measurement. Here
-$\ve{a}_t\in\R^{d_k}$ and $\ve{b}_t\in\R^{d_v}$.
-
-\paragraph{Rank-one conditional mean.}
-Suppose
-\begin{equation}
-  \ve{S}_t^\star
-  =\ve{D}_t\ve{S}_{t-1}^\star+\ve{W}_t,
-  \qquad
-  \ve{W}_t\mid\mc G_t
-  \sim\N_{\mathrm{col}}
-  \!\left(\ve{a}_t\ve{b}_t^{\tr},\ve{\Omega}_t\right).
-  \label{eq:nonzero-mean-process-model}
-\end{equation}
-This assumption concerns only the conditional mean: the realized process disturbance remains a
-random matrix. Defining
-\begin{equation}
-  \widetilde{\ve{W}}_t
-  :=\ve{W}_t-\ve{a}_t\ve{b}_t^{\tr},
-  \qquad
-  \widetilde{\ve{W}}_t\mid\mc G_t
-  \sim\N_{\mathrm{col}}(\ve{0},\ve{\Omega}_t),
-  \label{eq:nonzero-mean-process-centering}
-\end{equation}
-gives
-$\ve{S}_t^\star=\ve{D}_t\ve{S}_{t-1}^\star
-+\ve{a}_t\ve{b}_t^{\tr}+\widetilde{\ve{W}}_t$.
-The outer product is therefore a predictable control, while
-$\widetilde{\ve{W}}_t$ is the unpredictable process noise. The vector $\ve{a}_t$ selects a
-key-space direction and $\ve{b}_t$ specifies its value-space displacement. This is the
-lowest nonzero-rank extension that can encode one predicted association, and its mean is
-represented by $d_k+d_v$ token-local numbers rather than a dense $d_kd_v$ matrix. Producing the
-two factors independently may nevertheless require additional learned projections. This
-theoretical extension is not instantiated in the KDNs evaluated in Section~\ref{sec:experiments}.
-
-\paragraph{Prediction and correction.}
-Assume that, conditional on $\mc G_t$, the previous filtering law is columnwise Gaussian with
-mean $\ve{S}_{t-1}$ and key-space covariance $\ve{P}_{t-1}$. Assume also that
-$\widetilde{\ve{W}}_t$ is independent of the previous estimation error and measurement noise.
-The predictive moments are
-\begin{equation}
-  \widehat{\ve{S}}_t
-  =\ve{D}_t\ve{S}_{t-1}+\ve{a}_t\ve{b}_t^{\tr},
-  \qquad
-  \widehat{\ve{P}}_t
-  =\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t.
-  \label{eq:nonzero-mean-prediction}
-\end{equation}
-The $\mc G_t$-measurable mean shifts $\widehat{\ve{S}}_t$ but contributes no conditional
-covariance term. Under the observation model \eqref{eq:mem-update-observation}, the innovation
-expands as
-\begin{equation}
-  \ve{\delta}_t
-  =\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t
-  =\ve{v}_t
-   -\ve{S}_{t-1}^{\tr}\ve{D}_t^{\tr}\ve{k}_t
-   -(\ve{k}_t^{\tr}\ve{a}_t)\ve{b}_t.
-  \label{eq:nonzero-mean-innovation}
-\end{equation}
-The Kalman gain, posterior mean, and posterior covariance are consequently
-\begin{equation}
-\begin{aligned}
-  \ve{\kappa}_t
-  &=\frac{\widehat{\ve{P}}_t\ve{k}_t}
-    {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t},
-  &
-  \ve{S}_t
-  &=\widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr},
-  \\
-  \ve{P}_t
-  &=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t.
-\end{aligned}
-  \label{eq:nonzero-mean-kalman-update}
-\end{equation}
-Thus the mean changes only the predicted memory and its innovation. The diagonal and isotropic
-variational projections, information recurrences, and M\"obius gain scans are unchanged.
-
-\paragraph{Corrected low-rank source.}
-Expanding the posterior mean in \eqref{eq:nonzero-mean-kalman-update} yields
-\begin{equation}
-  \ve{S}_t
-  =\ve{A}_t\ve{S}_{t-1}+\ve{B}_t,
-  \qquad
-  \ve{A}_t
-  =(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\ve{D}_t,
-  \label{eq:nonzero-mean-memory-scan}
-\end{equation}
-where
-\begin{equation}
-\begin{aligned}
-  \ve{a}_t^{\mathrm{eff}}
-  &:=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\ve{a}_t
-    =\ve{a}_t-\ve{\kappa}_t(\ve{k}_t^{\tr}\ve{a}_t), \\
-  \ve{B}_t
-  &:=\ve{a}_t^{\mathrm{eff}}\ve{b}_t^{\tr}
-     +\ve{\kappa}_t\ve{v}_t^{\tr}
-   =[\,\ve{a}_t^{\mathrm{eff}}\ \ \ve{\kappa}_t\,]
-    [\,\ve{b}_t\ \ \ve{v}_t\,]^{\tr}.
-\end{aligned}
-  \label{eq:nonzero-mean-affine-coefficients}
-\end{equation}
-The source therefore has rank at most two: one corrected predictable write and the usual
-observation-driven Kalman write. Its component visible at the current key satisfies
-\begin{equation}
-  \ve{k}_t^{\tr}\ve{a}_t^{\mathrm{eff}}
-  =\left(1-\ve{k}_t^{\tr}\ve{\kappa}_t\right)
-    \ve{k}_t^{\tr}\ve{a}_t
-  =\frac{r_t}{r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}
-    \ve{k}_t^{\tr}\ve{a}_t.
-  \label{eq:nonzero-mean-observed-drift}
-\end{equation}
-Hence, when observation noise is small relative to predictive uncertainty, the correction
-strongly attenuates the predicted write as read along $\ve{k}_t$. Predicted changes in directions
-not exposed by $\ve{k}_t$ pass through the correction. This predict--then--correct behavior is the
-principal modeling motivation for placing the rank-one term in the process mean rather than
-simply adding it after the Kalman update.
-
-Algebraically, \eqref{eq:nonzero-mean-memory-scan} remains an associative affine recurrence. The
-rank-one drift preserves fixed recurrent-state size and adds one outer-product source rather than
-a dense source. It is not computationally free, however: the compact-WY memory scan in
-Appendix~\ref{sec:chunkwise-memory} assumes only the source
-$\ve{\kappa}_t\ve{v}_t^{\tr}$. Supporting an independent
-$\ve{a}_t^{\mathrm{eff}}\ve{b}_t^{\tr}$ requires a generalized two-source kernel or two virtual
-writes per token. The uncertainty scan itself is unchanged.
-
-\paragraph{Algebraic redundancy and causality.}
-The two-source term in \eqref{eq:nonzero-mean-affine-coefficients} has rank two only when both its
-left factors and its right factors span two dimensions. For example, if
-$\ve{b}_t=\ve{v}_t$, then
-\begin{equation}
-  \ve{B}_t
-  =\left[\ve{a}_t
-    +\ve{\kappa}_t(1-\ve{k}_t^{\tr}\ve{a}_t)\right]\ve{v}_t^{\tr},
-  \label{eq:nonzero-mean-redundant-source}
-\end{equation}
-which is one rank-one write with an effective direction. The rank also collapses when
-$\ve{a}_t^{\mathrm{eff}}$ is collinear with $\ve{\kappa}_t$, or more generally when
-$\ve{b}_t$ is collinear with $\ve{v}_t$. Such algebraic collapse does not imply that the effective
-factor adds no function capacity relative to the base KDN; it means only that the update can be
-represented by one outer product. Its interpretation as a process model instead depends on
-whether $\ve{a}_t\ve{b}_t^{\tr}$ contains genuinely pre-measurement predictive information.
-
-The pre-measurement requirement is also essential. If $\ve{a}_t$ or $\ve{b}_t$ depends on the
-realized $\ve{v}_t$ or its residual, the term is observation-conditioned and should not be called
-a process prior. Neural parameterizations may derive both factors from the same causal pre-update
-covariates used by the key and value projections, but not from the realized measurement noise or
-the innovation (measurement residual) $\ve{\delta}_t$. If the factors are uncertain rather than known conditional on
-$\mc G_t$, their prediction error must be included in a suitably generalized process covariance
-or represented by an augmented state; it can be absorbed into $\ve{\Omega}_t$ only when that
-uncertainty retains the $\N_{\mathrm{col}}$ structure. Otherwise the filter is overconfident. A
-genuinely random outer product generally induces cross-column correlations outside this family.
-Finally, only the product is identifiable under
-$(\ve{a}_t,\ve{b}_t)\mapsto(c\ve{a}_t,\ve{b}_t/c)$; the individual factor norms therefore have no
-intrinsic interpretation without an additional normalization.
 
 
 % =============================================================================
