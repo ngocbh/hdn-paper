@@ -1247,6 +1247,413 @@ $d_k k_{t,i}^2/r_t$ further leaves the isotropic subspace. The initialization is
 stabilizer, but the model cannot choose an exact IsoKLA function and add anisotropy only when it
 is beneficial.
 
+\subsection{Value-wise isotropic uncertainty}
+\label{subsec:discussion-value-isotropic}
+
+The columnwise Gaussian model in the main paper assigns the same key-space covariance to every
+value coordinate. In particular,
+\begin{equation}
+\begin{aligned}
+  \widetilde{\vct{s}}_{t,j}\mid\mathcal{F}_t
+  &\sim\mathcal{N}(\vct{s}_{t,j},\vct{P}_t)
+    \quad\text{independently for }j=1,\ldots,d_v,
+  \\
+  \operatorname{Cov}\!\left(
+    \operatorname{vec}(\widetilde{\vct{S}}_t)\mid\mathcal{F}_t
+  \right)
+  &=\vct{I}_{d_v}\otimes\vct{P}_t.
+\end{aligned}
+  \label{eq:discussion-value-iso-shared-family}
+\end{equation}
+Here and throughout this subsection, a tilde denotes the latent random memory, a bare symbol
+denotes its tracked mean, and a hat denotes a one-step prediction. A complementary structured
+approximation retains a different scalar key-space variance for each value coordinate:
+\begin{equation}
+\begin{aligned}
+  \widetilde{\vct{s}}_{t,j}\mid\mathcal{F}_t
+  &\sim\mathcal{N}(\vct{s}_{t,j},b_{t,j}\vct{I}_{d_k})
+    \quad\text{independently across }j,
+  \\
+  \vct{B}_t&=\diag(\vct{b}_t),
+  \\
+  \operatorname{Cov}\!\left(
+    \operatorname{vec}(\widetilde{\vct{S}}_t)\mid\mathcal{F}_t
+  \right)
+  &=\vct{B}_t\otimes\vct{I}_{d_k}.
+\end{aligned}
+  \label{eq:discussion-value-iso-family}
+\end{equation}
+The subscript $j$ is essential: using the same $b_t\vct{I}$ for every column recovers Isotropic
+KDN rather than a new model. Equation~\eqref{eq:discussion-value-iso-family} still assumes
+cross-column independence, but allows different value coordinates to have different reliability.
+
+\paragraph{State-space model and projected prediction.}
+To make the different column variances nontrivial, allow the process and observation uncertainty
+to depend on the value coordinate:
+\begin{equation}
+\begin{aligned}
+  \widetilde{\vct{s}}_{t,j}
+  &=\vct{D}_t\widetilde{\vct{s}}_{t-1,j}+\vct{w}_{t,j},
+  &
+  \vct{w}_{t,j}
+  &\sim\mathcal{N}(\vct{0},\omega_{t,j}\vct{I}_{d_k}),
+  \\
+  v_{t,j}
+  &=\vct{k}_t^\top\widetilde{\vct{s}}_{t,j}+e_{t,j},
+  &
+  e_{t,j}
+  &\sim\mathcal{N}(0,r_{t,j}),
+  \qquad
+  \vct{D}_t=\diag(\vct{\alpha}_t).
+\end{aligned}
+  \label{eq:discussion-value-iso-model}
+\end{equation}
+The noises are independent across columns and time. The current observation model is recovered by
+setting $r_{t,j}=r_t$, and shared process uncertainty is recovered by setting
+$\omega_{t,j}=\omega_t$. A non-diagonal value-noise covariance would couple the columns after
+conditioning and leave the factorized family in Equation~\eqref{eq:discussion-value-iso-family}.
+
+The mean prediction remains shared,
+\begin{equation}
+  \widehat{\vct{s}}_{t,j}=\vct{D}_t\vct{s}_{t-1,j},
+  \label{eq:discussion-value-iso-mean-prediction}
+\end{equation}
+whereas the exact covariance prediction for column $j$ is
+\begin{equation}
+  \widehat{\vct{P}}_{t,j}^{\mathrm{exact}}
+  =b_{t-1,j}\vct{D}_t\vct{D}_t^\top
+   +\omega_{t,j}\vct{I}_{d_k}.
+  \label{eq:discussion-value-iso-exact-prediction}
+\end{equation}
+Following Isotropic KDN, project this covariance to its average marginal variance. Defining
+\begin{equation}
+  a_t
+  =\frac{1}{d_k}\operatorname{Tr}(\vct{D}_t\vct{D}_t^\top)
+  =\frac{1}{d_k}\sum_{i=1}^{d_k}\alpha_{t,i}^2
+  \label{eq:discussion-value-iso-transition-average}
+\end{equation}
+gives
+\begin{equation}
+  \widehat{\vct{P}}_{t,j}
+  =\widehat b_{t,j}\vct{I}_{d_k},
+  \qquad
+  \widehat b_{t,j}=a_tb_{t-1,j}+\omega_{t,j}.
+  \label{eq:discussion-value-iso-prediction}
+\end{equation}
+This prediction is exact when
+$\vct{D}_t\vct{D}_t^\top=a_t\vct{I}_{d_k}$; otherwise it is the covariance-coordinate trace
+projection used by the shared isotropic model.
+
+\paragraph{Columnwise Kalman correction.}
+Conditioned on the projected prediction, define the scalar innovation
+\begin{equation}
+  \delta_{t,j}
+  =v_{t,j}-\vct{k}_t^\top\widehat{\vct{s}}_{t,j}.
+  \label{eq:discussion-value-iso-innovation}
+\end{equation}
+The predictive cross-covariance and innovation variance are
+\begin{equation}
+  \operatorname{Cov}\!\left(
+    \widetilde{\vct{s}}_{t,j},v_{t,j}\mid\mathcal{F}_{t-1},\vct{k}_t
+  \right)
+  =\widehat b_{t,j}\vct{k}_t,
+  \qquad
+  \operatorname{Var}\!\left(
+    v_{t,j}\mid\mathcal{F}_{t-1},\vct{k}_t
+  \right)
+  =r_{t,j}+\widehat b_{t,j}\|\vct{k}_t\|_2^2.
+  \label{eq:discussion-value-iso-joint-moments}
+\end{equation}
+The Gaussian conditional-mean identity therefore gives a different Kalman gain for every value
+coordinate,
+\begin{equation}
+  \vct{\kappa}_{t,j}
+  =\beta_{t,j}\vct{k}_t,
+  \qquad
+  \beta_{t,j}
+  =\frac{\widehat b_{t,j}}
+    {r_{t,j}+\widehat b_{t,j}\|\vct{k}_t\|_2^2},
+  \qquad
+  \vct{s}_{t,j}
+  =\widehat{\vct{s}}_{t,j}
+   +\beta_{t,j}\vct{k}_t\delta_{t,j}.
+  \label{eq:discussion-value-iso-gain}
+\end{equation}
+Thus all columns write along the same key direction, but they need not use the same write strength.
+The residual remaining at that key is
+\begin{equation}
+  v_{t,j}-\vct{k}_t^\top\vct{s}_{t,j}
+  =\frac{r_{t,j}}
+    {r_{t,j}+\widehat b_{t,j}\|\vct{k}_t\|_2^2}
+    \delta_{t,j},
+  \label{eq:discussion-value-iso-residual-contraction}
+\end{equation}
+so every coordinate remains contractive even though the contraction factor is value dependent.
+
+The exact posterior covariance and information for column $j$ are
+\begin{equation}
+\begin{aligned}
+  \vct{P}_{t,j}^{\mathrm{exact}}
+  &=\widehat b_{t,j}\vct{I}_{d_k}
+    -\frac{\widehat b_{t,j}^2\vct{k}_t\vct{k}_t^\top}
+      {r_{t,j}+\widehat b_{t,j}\|\vct{k}_t\|_2^2},
+  \\
+  \vct{C}_{t,j}^{\mathrm{exact}}
+  &=\left(\vct{P}_{t,j}^{\mathrm{exact}}\right)^{-1}
+   =\widehat c_{t,j}\vct{I}_{d_k}
+    +\frac{1}{r_{t,j}}\vct{k}_t\vct{k}_t^\top,
+  \qquad
+  \widehat c_{t,j}=\widehat b_{t,j}^{-1}.
+\end{aligned}
+  \label{eq:discussion-value-iso-exact-posterior}
+\end{equation}
+The rank-one term leaves the isotropic family, so the posterior must again be projected before it
+can be carried to the next token.
+
+\paragraph{Reverse-KL isotropic projection.}
+Let $\pi_{t,j}$ be the exact Gaussian posterior in
+Equation~\eqref{eq:discussion-value-iso-exact-posterior} and consider
+\begin{equation}
+  q_{t,j}
+  =\mathcal{N}(\vct{m}_{t,j},b_{t,j}\vct{I}_{d_k}).
+  \label{eq:discussion-value-iso-variational-family}
+\end{equation}
+Up to terms independent of $\vct{m}_{t,j}$ and $b_{t,j}$, the reverse KL divergence is
+\begin{equation}
+  \operatorname{KL}(q_{t,j}\,\|\,\pi_{t,j})
+  =\frac{1}{2}\left[
+    (\vct{m}_{t,j}-\vct{s}_{t,j})^\top
+      \vct{C}_{t,j}^{\mathrm{exact}}
+      (\vct{m}_{t,j}-\vct{s}_{t,j})
+    +b_{t,j}\operatorname{Tr}(\vct{C}_{t,j}^{\mathrm{exact}})
+    -d_k\log b_{t,j}
+  \right]+\mathrm{const}.
+  \label{eq:discussion-value-iso-kl}
+\end{equation}
+The first-order conditions give
+\begin{equation}
+  \vct{m}_{t,j}=\vct{s}_{t,j},
+  \qquad
+  b_{t,j}
+  =\frac{d_k}{\operatorname{Tr}(\vct{C}_{t,j}^{\mathrm{exact}})}
+  =\left(
+    \widehat c_{t,j}
+    +\frac{\|\vct{k}_t\|_2^2}{d_kr_{t,j}}
+  \right)^{-1}.
+  \label{eq:discussion-value-iso-variational-solution}
+\end{equation}
+The projection therefore preserves the exact one-step posterior mean under the projected
+predictive prior and retains one scalar variance for each memory column. In information variables
+$c_{t,j}=b_{t,j}^{-1}$,
+\begin{equation}
+  \widehat c_{t,j}
+  =\frac{c_{t-1,j}}{a_t+\omega_{t,j}c_{t-1,j}},
+  \qquad
+  u_{t,j}=\frac{\|\vct{k}_t\|_2^2}{d_kr_{t,j}},
+  \qquad
+  c_{t,j}=\widehat c_{t,j}+u_{t,j}.
+  \label{eq:discussion-value-iso-information-update}
+\end{equation}
+This is the ordinary reverse-KL solution. Multiplying $u_{t,j}$ by an additional information
+scale would be a separate calibration rather than the variational optimum for the observation
+model in Equation~\eqref{eq:discussion-value-iso-model}.
+
+\paragraph{Associative uncertainty scan and memory update.}
+Substituting the prediction into the information update yields
+\begin{equation}
+  c_{t,j}
+  =\frac{(1+u_{t,j}\omega_{t,j})c_{t-1,j}+u_{t,j}a_t}
+    {\omega_{t,j}c_{t-1,j}+a_t}.
+  \label{eq:discussion-value-iso-mobius}
+\end{equation}
+Hence each value coordinate has the M\"obius matrix
+\begin{equation}
+  \vct{M}_{t,j}
+  =\begin{bmatrix}
+    1+u_{t,j}\omega_{t,j} & u_{t,j}a_t \\
+    \omega_{t,j} & a_t
+  \end{bmatrix},
+  \qquad
+  \begin{bmatrix}n_{t,j}\\d_{t,j}\end{bmatrix}
+  =\vct{M}_{t,j}
+   \begin{bmatrix}n_{t-1,j}\\d_{t-1,j}\end{bmatrix},
+  \qquad
+  c_{t,j}=\frac{n_{t,j}}{d_{t,j}},
+  \qquad
+  \begin{bmatrix}n_{0,j}\\d_{0,j}\end{bmatrix}
+  =\begin{bmatrix}c_{0,j}\\1\end{bmatrix}.
+  \label{eq:discussion-value-iso-mobius-matrix}
+\end{equation}
+Matrix multiplication therefore gives an associative gain scan, now comprising $d_v$ independent
+scalar scans rather than one shared scalar scan.
+
+Let $\vct{\beta}_t=(\beta_{t,1},\ldots,\beta_{t,d_v})^\top$ and
+$\widehat{\vct{S}}_t=\vct{D}_t\vct{S}_{t-1}$. Stacking the exact columnwise means from
+Equation~\eqref{eq:discussion-value-iso-gain} gives
+\begin{equation}
+\begin{aligned}
+  \vct{S}_t
+  &=\widehat{\vct{S}}_t
+    +\vct{k}_t
+      \left[
+        \vct{\beta}_t\odot
+        \left(\vct{v}_t-\widehat{\vct{S}}_t^\top\vct{k}_t\right)
+      \right]^\top
+  \\
+  &=\widehat{\vct{S}}_t
+    -\vct{k}_t\vct{k}_t^\top\widehat{\vct{S}}_t\diag(\vct{\beta}_t)
+    +\vct{k}_t(\vct{\beta}_t\odot\vct{v}_t)^\top.
+\end{aligned}
+  \label{eq:discussion-value-iso-memory-update}
+\end{equation}
+
+\subsubsection{Comparison with Gated DeltaNet-2}
+\label{subsubsec:discussion-value-iso-gdn2}
+
+Using the same predicted memory
+$\widehat{\vct{S}}_t=\vct{D}_t\vct{S}_{t-1}$, Gated DeltaNet-2 (GDN-2) can be written as
+\begin{equation}
+\begin{aligned}
+  \vct{S}_t^{\mathrm{GDN2}}
+  &=\widehat{\vct{S}}_t
+    -\vct{k}_t
+      (\vct{b}_t^{\mathrm{erase}}\odot\vct{k}_t)^\top
+      \widehat{\vct{S}}_t
+    +\vct{k}_t(\vct{w}_t\odot\vct{v}_t)^\top
+  \\
+  &=\widehat{\vct{S}}_t
+    +\vct{k}_t\left[
+      \vct{w}_t\odot\vct{v}_t
+      -\widehat{\vct{S}}_t^\top
+       (\vct{b}_t^{\mathrm{erase}}\odot\vct{k}_t)
+    \right]^\top,
+\end{aligned}
+  \label{eq:discussion-gdn2-comparison-update}
+\end{equation}
+where $\vct{b}_t^{\mathrm{erase}}\in\mathbb{R}^{d_k}$ is a key-channel erase gate and
+$\vct{w}_t\in\mathbb{R}^{d_v}$ is a value-channel write gate. Both are predicted directly from
+the current token. Equation~\eqref{eq:discussion-value-iso-memory-update} and GDN-2 therefore share
+the outer write direction $\vct{k}_t$ and both permit value-wise scaling of the incoming value.
+Their erase terms, however, act on different axes:
+\begin{equation}
+\begin{aligned}
+  \text{value-wise isotropic:}\quad
+  &-\vct{k}_t\vct{k}_t^\top
+    \widehat{\vct{S}}_t\diag(\vct{\beta}_t),
+  \\
+  \text{GDN-2:}\quad
+  &-\vct{k}_t
+    (\vct{b}_t^{\mathrm{erase}}\odot\vct{k}_t)^\top
+    \widehat{\vct{S}}_t.
+\end{aligned}
+  \label{eq:discussion-value-iso-gdn2-erase-comparison}
+\end{equation}
+In the value-wise isotropic filter, column $j$ uses the same uncertainty-derived
+$\beta_{t,j}$ to scale both the observation write and the predicted-value erasure. GDN-2 instead
+uses one key-wise pseudo-key
+$\vct{b}_t^{\mathrm{erase}}\odot\vct{k}_t$ to erase every value column, while the independent
+$w_{t,j}$ scales only the incoming value. Thus GDN-2 deliberately decouples the two terms that a
+Kalman innovation ties together.
+
+The equality conditions make the relationship precise. For
+Equations~\eqref{eq:discussion-value-iso-memory-update} and
+\eqref{eq:discussion-gdn2-comparison-update} to agree for arbitrary predicted memories and values,
+we must have
+\begin{equation}
+  w_{t,j}=\beta_{t,j},
+  \qquad
+  \vct{b}_t^{\mathrm{erase}}\odot\vct{k}_t
+  =\beta_{t,j}\vct{k}_t
+  \quad\text{for every }j.
+  \label{eq:discussion-value-iso-gdn2-equality}
+\end{equation}
+For a generic key, the second condition forces all $\beta_{t,j}$ to equal one scalar $\beta_t$
+and forces $b_{t,i}^{\mathrm{erase}}=\beta_t$ on the support of $\vct{k}_t$. Together with the
+first condition,
+\begin{equation}
+  \vct{b}_t^{\mathrm{erase}}=\beta_t\vct{1}_{d_k},
+  \qquad
+  \vct{w}_t=\beta_t\vct{1}_{d_v},
+  \label{eq:discussion-value-iso-gdn2-intersection}
+\end{equation}
+which is exactly the KDA recurrence; a scalar transition further recovers Gated DeltaNet.
+Consequently, neither general family contains the other. Their common intersection is the
+scalar-gated delta rule.
+
+GDN-2 can still be written as a fixed-gain Kalman-like residual after defining the pseudo-key
+$\vct{e}_t=\vct{b}_t^{\mathrm{erase}}\odot\vct{k}_t$, pseudo-value
+$\vct{z}_t=\vct{w}_t\odot\vct{v}_t$, and prescribing the gain $\vct{k}_t$. It is not, however,
+the posterior-mean update of the original observation model
+$\vct{v}_t=\widetilde{\vct{S}}_t^\top\vct{k}_t+\text{noise}$ under a column-specific isotropic
+covariance. In that model the same gain must multiply both halves of each innovation.
+
+The correction remains rank one, but it is no longer of the shared-gain form
+$\widehat{\vct{S}}_t+\vct{\kappa}_t\vct{\delta}_t^\top$. Equivalently, column $j$ has transition
+\begin{equation}
+  \vct{s}_{t,j}
+  =\underbrace{
+    (\vct{I}-\beta_{t,j}\vct{k}_t\vct{k}_t^\top)\vct{D}_t
+  }_{\vct{A}_{t,j}}
+  \vct{s}_{t-1,j}
+  +\beta_{t,j}\vct{k}_t v_{t,j}.
+  \label{eq:discussion-value-iso-affine-column}
+\end{equation}
+The information stage remains scan-compatible, and the sequential memory update still costs
+$O(d_kd_v)$ per token. However, $\vct{A}_{t,j}$ varies with $j$, so the single compact-WY system
+shared across all value columns in the current KDN kernel no longer applies directly. An exact
+parallel implementation requires value-wise batched systems, or a grouped-value approximation in
+which columns within each group share one scalar uncertainty and gain.
+
+\paragraph{When the extension is genuinely different.}
+If
+\begin{equation}
+  b_{0,j}=b_0,
+  \qquad
+  \omega_{t,j}=\omega_t,
+  \qquad
+  r_{t,j}=r_t
+  \qquad\text{for every }j,
+  \label{eq:discussion-value-iso-symmetry}
+\end{equation}
+then induction through Equations~\eqref{eq:discussion-value-iso-prediction} and
+\eqref{eq:discussion-value-iso-information-update} gives
+$b_{t,j}=b_t$ and $\beta_{t,j}=\beta_t$ for every column and token. The observed values cannot
+break this symmetry because Gaussian covariance updates do not depend on the realized
+$v_{t,j}$. At least one of the initial uncertainty, process noise, or observation noise must
+therefore vary across value coordinates for the extension to differ from Isotropic KDN.
+
+If hardware constraints instead force one common gain, minimizing total conditional Frobenius
+risk over the restricted family
+$\vct{s}_{t,j}=\widehat{\vct{s}}_{t,j}+\vct{\kappa}_t\delta_{t,j}$ gives
+\begin{equation}
+  \vct{\kappa}_t^{\mathrm{shared}}
+  =\frac{\sum_{j=1}^{d_v}\widehat b_{t,j}}
+    {\sum_{j=1}^{d_v}r_{t,j}
+      +\|\vct{k}_t\|_2^2\sum_{j=1}^{d_v}\widehat b_{t,j}}
+    \vct{k}_t.
+  \label{eq:discussion-value-iso-common-gain}
+\end{equation}
+For shared $r_t$, this is the isotropic gain formed from
+$\overline b_t=d_v^{-1}\sum_j\widehat b_{t,j}$. It is the best common-gain compromise, but it is
+not the columnwise Kalman posterior mean unless all $\beta_{t,j}$ coincide; enforcing it largely
+averages away the extra uncertainty state at the current write.
+
+Allowing independent $\omega_{t,j}$ and $r_{t,j}$ also introduces one covariance-scale gauge per
+value coordinate: jointly scaling $b_{t,j}$, $\omega_{t,j}$, and $r_{t,j}$ leaves
+$\beta_{t,j}$ unchanged. A fixed or anchored observation-noise scale is therefore even more
+important in this model; tying $r_{t,j}=r_t$ reduces these independent gauges to the common gauge
+already discussed above.
+
+This model and Diagonal KDN spend a similar scalar state budget on different axes. Diagonal KDN
+tracks key-channel uncertainty $p_{t,i}$ and produces one anisotropic gain shared by all value
+columns. The value-wise isotropic model tracks value-coordinate uncertainty $b_{t,j}$ and
+produces value-dependent scalar gains that always point along $\vct{k}_t$. It is principled when
+value coordinates have genuinely different volatility or observation reliability, but it does
+not represent the key-direction uncertainty responsible for associative interference. It also
+depends on the learned value basis and weakens the shared-kernel implementation. The cleanest use
+is therefore as a value-wise or grouped-value ablation rather than a drop-in replacement for
+Diagonal KDN.
+
 \subsection{Decisive ablation}
 
 The cleanest next experiment holds the diagonal information tracker and effective write strength
@@ -1431,6 +1838,81 @@ $s>1$ decreases its retained variance further. Statistical overconfidence and ex
 are thus different, and often opposing, failure modes. The former suppresses future plasticity;
 the latter changes the current memory too aggressively.
 
+\subsection{A decision-aware protection objective}
+\label{subsec:discussion-decision-aware-protection}
+
+The current comparison further localizes the useful intervention. A larger information scale
+improves retention by changing the precision state passed to later tokens, whereas the
+$B=2$ channelwise cap changes only those current gains for which
+$\beta_{t,i}^{\mathrm{ch}}>2$. The cap can therefore be inactive even when repeated writes are too
+strong; when it is active, it can remove useful anisotropy without materially changing
+$\beta_t^{\mathrm{eff}}=\sum_i k_{t,i}^2\beta_{t,i}^{\mathrm{ch}}$. Its failure to improve accuracy
+is thus evidence against extreme channelwise amplification as the primary bottleneck, not against
+the broader overwrite hypothesis. For the same reason, an off-key projection cannot reproduce the
+benefit of a larger information scale: by construction it preserves $\beta_t^{\mathrm{eff}}$.
+This diagnosis should be accompanied by the cap activation rate and the removed effective-write
+mass; a nearly inactive cap is a null intervention rather than evidence about the mechanism.
+
+A more principled scan-compatible response is to make the retention--plasticity tradeoff explicit
+in the inference objective rather than clipping the resulting gain. Let
+$\rho_h\geq1$ denote a protection-to-write ratio for head $h$ and recall
+$V_t=\vct{k}_t^\top\diag(\vct{p}_t)\vct{k}_t$. Starting from the ordinary reverse-KL objective
+$\overline{\mathcal{J}}_{t,j}^{(1)}$ in
+Equation~\eqref{eq:discussion-negative-power-elbo-q-objective}, define
+\begin{equation}
+  \mathcal{J}_{t,j}^{\mathrm{ret}}(q_{t,j};\rho_h)
+  =\overline{\mathcal{J}}_{t,j}^{(1)}(q_{t,j})
+   +\frac{\rho_h-1}{2r_t}V_t.
+  \label{eq:discussion-retention-objective}
+\end{equation}
+The additional term prices uncertainty remaining in the direction that has just been written. Its
+unique minimizer leaves the current posterior-mean correction unchanged and strengthens
+only the precision retained for future tokens:
+\begin{equation}
+  \vct{\kappa}_t
+  =\frac{\widehat{\vct{p}}_t\odot\vct{k}_t}
+    {r_t+\sum_i\widehat p_{t,i}k_{t,i}^2},
+  \qquad
+  \vct{c}_t
+  =\widehat{\vct{c}}_t
+   +\rho_h\frac{\vct{k}_t\odot\vct{k}_t}{r_t}.
+  \label{eq:discussion-protection-recurrence}
+\end{equation}
+Consequently, $\rho_h$ does not alter the write at the token that supplies the evidence, but it
+reduces the gains of later tokens whose coordinatewise key energy overlaps that evidence. This is
+exactly the causal effect supported when a larger information scale improves accuracy. It is also
+the $(s_{\mathrm{write}},s_{\mathrm{protect}})=(1,\rho_h)$ specialization of the split
+variational objective in Equation~\eqref{eq:discussion-split-variational-objective}.
+
+Because protection is a multiplicative scale, the smallest useful parameterization is one bounded
+log-scale scalar per head,
+\begin{equation}
+  \rho_h
+  =\exp\!\left(
+      \log\rho_{\min}
+      +\sigma(\theta_h)\log\frac{\rho_{\max}}{\rho_{\min}}
+    \right),
+  \qquad
+  1\leq\rho_{\min}<\rho_{\max},
+  \label{eq:discussion-bounded-protection-ratio}
+\end{equation}
+initialized at the best fixed-scale operating point. A token-dependent $\rho_{t,h}$ remains
+scan-compatible provided that it depends only on the current token, but the headwise form is more
+identifiable and is the cleaner first experiment. Equation~\eqref{eq:discussion-protection-recurrence}
+only changes the token-local coefficients of the M\"obius maps, so both the uncertainty scan and
+the affine memory scan are preserved. A positive process-noise floor remains necessary to restore
+plasticity and prevent the learned protection ratio from freezing the memory.
+
+For $\rho_h=1$, Equation~\eqref{eq:discussion-retention-objective} reduces to ordinary variational
+filtering. For $\rho_h>1$, it is a decision-aware variational objective rather than the ELBO of the
+original linear--Gaussian observation model: a single Gaussian likelihood cannot leave the current
+mean update unchanged while increasing only future confidence. If exact Bayesian semantics are
+required, the write and protection scales must instead be tied and the process and observation
+noise calibrated under that coherent model. Under the fixed-size associative-memory objective,
+however, $\rho_h$ has a direct interpretation as the cost of future overwrite. The retained
+precision should then be described as a gain-conditioning or protection state, while channelwise
+and off-key caps remain optional worst-case guardrails rather than the primary retention mechanism.
+
 \subsection{A bounded residual can hide an unbounded channel gain}
 
 Let
@@ -1492,7 +1974,7 @@ Thus the same-key residual can remain contractive while an off-key read, or the 
 operator $\vct{I}-\vct{\kappa}_t\vct{k}_t^\top$, is arbitrarily amplified. This is the
 channelwise overwrite failure that $\beta_t^{\mathrm{eff}}$ alone cannot detect.
 
-\subsection{Hello}
+\subsection{Capping the channelwise write strength}
 
 A direct trust region clips the channel multipliers before the memory update:
 \begin{equation}
@@ -1572,9 +2054,101 @@ M\"obius scan. The gain-only cap is token-local after that scan and before the a
 so it preserves the current parallel algorithm. A hard cap has zero gain-path gradient in saturated
 channels; a smooth saturation is an alternative if this impedes training.
 
+\subsection{Gain-norm and off-key control}
+\label{subsec:discussion-gain-norm-control}
+
+The channelwise cap in Equation~\eqref{eq:discussion-channel-gain-cap} acts in the coordinate
+system of the diagonal covariance. Two complementary alternatives operate directly on the gain
+vector: a radial cap bounds the entire update, while an off-key cap changes only the component
+responsible for anisotropic cross-key interference.
+
+A basis-invariant radial cap projects the gain onto an $\ell_2$ ball. Define
+\begin{equation}
+  m_t=\operatorname{RMS}(\vct{\kappa}_t)
+     =\frac{\|\vct{\kappa}_t\|_2}{\sqrt{d_k}},
+  \qquad
+  a_t^{\mathrm{rad}}
+     =\min\!\left\{1,\frac{\tau_{\mathrm{rms}}}{m_t}\right\},
+  \qquad
+  \vct{\kappa}_t^{\mathrm{rad}}
+     =a_t^{\mathrm{rad}}\vct{\kappa}_t,
+  \label{eq:discussion-radial-rms-cap}
+\end{equation}
+with $a_t^{\mathrm{rad}}=1$ when $m_t=0$. This one-sided RMS cap is exactly radial norm clipping
+with radius $\tau_2=\sqrt{d_k}\tau_{\mathrm{rms}}$. It preserves the gain direction and satisfies
+\begin{equation}
+  \|\vct{\kappa}_t^{\mathrm{rad}}\|_2\leq\tau_2,
+  \qquad
+  \beta_{t,\mathrm{rad}}^{\mathrm{eff}}
+    =a_t^{\mathrm{rad}}\beta_t^{\mathrm{eff}}
+    \leq\beta_t^{\mathrm{eff}}<1.
+  \label{eq:discussion-radial-rms-guarantees}
+\end{equation}
+It therefore bounds every cross-key correction, but also weakens the intended same-key write
+whenever active. Choosing $\tau_{\mathrm{rms}}=\sqrt{2/d_k}$ matches the
+$\|\overline{\vct{\kappa}}_t\|_2<\sqrt{2}$ ceiling of the $B=2$ channel cap. A raw RMS threshold
+of $2$ would instead permit norm $2\sqrt{d_k}$ and is not comparable to a channel cap of $2$.
+
+To change only the anisotropic component, decompose
+\begin{equation}
+  \vct{\kappa}_{t,\perp}
+    =\vct{\kappa}_t-\beta_t^{\mathrm{eff}}\vct{k}_t,
+  \qquad
+  a_t^\perp
+    =\min\!\left\{1,
+      \frac{\tau_{\perp,t}}{\|\vct{\kappa}_{t,\perp}\|_2}\right\},
+  \qquad
+  \vct{\kappa}_t^{\mathrm{off}}
+    =\beta_t^{\mathrm{eff}}\vct{k}_t
+     +a_t^\perp\vct{\kappa}_{t,\perp},
+  \label{eq:discussion-off-key-gain-cap}
+\end{equation}
+taking $a_t^\perp=1$ when the off-key norm is zero. This preserves
+$\vct{k}_t^\top\vct{\kappa}_t^{\mathrm{off}}=\beta_t^{\mathrm{eff}}$ exactly, so the current
+residual contraction is unchanged, while every unit
+$\vct{q}\perp\vct{k}_t$ obeys
+$|\vct{q}^\top\vct{\kappa}_t^{\mathrm{off}}|\leq\tau_{\perp,t}$.
+A fixed $\tau_\perp$ gives a direct cross-talk budget. The adaptive choice
+\begin{equation}
+  \tau_{\perp,t}
+    =\sqrt{2\beta_t^{\mathrm{eff}}
+           -(\beta_t^{\mathrm{eff}})^2}
+  \label{eq:discussion-off-key-adaptive-radius}
+\end{equation}
+yields
+$\|\vct{\kappa}_t^{\mathrm{off}}\|_2^2
+  \leq2\beta_t^{\mathrm{eff}}$ and
+$\|(\vct{I}-\vct{\kappa}_t^{\mathrm{off}}\vct{k}_t^\top)\vct{k}_t\|_2\leq1$,
+matching the useful $B=2$ envelope without changing the scalar write strength. Setting
+$\tau_{\perp,t}=0$ recovers the key-aligned gain
+$\beta_t^{\mathrm{eff}}\vct{k}_t$; a learned shrinkage between these extremes is the continuous
+version of the $\eta\in\{0,1\}$ ablation in
+Equation~\eqref{eq:discussion-gain-direction-ablation}.
+
+Full RMS normalization is qualitatively different and is not recommended here. For a nonzero
+gain, setting
+\begin{equation}
+  \vct{\kappa}_t^{\mathrm{RMSNorm}}
+    =\frac{\rho}{\operatorname{RMS}(\vct{\kappa}_t)}\vct{\kappa}_t
+  \label{eq:discussion-full-rms-normalization}
+\end{equation}
+forces $\|\vct{\kappa}_t^{\mathrm{RMSNorm}}\|_2=\rho\sqrt{d_k}$ and replaces the effective
+write by
+$\rho\sqrt{d_k}\,\beta_t^{\mathrm{eff}}/\|\vct{\kappa}_t\|_2$. It rescales small and large
+gains alike and can amplify a nearly zero gain that the uncertainty state intentionally
+suppressed. In the isotropic case
+$\vct{\kappa}_t=\beta_t^{\mathrm{eff}}\vct{k}_t$, every nonzero write becomes
+$\beta_{t,\mathrm{RMSNorm}}^{\mathrm{eff}}=\rho\sqrt{d_k}$, independent of its original
+confidence. Hence a conventional unit-RMS normalization can destroy residual contraction. The
+one-sided cap in Equation~\eqref{eq:discussion-radial-rms-cap} is preferable because it never
+amplifies a gain. Both norm controls remain token-local and preserve the two scans when the
+information recurrence is left unchanged; when active, however, they share the mean--covariance
+inconsistency noted above.
+
 \subsection{Available controls and what each one solves}
 
-The principal interventions are as follows.
+Together with the channelwise and norm controls above, the remaining principal interventions are
+as follows.
 \begin{description}
   \item[Future-protection scale.]
   Increasing $s_{\mathrm{protect}}$ leaves the current write unchanged locally and suppresses later
@@ -1592,95 +2166,6 @@ The principal interventions are as follows.
   $0<\beta_{\max}<1$ directly limits same-key overwrite while preserving the gain direction. It
   does not control a large off-key component when $\beta_t^{\mathrm{eff}}$ is already below the
   threshold.
-
-  \item[Channel, radial, or off-key control.]
-  These are three different constraints on the gain geometry. The coordinatewise cap in
-  Equation~\eqref{eq:discussion-channel-gain-cap} bounds every multiplier
-  $\beta_{t,i}^{\mathrm{ch}}$. It gives the strongest per-channel guarantee, but is basis dependent,
-  as is the diagonal covariance itself.
-
-  A basis-invariant alternative projects the entire gain onto an $\ell_2$ ball. Define
-  \begin{equation}
-    m_t=\operatorname{RMS}(\vct{\kappa}_t)
-       =\frac{\|\vct{\kappa}_t\|_2}{\sqrt{d_k}},
-    \qquad
-    a_t^{\mathrm{rad}}
-       =\min\!\left\{1,\frac{\tau_{\mathrm{rms}}}{m_t}\right\},
-    \qquad
-    \vct{\kappa}_t^{\mathrm{rad}}
-       =a_t^{\mathrm{rad}}\vct{\kappa}_t,
-    \label{eq:discussion-radial-rms-cap}
-  \end{equation}
-  with $a_t^{\mathrm{rad}}=1$ when $m_t=0$. This one-sided RMS cap is exactly radial norm clipping
-  with radius $\tau_2=\sqrt{d_k}\tau_{\mathrm{rms}}$. It preserves the gain direction and satisfies
-  \begin{equation}
-    \|\vct{\kappa}_t^{\mathrm{rad}}\|_2\leq\tau_2,
-    \qquad
-    \beta_{t,\mathrm{rad}}^{\mathrm{eff}}
-      =a_t^{\mathrm{rad}}\beta_t^{\mathrm{eff}}
-      \leq\beta_t^{\mathrm{eff}}<1.
-    \label{eq:discussion-radial-rms-guarantees}
-  \end{equation}
-  It therefore bounds every cross-key correction, but also weakens the intended same-key write
-  whenever active. Choosing $\tau_{\mathrm{rms}}=\sqrt{2/d_k}$ matches the
-  $\|\overline{\vct{\kappa}}_t\|_2<\sqrt{2}$ ceiling of the $B=2$ channel cap. A raw RMS threshold
-  of $2$ would instead permit norm $2\sqrt{d_k}$ and is not comparable to a channel cap of $2$.
-
-  To change only the anisotropic component, decompose
-  \begin{equation}
-    \vct{\kappa}_{t,\perp}
-      =\vct{\kappa}_t-\beta_t^{\mathrm{eff}}\vct{k}_t,
-    \qquad
-    a_t^\perp
-      =\min\!\left\{1,
-        \frac{\tau_{\perp,t}}{\|\vct{\kappa}_{t,\perp}\|_2}\right\},
-    \qquad
-    \vct{\kappa}_t^{\mathrm{off}}
-      =\beta_t^{\mathrm{eff}}\vct{k}_t
-       +a_t^\perp\vct{\kappa}_{t,\perp},
-    \label{eq:discussion-off-key-gain-cap}
-  \end{equation}
-  taking $a_t^\perp=1$ when the off-key norm is zero. This preserves
-  $\vct{k}_t^\top\vct{\kappa}_t^{\mathrm{off}}=\beta_t^{\mathrm{eff}}$ exactly, so the current
-  residual contraction is unchanged, while every unit
-  $\vct{q}\perp\vct{k}_t$ obeys
-  $|\vct{q}^\top\vct{\kappa}_t^{\mathrm{off}}|\leq\tau_{\perp,t}$.
-  A fixed $\tau_\perp$ gives a direct cross-talk budget. The adaptive choice
-  \begin{equation}
-    \tau_{\perp,t}
-      =\sqrt{2\beta_t^{\mathrm{eff}}
-             -(\beta_t^{\mathrm{eff}})^2}
-    \label{eq:discussion-off-key-adaptive-radius}
-  \end{equation}
-  yields
-  $\|\vct{\kappa}_t^{\mathrm{off}}\|_2^2
-    \leq2\beta_t^{\mathrm{eff}}$ and
-  $\|(\vct{I}-\vct{\kappa}_t^{\mathrm{off}}\vct{k}_t^\top)\vct{k}_t\|_2\leq1$,
-  matching the useful $B=2$ envelope without changing the scalar write strength. Setting
-  $\tau_{\perp,t}=0$ recovers the key-aligned gain
-  $\beta_t^{\mathrm{eff}}\vct{k}_t$; a learned shrinkage between these extremes is the continuous
-  version of the $\eta\in\{0,1\}$ ablation in
-  Equation~\eqref{eq:discussion-gain-direction-ablation}.
-
-  Full RMS normalization is qualitatively different and is not recommended here. For a nonzero
-  gain, setting
-  \begin{equation}
-    \vct{\kappa}_t^{\mathrm{RMSNorm}}
-      =\frac{\rho}{\operatorname{RMS}(\vct{\kappa}_t)}\vct{\kappa}_t
-    \label{eq:discussion-full-rms-normalization}
-  \end{equation}
-  forces $\|\vct{\kappa}_t^{\mathrm{RMSNorm}}\|_2=\rho\sqrt{d_k}$ and replaces the effective
-  write by
-  $\rho\sqrt{d_k}\,\beta_t^{\mathrm{eff}}/\|\vct{\kappa}_t\|_2$. It rescales small and large
-  gains alike and can amplify a nearly zero gain that the uncertainty state intentionally
-  suppressed. In the isotropic case
-  $\vct{\kappa}_t=\beta_t^{\mathrm{eff}}\vct{k}_t$, every nonzero write becomes
-  $\beta_{t,\mathrm{RMSNorm}}^{\mathrm{eff}}=\rho\sqrt{d_k}$, independent of its original
-  confidence. Hence a conventional unit-RMS normalization can destroy residual contraction. The
-  one-sided cap in Equation~\eqref{eq:discussion-radial-rms-cap} is preferable because it never
-  amplifies a gain. All three clipping operations remain token-local and preserve the two scans
-  when the information recurrence is left unchanged; when active, however, they share the
-  mean--covariance inconsistency noted above.
 
   \item[Better calibrated uncertainty.]
   Reducing $s_{\mathrm{protect}}$, inflating the retained covariance, or keeping a positive process
@@ -1710,6 +2195,81 @@ $\beta_t^{\mathrm{eff}}$, $\max_i\beta_{t,i}^{\mathrm{ch}}$,
 $\|\vct{\kappa}_t\|_2$, $\|\vct{\kappa}_{t,\perp}\|_2$, cap activation rate, residual magnitude,
 and write--erase magnitude. This factorial comparison separates posterior calibration from
 overwrite control instead of asking one scalar information scale to solve both.
+
+\section{Mamba as a Controlled-Prediction Specialization}
+\label{sec:discussion-mamba-controlled-prediction}
+
+The zero-mean process model used for KDN does not, as written, contain the additive input write of
+Mamba. The minimal extension is to include a known token-dependent control in the state dynamics,
+\begin{equation}
+  \vct{S}_t^\star
+  =\vct{D}_t\vct{S}_{t-1}^\star+\vct{U}_t+\widetilde{\vct{W}}_t,
+  \qquad
+  \widetilde{\vct{W}}_t
+  \sim\mathcal{N}_{\mathrm{col}}(\vct{0},\vct{\Omega}_t).
+  \label{eq:discussion-controlled-process}
+\end{equation}
+Conditioned on the token-generated coefficients, both the transition and $\vct{U}_t$ are known,
+so the recurrence remains linear and $\vct{U}_t$ is deterministic. Equivalently, the control is
+the conditional mean of the original process increment, separated from its centered random part.
+Consequently, it changes the predicted memory but not its covariance:
+\begin{equation}
+  \widehat{\vct{S}}_t
+  =\vct{D}_t\vct{S}_{t-1}+\vct{U}_t,
+  \qquad
+  \widehat{\vct{p}}_t
+  =\vct{\alpha}_t^2\odot\vct{p}_{t-1}+\vct{\omega}_t.
+  \label{eq:discussion-controlled-prediction}
+\end{equation}
+This is therefore a controlled linear--Gaussian state-space model with exactly the same
+uncertainty scan as KDN.
+
+The per-head SSD/Mamba-2 core can be written in matrix-state form as
+\begin{equation}
+  \vct{H}_t
+  =a_t\vct{H}_{t-1}+\vct{B}_t\vct{x}_t^\top,
+  \qquad
+  \vct{o}_t
+  =\vct{H}_t^\top\vct{C}_t+\vct{D}_{\mathrm{skip}}\vct{x}_t.
+  \label{eq:discussion-mamba-ssd}
+\end{equation}
+where the discretization scale is absorbed into $\vct{B}_t$.
+It is recovered from Equation~\eqref{eq:discussion-controlled-process} by setting
+$\vct{S}_t^\star=\vct{H}_t$, $\vct{D}_t=a_t\vct{I}$,
+$\vct{U}_t=\vct{B}_t\vct{x}_t^\top$, and $\vct{\Omega}_t=\vct{0}$, with
+$\vct{C}_t$ serving as the read query. The direct path, output gates, and surrounding projections
+sit outside this recurrent state equation. Mamba-1 fits the same template after vectorizing its
+channel- and state-dependent diagonal dynamics. Mamba-3 SISO replaces the single rank-one control
+by a trapezoidal two-token control of the form
+$\vct{U}_t=\beta_t\vct{B}_{t-1}\vct{x}_{t-1}^\top
++\gamma_t\vct{B}_t\vct{x}_t^\top$, while its MIMO variant uses a finite-rank sum of such
+controls. These remain deterministic controls once their token-generated coefficients are given.
+
+This mapping is exact at the recurrent-state level, but it does not make Mamba a nontrivial
+special case of the Kalman posterior update. With the controlled prediction above, KDN would
+still apply
+\begin{equation}
+  \vct{S}_t
+  =\widehat{\vct{S}}_t
+   +\vct{\kappa}_t
+    \left(\vct{v}_t-\widehat{\vct{S}}_t^\top\vct{k}_t\right)^\top.
+  \label{eq:discussion-controlled-correction}
+\end{equation}
+The standard Mamba recurrence omits this observation-correction step: its additive write is a
+known control, its $\vct{C}_t$ is a read query rather than a measurement used to condition the
+state, and it carries no explicit filtering covariance under this embedding. Trying instead to
+reinterpret the Mamba write as an observation correction by setting
+$\vct{\kappa}_t=\vct{B}_t$ and $\vct{v}_t=\vct{x}_t$ would introduce the additional erase term
+$-\vct{\kappa}_t\vct{k}_t^\top\vct{D}_t\vct{S}_{t-1}$, which is absent from Mamba.
+
+The precise unification is thus a division of roles within the controlled state-space template.
+Mamba is its zero-noise, prediction-only specialization, with $\vct{U}_t\neq\vct{0}$ and no
+observation correction. Delta-rule models set $\vct{U}_t=\vct{0}$ and prescribe a residual gain,
+whereas KDN derives that gain from propagated uncertainty. A combined model could use both a
+selective-SSM control and an uncertainty-weighted innovation, but that hybrid is a new model rather
+than an alternative interpretation of existing Mamba. Accordingly, the defensible paper-level
+claim is that Mamba and KDN share a controlled matrix-state scaffold and specialize complementary
+prediction and correction branches---not that Mamba itself performs Kalman filtering.
 
 \section{Conclusion}
 
