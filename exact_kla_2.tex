@@ -1,0 +1,456 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,mathtools,microtype}
+
+\title{Exact Kalman Linear Attention:\\The Parallelization Obstruction}
+\author{}
+\date{}
+
+\newcommand{\vct}[1]{\boldsymbol{#1}}
+\newcommand{\tr}{\mathsf{T}}
+\newcommand{\R}{\mathbb{R}}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator*{\argmin}{arg\,min}
+
+\begin{document}
+\maketitle
+
+\section{Exact Kalman update}
+
+Let $\widetilde{\vct{S}}_t\in\R^{d\times d_v}$ denote the latent memory and
+$\vct{S}_t$ its filtered mean, with $\vct{k}_t,\vct{q}_t\in\R^d$ and
+$\vct{v}_t\in\R^{d_v}$.  We consider the linear--Gaussian model
+\begin{align}
+  \widetilde{\vct{S}}_t
+  &=\vct{D}_t\widetilde{\vct{S}}_{t-1}+\vct{W}_t,
+  &
+  \vct{W}_t&\sim\mathcal N_{\mathrm{col}}(\vct{0},\vct{\Omega}_t),
+  \\
+  \vct{v}_t
+  &=\widetilde{\vct{S}}_t^{\tr}\vct{k}_t+\vct{e}_t,
+  &
+  \vct{e}_t&\sim\mathcal N(\vct{0},r_t\vct{I}),
+  \qquad r_t>0.
+\end{align}
+We assume diagonal transition and process-noise covariance,
+\begin{equation}
+  \vct{D}_t=\diag(\vct{d}_t),
+  \qquad
+  \vct{\Omega}_t=\diag(\vct{\omega}_t),
+  \qquad \vct{\omega}_t\geq\vct{0}.
+\end{equation}
+Here $\mathcal N_{\mathrm{col}}(\vct{0},\vct{\Omega}_t)$ means that the
+columns of $\vct{W}_t$ are independent $\mathcal N(\vct{0},\vct{\Omega}_t)$
+variables; process and observation noises are independent across time.  We
+take $\vct{P}_0\succ\vct{0}$ and assume each predictive covariance below is
+positive definite.
+The posterior covariance $\vct{P}_t\in\R^{d\times d}$ is nevertheless dense:
+conditioning on a general key couples its coordinates.
+
+Given $(\vct{S}_{t-1},\vct{P}_{t-1})$, the exact Kalman filter is
+\begin{align}
+  \widehat{\vct{S}}_t
+  &=\vct{D}_t\vct{S}_{t-1},
+  &
+  \widehat{\vct{P}}_t
+  &=\vct{D}_t\vct{P}_{t-1}\vct{D}_t^{\tr}+\vct{\Omega}_t,
+  \\
+  \vct{\kappa}_t
+  &=\frac{\widehat{\vct{P}}_t\vct{k}_t}
+  {r_t+\vct{k}_t^{\tr}\widehat{\vct{P}}_t\vct{k}_t},
+  &
+  \vct{S}_t
+  &=\widehat{\vct{S}}_t+
+  \vct{\kappa}_t
+  \bigl(\vct{v}_t-\widehat{\vct{S}}_t^{\tr}\vct{k}_t\bigr)^{\tr},
+  \\
+  \vct{P}_t
+  &=\widehat{\vct{P}}_t-
+  \frac{(\widehat{\vct{P}}_t\vct{k}_t)
+  (\widehat{\vct{P}}_t\vct{k}_t)^{\tr}}
+  {r_t+\vct{k}_t^{\tr}\widehat{\vct{P}}_t\vct{k}_t}.
+\end{align}
+The corresponding linear-attention read is
+$\vct{o}_t=\vct{S}_t^{\tr}\vct{q}_t$.
+
+\section{Information form}
+
+Define the posterior and predictive precision matrices
+\begin{equation}
+  \vct{C}_t=\vct{P}_t^{-1},
+  \qquad
+  \widehat{\vct{C}}_t=\widehat{\vct{P}}_t^{-1}.
+\end{equation}
+The Woodbury identity converts the rank-one covariance correction into the
+additive information update
+\begin{equation}
+  \boxed{
+  \vct{C}_t
+  =\widehat{\vct{C}}_t+\frac{\vct{k}_t\vct{k}_t^{\tr}}{r_t}}
+  =
+  \left(
+    \vct{D}_t\vct{C}_{t-1}^{-1}\vct{D}_t^{\tr}
+    +\vct{\Omega}_t
+  \right)^{-1}
+  +\frac{\vct{k}_t\vct{k}_t^{\tr}}{r_t}.
+  \label{eq:exact-information}
+\end{equation}
+Equivalently, with the whitened key
+$\bar{\vct{k}}_t=\vct{k}_t/\sqrt{r_t}$, the measurement contributes
+$\bar{\vct{k}}_t\bar{\vct{k}}_t^{\tr}$.
+
+Under the static, unit-noise specialization
+$\vct{D}_t=\vct{I}$, $\vct{\Omega}_t=\vct{0}$, and $r_t=1$, this reduces to
+\begin{equation}
+  \vct{C}_t=\vct{C}_{t-1}+\vct{k}_t\vct{k}_t^{\tr}
+  \label{eq:static-information}
+\end{equation}
+If $\vct{\Omega}_t=\vct{0}$ and $\vct{D}_t$ is invertible, the more general
+update is
+\begin{equation}
+  \vct{C}_t
+  =\vct{D}_t^{-\tr}\vct{C}_{t-1}\vct{D}_t^{-1}
+  +\frac{\vct{k}_t\vct{k}_t^{\tr}}{r_t}.
+\end{equation}
+With generic nonzero process noise, even diagonal $\vct{D}_t$ and
+$\vct{\Omega}_t$ leave the prediction in Equation~\eqref{eq:exact-information}
+as a nonlinear dense matrix map.
+
+\section{Why parallelization remains difficult}
+
+The static case makes the distinction particularly clear.  Define the
+information target $\vct{B}_t=\vct{C}_t\vct{S}_t$.  Then
+\begin{equation}
+  \vct{C}_t
+  =\vct{C}_{t-1}+\frac{\vct{k}_t\vct{k}_t^{\tr}}{r_t},
+  \qquad
+  \vct{B}_t
+  =\vct{B}_{t-1}+\frac{\vct{k}_t\vct{v}_t^{\tr}}{r_t}.
+\end{equation}
+Both are associative prefix sums.  The difficult operation is the causal
+readout
+\begin{equation}
+  \vct{S}_t=\vct{C}_t^{-1}\vct{B}_t,
+  \qquad
+  \vct{\kappa}_t=\frac{\vct{C}_t^{-1}\vct{k}_t}{r_t},
+\end{equation}
+which requires a different dense solve at every prefix.  Factoring only the
+final precision would expose earlier outputs to future keys.  Sequential
+rank-one inverse updates have depth $T$.  Factoring every prefix independently
+exposes concurrency, but repeats a dense factorization $T$ times rather than
+sharing work through a useful prefix operator.
+
+For the dynamic model, the problem is harder still: process noise makes the
+precision prediction itself non-additive.  Thus the obstacle is not forming
+$\vct{k}_t\vct{k}_t^{\tr}$, but applying a prefix-dependent dense inverse at
+every token while preserving causality.  With invertible transitions the
+Riccati map admits a formal associative lifting to $2d\times2d$
+matrix-fractional maps, but each composition is a dense matrix operation and
+the products become numerically stiff under strong contraction.  The
+algorithmic question is therefore not whether a formal parallel prefix exists,
+but whether its composition can be made inexpensive enough to replace the
+tokenwise chain.
+
+\section{Diagonal information and online variational inference}
+
+Suppose instead that the retained precision is diagonal,
+\begin{equation}
+  \vct{C}_{t-1}=\diag(\vct{c}_{t-1}),
+  \qquad
+  \vct{C}_{t-1}^{-1}
+  =\diag(\vct{c}_{t-1}^{-1}).
+\end{equation}
+Because $\vct{D}_t$ and $\vct{\Omega}_t$ are also diagonal, the predictive
+precision remains diagonal:
+\begin{equation}
+  \widehat{\vct{C}}_t=\diag(\widehat{\vct{c}}_t),
+  \qquad
+  \widehat{\vct{c}}_t
+  =\frac{\vct{c}_{t-1}}
+  {\vct{d}_t^2+\vct{\omega}_t\odot\vct{c}_{t-1}},
+  \label{eq:diagonal-information-prediction}
+\end{equation}
+where all vector operations are elementwise.  The exact gain under this
+predictive state is
+\begin{equation}
+  \vct{\kappa}_t
+  =\frac{\widehat{\vct{c}}_t^{-1}\odot\vct{k}_t}
+  {r_t+\sum_i k_{t,i}^2/\widehat c_{t,i}},
+  \label{eq:diagonal-information-gain}
+\end{equation}
+so the uncertainty recurrence decomposes into independent scalar maps.  All
+of their prefixes can be generated by an associative scan, after which the
+gain is evaluated tokenwise without a dense prefix solve.
+
+The exact measurement update does not preserve this structure.  By
+Equation~\eqref{eq:exact-information}, its precision is
+\begin{equation}
+  \vct{C}_t^\star
+  =\diag(\widehat{\vct{c}}_t)
+   +\frac{\vct{k}_t\vct{k}_t^{\tr}}{r_t},
+  \label{eq:exact-dense-posterior-information}
+\end{equation}
+which is generally dense.  We therefore project the exact one-step posterior
+$\pi_t$ back to the diagonal family after every token:
+\begin{equation}
+  q_t
+  =\argmin_{q=\mathcal N_{\mathrm{col}}
+    (\vct{M},\diag(\vct{c}^{-1}))}
+    \operatorname{KL}(q\,\|\,\pi_t).
+  \label{eq:online-diagonal-vi}
+\end{equation}
+The reverse-KL optimum preserves the exact posterior mean,
+$\vct{M}=\vct{S}_t$, and retains the diagonal of the exact posterior
+precision:
+\begin{equation}
+  \boxed{
+  \vct{c}_t
+  =\widehat{\vct{c}}_t
+   +\frac{\vct{k}_t\odot\vct{k}_t}{r_t}.}
+  \label{eq:diagonal-vi-information}
+\end{equation}
+Feeding $\diag(\vct{c}_t^{-1})$ into the next prediction closes the online
+recursion.  With $u_{t,i}=k_{t,i}^2/r_t$, each channel obeys
+\begin{equation}
+  c_{t,i}
+  =\frac{c_{t-1,i}}
+  {d_{t,i}^2+\omega_{t,i}c_{t-1,i}}+u_{t,i}.
+  \label{eq:diagonal-mobius}
+\end{equation}
+This is a scalar M\"obius map, whose token-local $2\times2$ representations
+compose associatively.  Online variational inference therefore replaces each
+prefix-dependent dense inverse with $d$ independent scalar scans while
+retaining the exact Kalman mean update under the diagonal predictive prior.
+
+\section{Oracle-free gain approximation}
+
+The gain need not be computed by first forming a covariance inverse.  Combining
+the information update with the Kalman gain gives the equivalent linear system
+\begin{equation}
+  \boxed{
+  \vct{C}_t\vct{\kappa}_t=\frac{\vct{k}_t}{r_t},
+  \qquad
+  \vct{C}_t
+  =\widehat{\vct{C}}_t
+   +\frac{\vct{k}_t\vct{k}_t^{\tr}}{r_t}.}
+  \label{eq:gain-linear-system}
+\end{equation}
+This suggests approximating the solution of a known positive-definite system,
+rather than defining an approximation in terms of the unknown exact gain.
+
+\subsection{Diagonal-Kalman-compatible elementwise gains}
+
+Consider
+\begin{equation}
+  \vct{\kappa}_t(\vct{b})=\vct{b}\odot\vct{k}_t.
+  \label{eq:elementwise-gain-family}
+\end{equation}
+Let $\mathcal I_t=\{i:k_{t,i}\neq0\}$ and set $b_i=0$ outside
+$\mathcal I_t$.  For a positive diagonal predictive precision,
+Equation~\eqref{eq:diagonal-information-gain} gives
+\begin{equation}
+  b_i
+  =\frac{\widehat c_{t,i}^{-1}}{r_t+\zeta_t},
+  \qquad
+  \zeta_t
+  =\sum_{j\in\mathcal I_t}\frac{k_{t,j}^2}{\widehat c_{t,j}}.
+  \label{eq:kalman-channel-coefficient}
+\end{equation}
+Thus $b_i\geq0$, and the effective write along the current key is
+\begin{equation}
+  \beta_t^{\mathrm{eff}}
+  :=\vct{k}_t^{\tr}\vct{\kappa}_t
+  =\sum_{i\in\mathcal I_t}b_i k_{t,i}^2
+  =\frac{\zeta_t}{r_t+\zeta_t}
+  \in[0,1).
+  \label{eq:effective-same-key-write}
+\end{equation}
+If $\widehat{\vct{y}}_t=\widehat{\vct{S}}_t^{\tr}\vct{k}_t$ is the value
+recalled before the update, then
+\begin{align}
+  \vct{S}_t^{\tr}\vct{k}_t
+  &=\widehat{\vct{y}}_t
+    +\beta_t^{\mathrm{eff}}
+      (\vct{v}_t-\widehat{\vct{y}}_t),
+  \\
+  \vct{v}_t-\vct{S}_t^{\tr}\vct{k}_t
+  &=(1-\beta_t^{\mathrm{eff}})
+    (\vct{v}_t-\widehat{\vct{y}}_t).
+  \label{eq:same-key-residual-contraction}
+\end{align}
+The first constraint below prevents a channel from writing opposite to its key
+coordinate, while the second bounds the total same-key write:
+\begin{equation}
+  \mathcal B_t
+  :=\left\{\vct{b}:
+  b_i\geq0\ (i\in\mathcal I_t),\quad
+  \sum_{i\in\mathcal I_t}b_i k_{t,i}^2\leq1\right\}.
+  \label{eq:diagonal-gain-constraints}
+\end{equation}
+The finite positive-precision family satisfies strict inequalities.  The weak
+inequalities include its closure, and every interior point corresponds to the
+positive diagonal predictive precision
+\begin{equation}
+  \widehat c_i
+  =\frac{1-\sum_{j\in\mathcal I_t}b_jk_{t,j}^2}{r_tb_i},
+  \qquad i\in\mathcal I_t.
+  \label{eq:gain-to-diagonal-information}
+\end{equation}
+
+There is an important limitation: if every key coordinate is nonzero, the map
+$\vct{b}\mapsto\vct{b}\odot\vct{k}_t$ is a bijection.  An unrestricted
+channelwise $\vct{b}$ can therefore represent any gain and is no easier to find
+than the original dense solve.  Computational savings require either a
+lower-dimensional structure on $\vct{b}$ or a fixed-work approximate solver.
+
+\subsection{A computable variational problem}
+
+Let $\vct{K}_t=\diag(\vct{k}_t)$ and
+$\vct{s}_t=\vct{k}_t\odot\vct{k}_t$.  Restricting the quadratic variational
+form of Equation~\eqref{eq:gain-linear-system} to
+$\vct{\kappa}_t=\vct{K}_t\vct{b}$ gives
+\begin{equation}
+  \boxed{
+  \vct{b}_t^\dagger
+  \in\argmin_{\vct{b}\in\mathcal B_t}
+  \Phi_t(\vct{b}),
+  \qquad
+  \Phi_t(\vct{b})
+  =\frac{r_t}{2}\vct{b}^{\tr}\vct{K}_t\vct{C}_t\vct{K}_t\vct{b}
+   -\vct{s}_t^{\tr}\vct{b}.}
+  \label{eq:computable-gain-objective}
+\end{equation}
+Unlike an oracle projection, this objective contains only the available
+precision, key, and observation noise.  Its gradient is
+\begin{equation}
+  \nabla\Phi_t(\vct{b})
+  =r_t\vct{k}_t\odot
+    \bigl[\vct{C}_t(\vct{b}\odot\vct{k}_t)\bigr]
+   -\vct{s}_t.
+  \label{eq:computable-gain-gradient}
+\end{equation}
+Without the constraints and with a full-support key, its stationarity equation
+is exactly Equation~\eqref{eq:gain-linear-system}; with the constraints it is
+the $\vct{C}_t$-energy projection of that system onto the capped
+diagonal-compatible gain set.  This is a computable energy surrogate, not the
+constrained posterior-MSE projection: the two objectives share the exact
+unconstrained minimizer but use different projection metrics.  Evaluating
+Equation~\eqref{eq:computable-gain-objective} never requires
+$\widehat{\vct{C}}_t^{-1}\vct{k}_t$.
+
+\paragraph{A low-dimensional coefficient family.}
+One explicit structural restriction is
+\begin{equation}
+  \vct{b}=\vct{R}_t\vct{\theta},
+  \qquad \vct{R}_t\in\R^{d\times m},
+  \qquad m\ll d,
+  \label{eq:tied-coefficient-family}
+\end{equation}
+where columns of $\vct{R}_t$ can, for example, tie channels into fixed groups.
+The computable problem becomes the $m$-dimensional quadratic program
+\begin{equation}
+  \vct{\theta}_t^\dagger
+  \in\argmin_{\substack{\vct{R}_t\vct{\theta}\geq\vct{0}\\
+               \vct{s}_t^{\tr}\vct{R}_t\vct{\theta}\leq1}}
+  \left\{
+  \frac12\vct{\theta}^{\tr}\vct{H}_t\vct{\theta}
+  -\vct{h}_t^{\tr}\vct{\theta}\right\},
+  \label{eq:grouped-gain-problem}
+\end{equation}
+where
+\begin{equation}
+  \vct{H}_t
+  =r_t\vct{R}_t^{\tr}\vct{K}_t\vct{C}_t\vct{K}_t\vct{R}_t,
+  \qquad
+  \vct{h}_t=\vct{R}_t^{\tr}\vct{s}_t.
+\end{equation}
+This needs $m$ precision--vector products followed by a small local solve.  For
+$\vct{k}_t\neq\vct{0}$, taking $m=1$ and $\vct{R}_t=\vct{1}$ gives
+$\vct{\kappa}_t=\beta_t\vct{k}_t$ with the closed form
+\begin{equation}
+  \boxed{
+  \beta_t
+  =\frac{\|\vct{k}_t\|_2^2}
+  {r_t\vct{k}_t^{\tr}\vct{C}_t\vct{k}_t},
+  \qquad
+  \vct{k}_t^{\tr}\vct{\kappa}_t
+  =\frac{\|\vct{k}_t\|_2^4}
+  {r_t\vct{k}_t^{\tr}\widehat{\vct{C}}_t\vct{k}_t
+   +\|\vct{k}_t\|_2^4}<1.}
+  \label{eq:scalar-galerkin-gain}
+\end{equation}
+The first expression uses the posterior precision $\vct{C}_t$; the second uses
+$\vct{C}_t=\widehat{\vct{C}}_t+\vct{k}_t\vct{k}_t^{\tr}/r_t$ to expose the
+same-key bound.  A nested sequence of column spaces for $\vct{R}_t$
+interpolates between this scalar gain and the full channelwise problem.
+Setting $m=d$ and $\vct{R}_t=\vct{I}$ removes the structural saving and
+recovers the full constrained channelwise problem; it equals the dense Kalman
+gain only when that gain belongs to $\mathcal B_t$.
+
+\paragraph{A fixed-work channelwise solver.}
+Alternatively, retain one coefficient per channel but run exactly $L$
+projected-gradient steps,
+\begin{equation}
+  \vct{b}_t^{(\ell+1)}
+  =\Pi_{\mathcal B_t}\!\left(
+    \vct{b}_t^{(\ell)}
+    -\eta_{t,\ell}
+      \left\{
+      r_t\vct{k}_t\odot
+       [\vct{C}_t(\vct{b}_t^{(\ell)}\odot\vct{k}_t)]
+      -\vct{s}_t
+      \right\}
+  \right),
+  \qquad \ell=0,\ldots,L-1.
+  \label{eq:projected-gain-iteration}
+\end{equation}
+The projection onto $\mathcal B_t$ is a nonnegative weighted-simplex
+projection, implemented by a scalar bisection or sorting.  A sufficient fixed
+step-size condition is
+\begin{equation}
+  0<\eta_{t,\ell}\leq
+  \lambda_{\max}^{-1}\!\left(
+    r_t\vct{K}_t\vct{C}_t\vct{K}_t
+  \right),
+  \label{eq:projected-gain-step-size}
+\end{equation}
+with the matrices restricted to the support of $\vct{k}_t$; a monotone line
+search is another option.  Equation~\eqref{eq:kalman-channel-coefficient}
+provides a natural diagonal-variational initialization for $\vct{b}_t^{(0)}$.
+The integer $L$ is now an explicit speed--accuracy knob: every iteration uses
+one dense matrix--vector product, reductions, and elementwise operations, but
+no inverse and no oracle gain.
+
+\subsection{Parallel scope}
+
+In the static model, all posterior precisions are available from the
+associative prefix
+\begin{equation}
+  \vct{C}_t=\vct{C}_0+
+  \sum_{\tau\leq t}\frac{\vct{k}_\tau\vct{k}_\tau^{\tr}}{r_\tau}.
+\end{equation}
+At projected-gradient iteration $\ell$, the required product for every token
+can equivalently be written
+\begin{equation}
+  \vct{C}_t\vct{u}_t^{(\ell)}
+  =\vct{C}_0\vct{u}_t^{(\ell)}
+   +\sum_{\tau\leq t}\frac{\vct{k}_\tau
+      (\vct{k}_\tau^{\tr}\vct{u}_t^{(\ell)})}{r_\tau},
+  \qquad
+  \vct{u}_t^{(\ell)}=\vct{b}_t^{(\ell)}\odot\vct{k}_t.
+  \label{eq:prefix-precision-matvec}
+\end{equation}
+Thus all positions can execute each solver stage concurrently.  Materializing
+all dense prefix matrices once gives sequence depth $O(\log T+L)$, after which
+the $L$ matrix--vector steps are token-local.  Alternatively,
+Equation~\eqref{eq:prefix-precision-matvec} is a causal linear-attention
+contraction with query $\vct{u}_t^{(\ell)}$; recomputing it at every stage gives
+$O(L\log T)$ sequence depth without materializing every prefix matrix.  In
+either schedule, the construction replaces each dense inverse by a fixed
+number of parallel precision--vector products.  It does not remove dense
+arithmetic, and with nonzero process noise constructing the exact dense
+$\vct{C}_t$ prefixes still has the nonlinear Riccati obstruction in
+Equation~\eqref{eq:exact-information}.
+
+\end{document}

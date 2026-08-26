@@ -1838,12 +1838,565 @@ $s>1$ decreases its retained variance further. Statistical overconfidence and ex
 are thus different, and often opposing, failure modes. The former suppresses future plasticity;
 the latter changes the current memory too aggressively.
 
-\subsection{A decision-aware protection objective}
+\subsection{Why a better diagonal projection cannot solve both problems}
+\label{subsec:discussion-correlation-aware-approximation}
+
+Avoiding posterior overconfidence and suppressing overwrite initially appear to ask for the same
+change, but a purely diagonal covariance exposes a conflict between them. Suppress the token
+index, let the predicted covariance be
+$\vct{P}^{-}=\diag(p_1,\ldots,p_{d_k})$, and define
+\begin{equation}
+  q_i=p_i k_i^2,
+  \qquad
+  z=\sum_i q_i,
+  \qquad
+  D=r+z.
+  \label{eq:discussion-correlation-comparison-notation}
+\end{equation}
+The exact one-step posterior, the reverse-KL diagonal projection, and the forward-KL moment
+projection are respectively
+\begin{align}
+  \vct{P}^{\star}
+  &=\vct{P}^{-}
+    -\frac{(\vct{P}^{-}\vct{k})(\vct{P}^{-}\vct{k})^\top}{D},
+  \label{eq:discussion-correlation-exact-posterior}\\
+  p_i^{\mathrm{rev}}
+  &=p_i-\frac{p_i^2k_i^2}{r+q_i},
+  &
+  p_i^{\mathrm{mom}}
+  &=p_i-\frac{p_i^2k_i^2}{D}.
+  \label{eq:discussion-correlation-diagonal-projections}
+\end{align}
+Because $r+q_i\leq D$, the reverse-KL state satisfies
+$p_i^{\mathrm{rev}}\leq p_i^{\mathrm{mom}}=P_{ii}^{\star}$. Replacing it by the moment
+projection therefore removes the one-step marginal overconfidence. It does not, however, protect
+the direction that was just observed.
+
+To see why, consider the posterior variance left along the same key. With
+$f(x)=rx/(r+x)$,
+\begin{align}
+  v^{\star}
+  :=\vct{k}^\top\vct{P}^{\star}\vct{k}
+  &=f(z), \notag\\
+  v^{\mathrm{rev}}
+  :=\sum_i k_i^2p_i^{\mathrm{rev}}
+  &=\sum_i f(q_i), \notag\\
+  v^{\mathrm{mom}}
+  :=\sum_i k_i^2p_i^{\mathrm{mom}}
+  &=v^{\star}
+    +\frac{2\sum_{i<j}q_iq_j}{D}.
+  \label{eq:discussion-directional-variance-comparison}
+\end{align}
+Since $f$ is nonnegative and subadditive on $\mathbb{R}_{+}$,
+\begin{equation}
+  v^{\star}\leq v^{\mathrm{rev}}\leq v^{\mathrm{mom}}.
+  \label{eq:discussion-directional-variance-ordering}
+\end{equation}
+Thus the reverse-KL approximation can underestimate every marginal variance while still
+\emph{overestimating} uncertainty in the observed direction. The missing quantity is the
+rank-one cross-coordinate correction in
+Equation~\eqref{eq:discussion-correlation-exact-posterior}, whose quadratic contribution along
+$\vct{k}$ is negative. It preserves uncertainty in individual coordinates while recording that a
+particular linear combination has already been measured. For an immediate repeated-key observation with noise
+$r_{\mathrm{next}}$, the effective write
+$v/(r_{\mathrm{next}}+v)$ is strictly increasing in $v$. The exact covariance can consequently be
+better calibrated and less willing to overwrite the same association at once. A diagonal moment
+projection keeps the correct marginals but discards precisely the correlations that provide this
+directional protection, so it can increase repeated-key writes relative to reverse KL.
+
+\paragraph{Matching the exact repeated-key write with a scalar scale.}
+If the immediate objective is only to match the protection in the direction that was just
+observed, the existing information scale provides a cheaper approximation than retaining the
+full covariance. Apply a scale $s$ only to the diagonal precision passed forward, leaving the
+current mean gain unchanged:
+\begin{equation}
+  p_i(s)
+  =\left(p_i^{-1}+s\frac{k_i^2}{r}\right)^{-1}
+  =\frac{rp_i}{r+sq_i},
+  \qquad
+  v(s):=\sum_i k_i^2p_i(s)
+  =\sum_i\frac{rq_i}{r+sq_i}.
+  \label{eq:discussion-directional-scale-update}
+\end{equation}
+The ordinary reverse-KL projection is $s=1$, for which
+$v(1)=v^{\mathrm{rev}}\geq v^\star$. Hence an exact one-step directional calibration chooses
+$s_{\mathrm{dir}}^\star$ to satisfy
+\begin{equation}
+  \sum_i\frac{x_i}{1+s_{\mathrm{dir}}^\star x_i}
+  =\frac{X}{1+X},
+  \qquad
+  x_i=\frac{q_i}{r},
+  \qquad
+  X=\sum_i x_i.
+  \label{eq:discussion-directional-scale-root}
+\end{equation}
+For $X>0$, the left-hand side is continuous and strictly decreasing in
+$s_{\mathrm{dir}}^\star$, so the solution is unique. If $d_{\mathrm{act}}$ coordinates have
+$q_i>0$, subadditivity at $s=1$ and concavity at $s=d_{\mathrm{act}}$ give
+$1\leq s_{\mathrm{dir}}^\star\leq d_{\mathrm{act}}$. Balanced contributions
+$q_i=q$ attain $s_{\mathrm{dir}}^\star=d_{\mathrm{act}}$; in particular, a dense symmetric key
+recovers the width calibration $s=d_k$ derived earlier. In the low-SNR regime $z/r\ll1$, expanding
+Equation~\eqref{eq:discussion-directional-scale-root} gives the participation-ratio approximation
+\begin{equation}
+  s_{\mathrm{dir}}^\star
+  \simeq d_{\mathrm{eff}}
+  :=\frac{\left(\sum_iq_i\right)^2}{\sum_iq_i^2}.
+  \label{eq:discussion-directional-effective-dimension}
+\end{equation}
+Thus the empirically useful $s>1$ can be interpreted as compensating, on average, for the
+directional confidence that was lost when the exact rank-one covariance correction was discarded.
+
+By construction, Equation~\eqref{eq:discussion-directional-scale-root} makes
+$v(s_{\mathrm{dir}}^\star)=v^\star$. With no intervening state dynamics or process noise, it
+therefore reproduces the exact effective gain
+$v^\star/(r_{\mathrm{next}}+v^\star)$ for an immediate repeated key. This is only a directional
+scalar, not the full Kalman gain vector. This is only a directional match: it generally does not
+recover the exact marginal variances or gains for arbitrary future keys, and
+$s_{\mathrm{dir}}^\star>1$ makes the coordinatewise marginal overconfidence of reverse KL more
+severe. Moreover, the exact root depends on the recurrent quantities $q_i=p_i k_i^2$. Computing it
+online couples the channels and prevents the current recurrence from being represented by
+input-only scalar M\"obius maps. A fixed or headwise learned $s$, or an input-only proxy such as
+$\|\vct{k}\|_2^4/\|\vct{k}\|_4^4$ when the predicted variances are nearly isotropic, preserves
+the existing associative scan but only amortizes the directional match. Restoring covariance
+geometry more generally requires a richer state family.
+
+\paragraph{Block reverse-KL hierarchy.}
+A structured compromise is to partition the key coordinates into blocks
+$\mathcal{G}_1,\ldots,\mathcal{G}_m$ of size at most $b$ and retain a dense covariance inside
+each block. For a block-diagonal predicted covariance, reverse-KL projection onto this family
+sets
+\begin{equation}
+  \vct{P}_g^{\mathrm{BR}}
+  =\left[
+      (\vct{P}_g^{-})^{-1}
+      +\frac{\vct{k}_g\vct{k}_g^\top}{r}
+    \right]^{-1}
+  =\vct{P}_g^{-}
+   -\frac{\vct{P}_g^{-}\vct{k}_g\vct{k}_g^\top\vct{P}_g^{-}}
+     {r+z_g},
+  \qquad
+  z_g=\vct{k}_g^\top\vct{P}_g^{-}\vct{k}_g.
+  \label{eq:discussion-block-reverse-kl}
+\end{equation}
+The current posterior mean remains the exact Kalman mean under the block-diagonal predictive
+prior, with gain
+\begin{equation}
+  \vct{\kappa}_g
+  =\frac{\vct{P}_g^{-}\vct{k}_g}
+    {r+\sum_{\ell=1}^{m}z_\ell}.
+  \label{eq:discussion-block-gain}
+\end{equation}
+For the diagonal incoming covariance used in
+Equations~\eqref{eq:discussion-correlation-exact-posterior}--
+\eqref{eq:discussion-correlation-diagonal-projections}, every $i\in\mathcal{G}_g$ obeys
+\begin{equation}
+  p_i^{\mathrm{rev}}
+  \leq (\vct{P}_g^{\mathrm{BR}})_{ii}
+  \leq p_i^{\mathrm{mom}},
+  \label{eq:discussion-block-marginal-ordering}
+\end{equation}
+while the retained variance along the key is
+\begin{equation}
+  v^{\mathrm{BR}}
+  =\sum_{g=1}^{m}f(z_g),
+  \qquad
+  v^{\star}\leq v^{\mathrm{BR}}
+  \leq v^{\mathrm{rev}}\leq v^{\mathrm{mom}}.
+  \label{eq:discussion-block-directional-ordering}
+\end{equation}
+Coarsening a nested block partition therefore moves the marginal variances upward toward their
+exact values while moving the repeated-key directional variance downward toward its exact value.
+Singleton blocks recover the diagonal reverse-KL update; one full block recovers the exact
+covariance. Unlike interpolation between forward and reverse diagonal KL, this hierarchy improves
+both quantities because it restores the missing correlations. These are one-step statements for a
+fixed predictive prior. They do not order arbitrary future keys, trajectories with intervening
+dynamics and process noise, realized updates with different residuals, or the loss after end-to-end
+training.
+
+This improvement has a controlled but nontrivial cost. With fixed block size $b$, the covariance
+state uses $O(d_kb)$ numbers. Each block Riccati update can in principle be represented as a
+matrix-valued linear-fractional map and composed associatively, replacing each scalar $2\times2$
+M\"obius scan by a $2b\times2b$ block scan when the block transitions are invertible and the
+transition and process covariance preserve the fixed partition. The current diagonal
+parameterization satisfies these structural conditions. A straightforward combine costs
+$O(d_kb^2)$ work across all blocks, and stable factorizations and backward kernels are
+substantially more involved than in the diagonal implementation. The sum
+$\sum_g z_g$ required by Equation~\eqref{eq:discussion-block-gain} is token-local and does not
+couple the recurrent block maps. A diagonal-plus-low-rank covariance captures correlations across
+blocks more directly, but its rank grows with every observation; any fixed-rank truncation is
+nonlinear and order dependent, so exact associativity is lost.
+
+For $d_k=128$, a practical first hierarchy is the nested comparison
+$b\in\{1,8,16\}$, with $b=128$ used only as the dense reference. The variants should be matched
+for their initial and stationary $\beta_t^{\mathrm{eff}}$, or for measured memory half-life, so
+that the comparison isolates covariance geometry rather than a different write temperature.
+Diagnostics should include marginal-variance error against dense filtering, uncertainty in the
+most recent key direction, gains on repeated and unrelated keys, and downstream retrieval loss.
+
+Block reverse KL is therefore the clean covariance-based candidate when a heavier scan is
+acceptable. Under the strict $O(d_k)$ scalar-scan budget, the process-noise-floor update in
+Subsection~\ref{subsec:discussion-process-floor-approximation} remains the better fidelity
+approximation: it lies between reverse KL and moment matching and preserves the independent
+M\"obius maps. Because it cannot retain posterior correlations, however, it does not guarantee
+less overwrite. An alternative is to replace covariance fidelity by fidelity to the filtering
+action itself.
+
+\subsection{From covariance projection to gain matching}
+\label{subsec:discussion-gain-matching}
+
+The desired approximation can be posed directly before choosing a divergence between
+covariances. Define the gain operator
+\begin{equation}
+  \mathsf{K}(\vct{P};\vct{k},r)
+  :=\frac{\vct{P}\vct{k}}
+    {r+\vct{k}^{\top}\vct{P}\vct{k}}.
+  \label{eq:discussion-gain-operator}
+\end{equation}
+Let $\vct{P}_t^{\mathrm{KF}}$ denote the covariance from the unprojected dense Kalman trajectory,
+and restrict the retained diagonal to the bounded positive family
+$\mathcal{P}=[p_{\min},p_{\max}]^{d_k}$ with
+$0<p_{\min}<p_{\max}<\infty$. Given a probe distribution
+$\nu_t$ over key--noise pairs $(\vct{\ell},r')$ applied immediately to that covariance, define
+\begin{equation}
+\begin{aligned}
+  \vct{p}_t^{\mathrm{GM}}
+  \in\operatorname*{arg\,min}_{\vct{p}\in\mathcal{P}}
+  \mathbb{E}_{(\vct{\ell},r')\sim\nu_t}\!\left[
+    \Delta_t^{\mathrm{KF}}(\vct{\ell},r')
+    \left\|
+      \mathsf{K}(\diag(\vct{p});\vct{\ell},r')
+      -\mathsf{K}(\vct{P}_t^{\mathrm{KF}};\vct{\ell},r')
+    \right\|_2^2
+  \right],\\
+  \Delta_t^{\mathrm{KF}}(\vct{\ell},r')
+  :=r'+\vct{\ell}^\top\vct{P}_t^{\mathrm{KF}}\vct{\ell}.
+  \label{eq:discussion-gain-matching-projection}
+\end{aligned}
+\end{equation}
+Unlike reverse or forward KL, Equation~\eqref{eq:discussion-gain-matching-projection} asks for the
+diagonal state whose induced filtering action is closest to the exact action. A known transition
+and process-noise covariance can instead be incorporated by applying the full prediction map
+$\vct{P}\mapsto\vct{D}\vct{P}\vct{D}^\top+\vct{\Omega}$ to both covariances before evaluating
+the same objective. The probe law
+makes the required notion of closeness explicit: emphasizing the most recent key optimizes
+repeated-key gain fidelity to the dense filter, whereas a broader law protects gain fidelity across
+likely future observation-key
+directions. There is no distribution-free best diagonal state because different probes expose
+different missing cross-coordinate correlations.
+
+The weight in Equation~\eqref{eq:discussion-gain-matching-projection} follows from filtering risk
+rather than being chosen heuristically. For the exact dense predictive covariance
+$\widehat{\vct{P}}_t^{\mathrm{KF}}$, let
+\begin{equation}
+  \Delta_t^{\mathrm{KF}}
+  =r_t+\vct{k}_t^\top\widehat{\vct{P}}_t^{\mathrm{KF}}\vct{k}_t,
+  \qquad
+  \vct{\kappa}_t^{\mathrm{KF}}
+  =\mathsf{K}(\widehat{\vct{P}}_t^{\mathrm{KF}};\vct{k}_t,r_t).
+  \label{eq:discussion-exact-gain-target}
+\end{equation}
+For one value column, applying an arbitrary gain $\vct{g}$ to the same predictive mean and prior
+has one-step mean-squared error
+\begin{equation}
+  \mathcal{R}_t^{\mathrm{KF}}(\vct{g})
+  =\operatorname{Tr}\!\left[
+    (\vct{I}-\vct{g}\vct{k}_t^\top)
+    \widehat{\vct{P}}_t^{\mathrm{KF}}
+    (\vct{I}-\vct{g}\vct{k}_t^\top)^\top
+    +r_t\vct{g}\vct{g}^\top
+  \right].
+  \label{eq:discussion-exact-gain-risk}
+\end{equation}
+Completing the square gives
+\begin{equation}
+  \mathcal{R}_t^{\mathrm{KF}}(\vct{g})
+  -\mathcal{R}_t^{\mathrm{KF}}(\vct{\kappa}_t^{\mathrm{KF}})
+  =\Delta_t^{\mathrm{KF}}
+   \|\vct{g}-\vct{\kappa}_t^{\mathrm{KF}}\|_2^2.
+  \label{eq:discussion-excess-risk-gain-distance}
+\end{equation}
+Thus innovation-weighted gain error is not merely a convenient proxy: for this one-step problem,
+it is exactly the excess Bayes risk of the approximate mean update for every $\vct{g}$.
+Equivalently, since the innovation has variance
+$\Delta_t^{\mathrm{KF}}$, it is the expected squared distance between the approximate and exact posterior
+means. For $d_v$ conditionally independent value columns, both sides are multiplied by $d_v$.
+
+This identity suggests the direct constrained problem
+\begin{equation}
+  \vct{\kappa}_t^\dagger
+  \in\operatorname*{arg\,min}_{\vct{g}\in\overline{\mathcal{G}}_{\mathrm{scan},t}}
+    \Delta_t^{\mathrm{KF}}
+    \|\vct{g}-\vct{\kappa}_t^{\mathrm{KF}}\|_2^2,
+  \label{eq:discussion-direct-gain-projection}
+\end{equation}
+where $\overline{\mathcal{G}}_{\mathrm{scan},t}$ is the closure of the gains realizable by the
+chosen fixed-state associative recurrence. The pointwise diagonal family induced by
+$\mathcal{P}$ is
+\begin{equation}
+  \mathcal{G}_{\mathrm{diag}}(\vct{k}_t,r_t;\mathcal{P})
+  =\left\{
+    \mathsf{K}(\diag(\vct{p});\vct{k}_t,r_t):
+    \vct{p}\in\mathcal{P}
+  \right\}.
+  \label{eq:discussion-diagonal-gain-family}
+\end{equation}
+Ignoring the finite bounds, its closure is
+\begin{equation}
+  \overline{\mathcal{G}}_{\mathrm{diag}}(\vct{k}_t)
+  =\left\{
+    \vct{g}:g_i=\gamma_i k_{t,i},\ \gamma_i\geq0,\
+    \vct{k}_t^\top\vct{g}\leq1
+  \right\}.
+  \label{eq:discussion-diagonal-gain-closure}
+\end{equation}
+For finite strictly positive diagonal variances, $\gamma_i>0$ on the support of $\vct{k}_t$ and
+$\vct{k}_t^\top\vct{g}<1$. Moreover, the pointwise family in
+Equation~\eqref{eq:discussion-diagonal-gain-family} is only a relaxation of the gains jointly
+reachable by a shared recurrent scan state.
+The exact dense product $\widehat{\vct{P}}_t^{\mathrm{KF}}\vct{k}_t$ can rotate the key, reverse an
+individual coordinate sign, or be nonzero where $k_{t,i}=0$. If the resulting gain violates the
+alignment conditions in Equation~\eqref{eq:discussion-diagonal-gain-closure}, no diagonal
+covariance can reproduce it exactly. Failure to lie only in the bounded family of
+Equation~\eqref{eq:discussion-diagonal-gain-family} instead means that no diagonal within the
+chosen numerical range can reproduce it. Ignoring those finite bounds, when a pointwise match exists its
+action-equivalent predictive diagonal,
+\begin{equation}
+  \widehat p_{t,i}^{\mathrm{act}}
+  =\frac{r_t\kappa_{t,i}^{\mathrm{KF}}}
+    {k_{t,i}(1-\vct{k}_t^\top\vct{\kappa}_t^{\mathrm{KF}})}
+  =\frac{(\widehat{\vct{P}}_t^{\mathrm{KF}}\vct{k}_t)_i}{k_{t,i}},
+  \label{eq:discussion-action-equivalent-current-diagonal}
+\end{equation}
+for coordinates with $k_{t,i}\neq0$, is key dependent, may fail positivity, and is not a reusable
+approximation to the covariance. Computing it also already requires the dense covariance--key
+product that the approximation is intended to avoid.
+
+There is a further causal distinction between optimizing a gain and optimizing the posterior state.
+The projected $\vct{p}_t$ is formed after $\vct{\kappa}_t$ has updated the memory, so changing
+$\vct{p}_t$ cannot improve the gain at the same token. It first changes the prediction and gain at
+token $t+1$. For a candidate diagonal state $\vct{p}$, define
+\begin{align}
+  \widehat{\vct{P}}_{t+1}(\vct{p})
+  &=\vct{D}_{t+1}\diag(\vct{p})\vct{D}_{t+1}^\top
+    +\vct{\Omega}_{t+1}, \notag\\
+  \widehat{\vct{P}}_{t+1}^{\mathrm{KF}}
+  &=\vct{D}_{t+1}\vct{P}_t^{\mathrm{KF}}\vct{D}_{t+1}^\top
+    +\vct{\Omega}_{t+1}, \notag\\
+  \vct{\kappa}_{t+1}(\vct{p})
+  &=\mathsf{K}(\widehat{\vct{P}}_{t+1}(\vct{p});
+    \vct{k}_{t+1},r_{t+1}), \notag\\
+  \Delta_{t+1}^{\mathrm{KF}}
+  &=r_{t+1}+\vct{k}_{t+1}^\top
+    \widehat{\vct{P}}_{t+1}^{\mathrm{KF}}\vct{k}_{t+1},
+  \qquad
+  \vct{\kappa}_{t+1}^{\mathrm{KF}}
+  =\mathsf{K}(\widehat{\vct{P}}_{t+1}^{\mathrm{KF}};
+    \vct{k}_{t+1},r_{t+1}).
+  \label{eq:discussion-candidate-next-gain}
+\end{align}
+The gain-aware analogue of a one-step covariance projection is therefore
+\begin{equation}
+  \vct{p}_t^\dagger
+  \in\operatorname*{arg\,min}_{\vct{p}\in\mathcal{P}}
+    \mathbb{E}_{\nu_t}\!\left[
+      \Delta_{t+1}^{\mathrm{KF}}
+      \|\vct{\kappa}_{t+1}(\vct{p})
+       -\vct{\kappa}_{t+1}^{\mathrm{KF}}\|_2^2
+    \right],
+  \label{eq:discussion-gain-aware-state-projection}
+\end{equation}
+where $\nu_t(\cdot\mid\mathcal{F}_t)$ is the conditional distribution of the next transition,
+process-noise covariance, key, and observation noise. A discounted multi-step version replaces the integrand by the corresponding sum
+over future gains. Equation~\eqref{eq:discussion-gain-aware-state-projection} makes explicit that
+there is no distribution-free best diagonal covariance: the useful approximation depends on which
+future key directions will query the state.
+
+\paragraph{A tractable local approximation.}
+The exact objective is nonlinear because the candidate covariance appears in both the numerator
+and denominator of $\mathsf{K}$, and evaluating it against
+$\vct{P}_t^{\mathrm{KF}}$ requires dense matrix--vector products. A tractable local surrogate
+replaces the globally rolled covariance by the exact one-step posterior $\vct{P}_t^\star$ formed
+from the retained diagonal predictive prior. This target has the diagonal-minus-rank-one form in
+Equation~\eqref{eq:discussion-correlation-exact-posterior}. Suppressing the token index, for a probe
+$(\vct{\ell},r')$, abbreviate
+\begin{equation}
+  \vct{\kappa}^\star(\vct{\ell},r')
+  =\mathsf{K}(\vct{P}^\star;\vct{\ell},r'),
+  \qquad
+  \Delta^\star(\vct{\ell},r')
+  =r'+\vct{\ell}^\top\vct{P}^\star\vct{\ell}.
+  \label{eq:discussion-probe-gain-notation}
+\end{equation}
+Linearizing the gain around $\vct{P}^\star$ gives
+\begin{equation}
+  \mathsf{K}(\diag(\vct{p});\vct{\ell},r')
+  -\vct{\kappa}^\star(\vct{\ell},r')
+  \simeq
+  \frac{
+    (\vct{I}-\vct{\kappa}^\star(\vct{\ell},r')\vct{\ell}^\top)
+    (\diag(\vct{p})-\vct{P}^\star)\vct{\ell}}
+    {\Delta^\star(\vct{\ell},r')}.
+  \label{eq:discussion-gain-linearization}
+\end{equation}
+Define
+\begin{equation}
+  \vct{B}(\vct{\ell},r')
+  =(\vct{I}-\vct{\kappa}^\star(\vct{\ell},r')\vct{\ell}^\top)
+    \diag(\vct{\ell}),
+  \qquad
+  \vct{y}(\vct{\ell},r')
+  =(\vct{I}-\vct{\kappa}^\star(\vct{\ell},r')\vct{\ell}^\top)
+    \vct{P}^\star\vct{\ell}.
+  \label{eq:discussion-gain-linearization-design}
+\end{equation}
+Substitution into Equation~\eqref{eq:discussion-gain-matching-projection}, with
+$\vct{P}_t^{\mathrm{KF}}$ replaced by this local target, yields the nonnegative
+Jacobian-linearized quadratic problem
+\begin{equation}
+  \vct{p}_t^{\mathrm{lin}}
+  \in\operatorname*{arg\,min}_{\vct{p}\in\mathcal{P}}
+    \mathbb{E}_{\nu_t}\!\left[
+      \frac{\|\vct{B}(\vct{\ell},r')\vct{p}
+       -\vct{y}(\vct{\ell},r')\|_2^2}
+      {\Delta^\star(\vct{\ell},r')}
+    \right].
+  \label{eq:discussion-linearized-gain-projection}
+\end{equation}
+For a finite set of probe keys, this is a box-constrained least-squares problem. It retains
+the denominator sensitivity of the Kalman gain. Its normal matrix is generally dense, although for
+$M$ probes it is a diagonal matrix plus a correction of rank at most $2M$.
+
+A cheaper diagonal-Hessian approximation freezes the candidate denominator at
+$\Delta^\star(\vct{\ell},r')$, equivalently dropping the left factor
+$\vct{I}-\vct{\kappa}^\star\vct{\ell}^\top$ in
+Equation~\eqref{eq:discussion-gain-linearization}. The coordinates then decouple:
+\begin{equation}
+  p_{t,i}^{\mathrm{FD}}
+  =\Pi_{[p_{\min},p_{\max}]}\!\left(
+    \frac{
+      \mathbb{E}_{\nu_t}\!\left[
+        \ell_i(\vct{P}^\star\vct{\ell})_i/
+        \Delta^\star(\vct{\ell},r')
+      \right]}
+    {
+      \mathbb{E}_{\nu_t}\!\left[
+        \ell_i^2/\Delta^\star(\vct{\ell},r')
+      \right]}
+  \right).
+  \label{eq:discussion-frozen-denominator-gain-projection}
+\end{equation}
+Here $\Pi_{[p_{\min},p_{\max}]}$ clamps the unconstrained coordinatewise minimizer to the retained
+variance range.
+If a coordinate has zero probe energy, the objective does not identify that coordinate and its
+previous or moment-matched value can be retained. When $\vct{P}_t^\star$ is the exact one-step
+posterior in Equation~\eqref{eq:discussion-correlation-exact-posterior}, rename its incoming
+diagonal $\vct{p}^{-}$ and set $z=\sum_i p_i^-k_i^2$. Every required product is then available in
+linear time from
+\begin{equation}
+  \vct{P}_t^\star\vct{\ell}
+  =\vct{p}^{-}\odot\vct{\ell}
+   -\frac{(\vct{p}^{-}\odot\vct{k})
+     (\vct{p}^{-}\odot\vct{k})^\top\vct{\ell}}
+    {r+z}.
+  \label{eq:discussion-rank-one-probe-product}
+\end{equation}
+Thus, for this local rank-one target, $M$ probe directions cost $O(Md_k)$ without storing the
+dense covariance. A general exact-KLA trajectory instead requires dense matrix--vector products
+unless additional covariance structure is retained. For isotropic probes in the high-noise regime,
+where the weight $1/\Delta^\star$ is approximately direction independent,
+Equation~\eqref{eq:discussion-frozen-denominator-gain-projection} reduces to the moment projection
+$p_{t,i}=P_{t,ii}^\star$ when the box constraints are inactive; otherwise it gives the clipped
+moment solution. A point mass on the most recent key similarly gives the action-equivalent solution
+below when that solution is admissible. A mixture of these probe laws continuously trades global
+gain fidelity against repeated-key gain fidelity.
+
+\paragraph{A closed-form repeated-key example.}
+The distinction from scalar directional matching is already visible in the one-step setting of
+Equation~\eqref{eq:discussion-correlation-exact-posterior}. With no intervening dynamics or
+process noise, define
+\begin{equation}
+  p_i^{\mathrm{act}}
+  =\frac{r}{r+z}p_i^-.
+  \label{eq:discussion-repeated-key-action-state}
+\end{equation}
+Then
+\begin{equation}
+  \diag(\vct{p}^{\mathrm{act}})\vct{k}
+  =\vct{P}^\star\vct{k}
+  =\frac{r}{r+z}(\vct{p}^{-}\odot\vct{k}),
+  \qquad
+  \vct{k}^\top\diag(\vct{p}^{\mathrm{act}})\vct{k}
+  =\vct{k}^\top\vct{P}^\star\vct{k}.
+  \label{eq:discussion-repeated-key-action-match}
+\end{equation}
+When $\vct{p}^{\mathrm{act}}\in\mathcal{P}$, it therefore reproduces the entire exact gain vector
+for the next identical key, for any next observation noise. Outside the chosen box it remains the
+unconstrained action-equivalent reference. In contrast,
+Equation~\eqref{eq:discussion-directional-scale-root} enforces only the second equality and thus
+matches only $\beta^{\mathrm{eff}}$. The action-equivalent state is still not an exact covariance
+projection: on coordinates where $k_i\neq0$ it is the unique diagonal action match, while
+coordinates with $k_i=0$ are unconstrained. The uniform extension in
+Equation~\eqref{eq:discussion-repeated-key-action-state} chooses to shrink those unobserved
+coordinates as well. It has no guarantee for a different future key and couples all channels
+through $z$. It consequently cannot be inserted into the
+current independent M\"obius maps without losing their input-only form.
+
+\paragraph{Computational consequence.}
+Equations~\eqref{eq:discussion-linearized-gain-projection} and
+\eqref{eq:discussion-frozen-denominator-gain-projection} are local approximations to the ideal
+gain objective, not variational projections. For the one-step rank-one target they require only
+the structured products in Equation~\eqref{eq:discussion-rank-one-probe-product}; a general dense
+target requires dense products. Their coefficients depend on the incoming recurrent state through
+$\vct{p}^{-}$, $z$, and $\Delta^\star$. The resulting update couples channels and therefore is not an
+input-only collection of scalar M\"obius maps. The diagonal-Hessian rule reduces arithmetic and
+storage to $O(Md_k)$ for fixed $M$, but it does not by itself preserve the present associative gain
+scan.
+
+To retain that scan, one can restrict the candidate in
+Equation~\eqref{eq:discussion-gain-matching-projection} to the existing scaled family
+$\vct{p}(s)$ from Equation~\eqref{eq:discussion-directional-scale-update}. A fixed or headwise
+$s$, or a prescribed token-input-only rule for $s_t$, preserves an input-only local map while
+matching only the part of the dense gain reachable by that one-dimensional family. The
+repeated-key approximation $s\simeq d_{\mathrm{eff}}$ in
+Equation~\eqref{eq:discussion-directional-effective-dimension} is a useful initialization for
+matching the scalar effective gain; it solves the full vector objective only in balanced symmetric
+cases. Solving the exact gain objective for $s_t$ from the recurrent covariance, or allowing the
+probe weights to depend on that state, gives a closer local solution but destroys the independent
+scan.
+
+Finally, $\vct{\kappa}$ is invariant under the common scale gauge
+\begin{equation}
+  \vct{P}\mapsto\lambda\vct{P},
+  \qquad \vct{p}\mapsto\lambda\vct{p},
+  \qquad r\mapsto\lambda r,
+  \qquad (p_{\min},p_{\max})\mapsto
+    \lambda(p_{\min},p_{\max}).
+  \label{eq:discussion-gain-matching-scale-gauge}
+\end{equation}
+The risk weight $\Delta^\star$ scales by $\lambda$. Under this simultaneous transformation the optimizer
+scales with $\lambda$ and the objective is multiplied by a common constant. Holding the candidate
+box fixed would break this invariance. A fixed gauge, for example $r\equiv1$, or normalized weights
+are useful when objectives with independently free scales are aggregated across heads or steps;
+unweighted gain error is gauge invariant but loses the exact excess-risk interpretation.
+Equation~\eqref{eq:discussion-excess-risk-gain-distance} is also a local identity for a common
+predictive mean and prior. Across multiple recursively projected steps, the gain objective remains
+a decision-aware approximation criterion, but it is not equal to the total trajectory-level
+filtering error.
+
+Gain matching seeks fidelity to the exact Kalman action; it does not deliberately make that action
+more conservative. If the task prefers additional retention beyond the approximate Kalman
+operating point, that preference should be introduced separately rather than hidden inside a
+covariance projection.
+
+\subsection{Learning confidence as a bounded protection state}
 \label{subsec:discussion-decision-aware-protection}
 
-The current comparison further localizes the useful intervention. A larger information scale
-improves retention by changing the precision state passed to later tokens, whereas the
-$B=2$ channelwise cap changes only those current gains for which
+The gain-matching objective addresses approximation error, whereas the observed benefit of a
+larger information scale points to a different failure mode: the carried state does not protect
+past writes strongly enough from later updates. The appropriate intervention should therefore
+increase the confidence passed forward, rather than merely truncate the current gain after it has
+been computed. A larger protection scale changes this retention--plasticity operating point,
+whereas the $B=2$ channelwise cap changes only those current gains for which
 $\beta_{t,i}^{\mathrm{ch}}>2$. The cap can therefore be inactive even when repeated writes are too
 strong; when it is active, it can remove useful anisotropy without materially changing
 $\beta_t^{\mathrm{eff}}=\sum_i k_{t,i}^2\beta_{t,i}^{\mathrm{ch}}$. Its failure to improve accuracy
@@ -1869,6 +2422,12 @@ The additional term prices uncertainty remaining in the direction that has just 
 unique minimizer leaves the current posterior-mean correction unchanged and strengthens
 only the precision retained for future tokens:
 \begin{equation}
+  \widehat c_{t,i}
+  =\frac{c_{t-1,i}}
+    {\alpha_{t,i}^2+\omega_{t,i}c_{t-1,i}},
+  \qquad
+  \widehat p_{t,i}=\widehat c_{t,i}^{-1},
+  \qquad
   \vct{\kappa}_t
   =\frac{\widehat{\vct{p}}_t\odot\vct{k}_t}
     {r_t+\sum_i\widehat p_{t,i}k_{t,i}^2},
@@ -1880,8 +2439,8 @@ only the precision retained for future tokens:
 \end{equation}
 Consequently, $\rho_h$ does not alter the write at the token that supplies the evidence, but it
 reduces the gains of later tokens whose coordinatewise key energy overlaps that evidence. This is
-exactly the causal effect supported when a larger information scale improves accuracy. It is also
-the $(s_{\mathrm{write}},s_{\mathrm{protect}})=(1,\rho_h)$ specialization of the split
+consistent with the causal effect indicated when a larger information scale improves accuracy. It
+is also the $(s_{\mathrm{write}},s_{\mathrm{protect}})=(1,\rho_h)$ specialization of the split
 variational objective in Equation~\eqref{eq:discussion-split-variational-objective}.
 
 Because protection is a multiplicative scale, the smallest useful parameterization is one bounded
@@ -1903,6 +2462,22 @@ only changes the token-local coefficients of the M\"obius maps, so both the unce
 the affine memory scan are preserved. A positive process-noise floor remains necessary to restore
 plasticity and prevent the learned protection ratio from freezing the memory.
 
+To encourage rather than merely permit confidence, initialize $\rho_h$ at a fixed value
+$\rho_0>1$ selected by the information-scale sweep and optionally use the weak log-scale anchor
+\begin{equation}
+  \mathcal{L}_{\rho}
+  =\lambda_{\rho}\sum_h
+    \left(\log\rho_h-\log\rho_0\right)^2.
+  \label{eq:discussion-protection-anchor}
+\end{equation}
+Regularizing the raw state $\vct{c}_t$ itself is less suitable: its magnitude grows with the
+evidence history and participates in a common covariance--noise scale symmetry. The global scale
+should first be fixed, for example with $r_t\equiv1$ and a fixed prior scale, so that $\rho_h$ has
+an identifiable retention meaning. A bounded $\rho_h$, together with
+$\omega_{t,i}\geq\omega_{\min}>0$, lets training choose stronger protection without reaching the
+degenerate zero-plasticity limit. Reducing $\omega_t$ would also increase confidence, but it changes
+the assumed drift of the latent memory and is therefore a less targeted intervention.
+
 For $\rho_h=1$, Equation~\eqref{eq:discussion-retention-objective} reduces to ordinary variational
 filtering. For $\rho_h>1$, it is a decision-aware variational objective rather than the ELBO of the
 original linear--Gaussian observation model: a single Gaussian likelihood cannot leave the current
@@ -1912,6 +2487,117 @@ noise calibrated under that coherent model. Under the fixed-size associative-mem
 however, $\rho_h$ has a direct interpretation as the cost of future overwrite. The retained
 precision should then be described as a gain-conditioning or protection state, while channelwise
 and off-key caps remain optional worst-case guardrails rather than the primary retention mechanism.
+
+\paragraph{Separating a reference uncertainty state from protection.}
+If an independently testable uncertainty approximation and overwrite control are both useful, a
+more explicit design carries two conceptually distinct states. Let
+$\vct{P}_t^{\mathrm{unc}}$ be a fidelity-oriented reference covariance obtained from either the
+moment projection or the scan-compatible process-noise-floor rule. Given its prediction, define
+\begin{equation}
+  \vct{\kappa}_t^{\mathrm{unc}}
+  =\frac{\widehat{\vct{P}}_t^{\mathrm{unc}}\vct{k}_t}
+    {\Delta_t^{\mathrm{unc}}},
+  \qquad
+  \Delta_t^{\mathrm{unc}}
+  =r_t+\vct{k}_t^\top\widehat{\vct{P}}_t^{\mathrm{unc}}\vct{k}_t.
+  \label{eq:discussion-calibrated-kalman-gain}
+\end{equation}
+For one value column and an arbitrary linear gain $\vct{g}$, use the one-step reference risk
+\begin{equation}
+\begin{aligned}
+  \mathcal{R}_t^{\mathrm{ref}}(\vct{g})
+  &=
+  \operatorname{Tr}\!\left[
+    (\vct{I}-\vct{g}\vct{k}_t^\top)
+    \widehat{\vct{P}}_t^{\mathrm{unc}}
+    (\vct{I}-\vct{g}\vct{k}_t^\top)^\top
+    +r_t\vct{g}\vct{g}^\top
+  \right] \\
+  &=
+  \mathcal{R}_t^{\mathrm{ref}}(\vct{\kappa}_t^{\mathrm{unc}})
+  +\Delta_t^{\mathrm{unc}}
+   \|\vct{g}-\vct{\kappa}_t^{\mathrm{unc}}\|_2^2.
+\end{aligned}
+  \label{eq:discussion-calibrated-gain-risk}
+\end{equation}
+
+The second state records the importance of past key directions. The full discounted Gram state
+would be
+\begin{equation}
+  \widehat{\vct{A}}_t
+  =\eta_t\vct{A}_{t-1},
+  \qquad
+  \vct{A}_t
+  =\widehat{\vct{A}}_t
+   +\frac{\xi_t}{r_t}\vct{k}_t\vct{k}_t^\top,
+  \qquad
+  0<\eta_t\leq1,\quad \xi_t\geq0.
+  \label{eq:discussion-protection-full-gram}
+\end{equation}
+For the rank-one memory change
+$\Delta\vct{S}_t=\vct{g}\vct{e}_t^\top$, its discounted squared effect at the protected keys is
+proportional to
+$\|\vct{e}_t\|_2^2\vct{g}^\top\widehat{\vct{A}}_t\vct{g}$. Absorbing an expected or normalized
+residual scale into $\lambda_{\mathrm{ow}}$, the regularized decision rule is
+\begin{equation}
+\begin{aligned}
+  \overline{\vct{\kappa}}_t
+  &=\arg\min_{\vct{g}}\left\{
+      \mathcal{R}_t^{\mathrm{ref}}(\vct{g})
+      +\lambda_{\mathrm{ow}}
+       \vct{g}^\top\widehat{\vct{A}}_t\vct{g}
+    \right\} \\
+  &=\left(
+      \Delta_t^{\mathrm{unc}}\vct{I}
+      +\lambda_{\mathrm{ow}}\widehat{\vct{A}}_t
+    \right)^{-1}
+    \Delta_t^{\mathrm{unc}}\vct{\kappa}_t^{\mathrm{unc}}.
+\end{aligned}
+  \label{eq:discussion-overwrite-regularized-gain}
+\end{equation}
+This penalizes a write according to its predicted interference with previously important keys
+rather than according to an instantaneous channel threshold.
+
+The full Gram state costs $O(d_k^2)$. Its diagonal approximation,
+\begin{equation}
+  \widehat{\vct{a}}_t
+  =\eta_t\vct{a}_{t-1},
+  \qquad
+  \vct{a}_t
+  =\widehat{\vct{a}}_t
+   +\xi_t\frac{\vct{k}_t\odot\vct{k}_t}{r_t},
+  \qquad
+  \overline\kappa_{t,i}
+  =\frac{\Delta_t^{\mathrm{unc}}}
+    {\Delta_t^{\mathrm{unc}}+\lambda_{\mathrm{ow}}\widehat a_{t,i}}
+    \kappa_{t,i}^{\mathrm{unc}},
+  \label{eq:discussion-protection-importance-scan}
+\end{equation}
+is a basis-dependent surrogate for key-overlap interference, but its recurrence is an associative
+affine scan whenever $\eta_t$ and $\xi_t$ depend only on the current token. An isotropic
+$\widehat{\vct{A}}_t=a_t\vct{I}$ instead gives basis-invariant radial shrinkage. Combined with the
+process-noise-floor approximation, the diagonal design requires one M\"obius uncertainty scan and
+one affine importance scan before the unchanged affine memory scan, and remains $O(d_k)$ in
+recurrent state. A moment-projected uncertainty state does not retain this scan property.
+
+There is an unavoidable consistency caveat. Once
+$\overline{\vct{\kappa}}_t\ne\vct{\kappa}_t^{\mathrm{unc}}$,
+$\vct{P}_t^{\mathrm{unc}}$ is a counterfactual reference state, not the error covariance around the
+actual regularized mean. The covariance consistent with that mean would use the Joseph update
+\begin{equation}
+  \vct{P}_t^{\mathrm{err}}
+  =(\vct{I}-\overline{\vct{\kappa}}_t\vct{k}_t^\top)
+    \widehat{\vct{P}}_t^{\mathrm{err}}
+    (\vct{I}-\overline{\vct{\kappa}}_t\vct{k}_t^\top)^\top
+   +r_t\overline{\vct{\kappa}}_t\overline{\vct{\kappa}}_t^\top.
+  \label{eq:discussion-protected-joseph-covariance}
+\end{equation}
+Projecting this covariance feeds the protection state back into the uncertainty recurrence and
+generally loses the independent scalar M\"obius scan. The two-state construction is therefore an
+honest decision-aware controller with a reference uncertainty model, not an exact Bayesian filter.
+If covariance around the actual mean must remain calibrated, the structured or sequential
+alternatives above are required. Otherwise the single bounded $\rho_h$ protection state is the
+lower-cost design supported most directly by the present ablation.
 
 \subsection{A bounded residual can hide an unbounded channel gain}
 
