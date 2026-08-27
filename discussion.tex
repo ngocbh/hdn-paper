@@ -2957,6 +2957,188 @@ than an alternative interpretation of existing Mamba. Accordingly, the defensibl
 claim is that Mamba and KDN share a controlled matrix-state scaffold and specialize complementary
 prediction and correction branches---not that Mamba itself performs Kalman filtering.
 
+\section{Predictive Innovation Likelihood and Covariance Calibration}
+\label{sec:discussion-predictive-innovation-likelihood}
+
+The language-modeling objective can learn useful uncertainty-dependent gates without making their
+numerical values calibrated variances. A direct way to test, and optionally train, the probabilistic
+interpretation is to score the current value under the one-step predictive distribution. This
+criterion is distinct from the expected likelihood inside the variational objective above: it uses
+the uncertainty before the current observation is assimilated and evaluates the marginal
+distribution of that observation.
+
+\subsection{Marginal likelihood of the pre-write innovation}
+
+For value coordinate $j$, the predicted state and observation model are
+\begin{equation}
+  \vct{s}_{t,j}^{\star}\mid\mathcal{F}_{t-1}
+  \sim\mathcal{N}(\widehat{\vct{s}}_{t,j},\widehat{\vct{P}}_t),
+  \qquad
+  v_{t,j}=\vct{k}_t^\top\vct{s}_{t,j}^{\star}+e_{t,j},
+  \qquad
+  e_{t,j}\sim\mathcal{N}(0,r_t).
+  \label{eq:discussion-predictive-nll-model}
+\end{equation}
+Marginalizing the uncertain state gives
+\begin{equation}
+  v_{t,j}\mid\mathcal{F}_{t-1},\vct{k}_t
+  \sim\mathcal{N}(\widehat v_{t,j},\Delta_t),
+  \qquad
+  \widehat v_{t,j}=\vct{k}_t^\top\widehat{\vct{s}}_{t,j},
+  \qquad
+  \Delta_t=r_t+\vct{k}_t^\top\widehat{\vct{P}}_t\vct{k}_t.
+  \label{eq:discussion-predictive-innovation-distribution}
+\end{equation}
+Thus $\Delta_t$ combines irreducible observation noise with uncertainty in the predicted memory
+along the current key. Under the columnwise model, all $d_v$ value coordinates share this scalar
+variance. With
+\begin{equation}
+  \vct{\delta}_t
+  =\vct{v}_t-\widehat{\vct{S}}_t^\top\vct{k}_t,
+  \label{eq:discussion-predictive-nll-innovation}
+\end{equation}
+their joint predictive negative log likelihood is
+\begin{equation}
+  \mathcal{L}_{\mathrm{pred},t}
+  =\frac{\|\vct{\delta}_t\|_2^2}{2\Delta_t}
+   +\frac{d_v}{2}\log\Delta_t
+   +\frac{d_v}{2}\log(2\pi).
+  \label{eq:discussion-predictive-innovation-nll}
+\end{equation}
+An equivalent dimension-normalized loss, up to an additive constant, is
+\begin{equation}
+  \overline{\mathcal{L}}_{\mathrm{pred},t}
+  =\frac12\left(
+    \frac{d_v^{-1}\|\vct{\delta}_t\|_2^2}{\Delta_t}
+    +\log\Delta_t
+  \right).
+  \label{eq:discussion-predictive-innovation-nll-normalized}
+\end{equation}
+Both the innovation and its variance must use the exclusive, pre-write state. Evaluating the
+residual after the update would let the current value help predict itself and would systematically
+understate the forecasting error.
+
+The two NLL terms prevent opposite degeneracies. The standardized squared error
+$\|\vct{\delta}_t\|_2^2/\Delta_t$ penalizes a variance that is too small for the realized
+innovation, while $d_v\log\Delta_t$ penalizes variance inflation. In particular,
+\begin{equation}
+  \frac{\partial\mathcal{L}_{\mathrm{pred},t}}
+       {\partial\log\Delta_t}
+  =\frac12\left(
+    d_v-\frac{\|\vct{\delta}_t\|_2^2}{\Delta_t}
+  \right),
+  \qquad
+  \Delta_t^{\star}
+  =\frac{\|\vct{\delta}_t\|_2^2}{d_v}
+  \quad\text{for a fixed realized innovation}.
+  \label{eq:discussion-predictive-nll-optimum}
+\end{equation}
+Across repeated contexts, the population optimum is the conditional mean squared innovation per
+value coordinate. The log term is essential whenever an uncertainty scale is learned: omitting it
+leaves the objective free to reduce the standardized error by sending the variance to infinity.
+
+\subsection{Diagonal and isotropic specializations}
+
+For Diagonal KDN, the predictive covariance is
+$\widehat{\vct{P}}_t=\diag(\widehat{\vct{p}}_t)$, so the scored innovation variance is
+\begin{equation}
+  \Delta_t^{\mathrm{diag}}
+  =r_t+\sum_i\widehat p_{t,i}k_{t,i}^2.
+  \label{eq:discussion-diag-predictive-innovation-variance}
+\end{equation}
+This is exactly the scalar denominator of the Kalman gain. The predictive likelihood therefore
+tests whether the same uncertainty that controls the write also predicts the observed residual
+scale. It scores only the directional covariance visible at the current key; it cannot by itself
+detect covariance error in directions that the observed keys do not probe.
+
+For Isotropic KDN, $\widehat{\vct{P}}_t=\widehat b_t\vct{I}$ gives
+\begin{equation}
+  \Delta_t^{\mathrm{iso}}
+  =r_t+\widehat b_t\|\vct{k}_t\|_2^2,
+  \label{eq:discussion-iso-predictive-innovation-variance}
+\end{equation}
+which reduces to $r_t+\widehat b_t$ for unit-normalized keys. The same NLL can therefore compare
+the two covariance families without changing their state budgets: each model is scored using the
+predictive variance implied by its own retained state.
+
+\subsection{Relation to the variational expected NLL}
+
+The expected Gaussian NLL used in the variational derivation conditions on a candidate posterior
+$q_{t,j}=\mathcal{N}(\vct{\mu}_{t,j},\vct{P}_t)$. Its data term decomposes as
+\begin{equation}
+  \mathbb{E}_{q_{t,j}}[-\log p(v_{t,j}\mid\vct{s}_{t,j}^{\star})]
+  =\frac{1}{2r_t}\left[
+    \left(v_{t,j}-\vct{k}_t^\top\vct{\mu}_{t,j}\right)^2
+    +\vct{k}_t^\top\vct{P}_t\vct{k}_t
+  \right]
+  +\frac12\log(2\pi r_t).
+  \label{eq:discussion-expected-versus-predictive-nll}
+\end{equation}
+This is a posterior objective: its squared-mean residual and posterior-variance terms determine
+the state retained after seeing $v_{t,j}$. By contrast,
+Equation~\eqref{eq:discussion-predictive-innovation-nll} is a pre-update forecasting score and
+uses the marginal variance $\Delta_t$. For any candidate $q_{t,j}$, the variational identity is
+\begin{equation}
+  -\operatorname{ELBO}(q_{t,j})
+  =\mathcal{L}_{\mathrm{pred},t,j}
+   +\operatorname{KL}\!\left(
+      q_{t,j}\,\|\,
+      p(\vct{s}_{t,j}^{\star}\mid v_{t,j},\mathcal{F}_{t-1})
+    \right).
+  \label{eq:discussion-predictive-nll-variational-identity}
+\end{equation}
+The two coincide when $q_{t,j}$ is the exact posterior. A diagonal or isotropic projection leaves
+a nonnegative variational gap. Moreover, a single Gaussian likelihood weights the mean-residual
+and posterior-variance terms equally. The unequal
+$(s_{\mathrm{write}},s_{\mathrm{protect}})$ objective above remains a valid decision-oriented
+criterion, but it is not the ELBO of one Gaussian observation model. If $r_t$ is learned in that
+posterior objective, the $\log r_t$ normalizer must be retained; if it is omitted, increasing
+$r_t$ reduces both quadratic terms without paying the corresponding likelihood cost.
+
+\subsection{Calibration diagnostics and optimization caveat}
+
+Under a correctly specified predictive model, the normalized innovation squared
+\begin{equation}
+  \operatorname{NIS}_t
+  =\frac{\|\vct{\delta}_t\|_2^2}{\Delta_t}
+  \label{eq:discussion-normalized-innovation-squared}
+\end{equation}
+has a $\chi^2_{d_v}$ distribution, with mean $d_v$ and variance $2d_v$. Accordingly, useful
+diagnostics are $\operatorname{NIS}_t/d_v$, the predictive NLL, and calibration bins comparing
+predicted $\Delta_t$ with the empirical quantity
+$\|\vct{\delta}_t\|_2^2/d_v$. These should be stratified by layer, head, position, and key
+similarity. A mean normalized innovation near one is necessary but not sufficient: averages can
+hide systematic overconfidence on repeated keys and underconfidence on novel keys.
+
+The predictive NLL also breaks the covariance-only scale symmetry when the innovation units are
+held fixed, because rescaling $(\widehat{\vct{P}}_t,r_t)$ changes $\Delta_t$ and hence changes the
+score. In the neural mixer, however, both $\vct{v}_t$ and $\vct{k}_t$ are learned internal
+representations rather than externally observed quantities. They can change scale or geometry
+together with the uncertainty heads and downstream projections. The resulting objective is
+therefore best described as an internal probabilistic consistency loss, not automatically as a
+calibrated likelihood of the language data.
+
+This distinction suggests a staged experiment. First evaluate the NLL and normalized innovation
+without adding them to training. If they are optimized, compare: (i) full gradients through the
+internal representation; (ii) a calibration-only route in which the realized innovation and key
+geometry are treated as fixed targets and gradients are sent only to the uncertainty parameters;
+and (iii) the language-modeling objective alone. Fixing a covariance gauge, preferably $r=1$ and
+$\mu=1$, remains useful in all three cases. An auxiliary loss
+\begin{equation}
+  \mathcal{L}
+  =\mathcal{L}_{\mathrm{LM}}
+   +\lambda_{\mathrm{pred}}
+    \mathbb{E}_{t,h}\!\left[
+      \overline{\mathcal{L}}_{\mathrm{pred},t,h}
+    \right]
+  \label{eq:discussion-lm-plus-predictive-nll}
+\end{equation}
+should begin with small $\lambda_{\mathrm{pred}}$ and be judged not only by predictive NLL but
+also by language-modeling loss, write strength, covariance quantiles, and downstream recall. A
+lower internal NLL is evidence that the noise heads predict their own innovation statistics more
+consistently; it is not by itself evidence of a better language model or a more faithful full
+covariance approximation.
+
 \section{Conclusion}
 
 The diagonal KDN has a genuine common-scale non-identifiability in

@@ -1176,6 +1176,73 @@ column within each block in \textbf{bold}, second best \underline{underlined}.}
 \subsection{Ablation and Runtime}
 \label{sec:ablation-runtime}
 
+\paragraph{Information scale.}
+\begin{wraptable}{r}{0.46\textwidth}
+  \vspace{-0.8\baselineskip}
+  \centering
+  \small
+  \setlength{\tabcolsep}{4.5pt}
+  \begin{tabular}{@{}lccc@{}}
+    \toprule
+    $\mu$ & Wiki. PPL $\downarrow$ & LMB. PPL $\downarrow$ & Avg. $\uparrow$ \\
+    \midrule
+    $1$           & 18.69 & 15.51 & 54.12 \\
+    $\sqrt{d_k}$  & 18.93 & 15.10 & 54.20 \\
+    $d_k$         & 18.64 & 14.15 & \textbf{54.97} \\
+    $4d_k$        & 18.97 & \textbf{13.91} & 54.92 \\
+    Learned       & \textbf{18.51} & 14.68 & 54.62 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Information-scale ablation for the 750M Diagonal KDN trained on 50B tokens
+  ($d_k=128$). The learned scale is initialized at $d_k$; \emph{Avg.} is the mean of the six
+  accuracies in Table~\ref{tab:pretrain-lm}.}
+  \label{tab:info-scale-ablation}
+  \vspace{-0.6\baselineskip}
+\end{wraptable}
+The $\mu=1$, $\sqrt{d_k}$, and $4d_k$ rows form a matched fixed-scale sweep; for consistency with
+the main comparison, the $d_k$ row reuses the Diagonal KDN checkpoint reported in
+Table~\ref{tab:pretrain-lm}. The learned-scale row is a separate run initialized at $d_k$. Across
+the fixed scales, increasing $\mu$ steadily improves LAMBADA perplexity, with $4d_k$ best, while
+WikiText and average accuracy peak at $d_k$. Learning the scale gives the best WikiText perplexity
+($18.51$), but trails fixed $d_k$ on LAMBADA perplexity ($14.68$ versus $14.15$) and average
+accuracy ($54.62$ versus $54.97$). Overall, the effect remains small and metric-dependent.
+
+\FloatBarrier
+
+\paragraph{Fixed observation and process noise.}
+
+\begin{wraptable}{r}{0.46\textwidth}
+  \vspace{-0.8\baselineskip}
+  \centering
+  \small
+  \setlength{\tabcolsep}{2.5pt}
+  \begin{tabular}{@{}lccc@{}}
+    \toprule
+    Setting ($\mu=1$) & Wiki. PPL $\downarrow$ & LMB. PPL $\downarrow$ & Avg. $\uparrow$ \\
+    \midrule
+    Learnable $r_t,\ve{\omega}_t$ & 18.69 & \textbf{15.51} & \textbf{54.12} \\
+    Fix $r_t=1$ & \textbf{18.46} & 15.72 & 53.77 \\
+    Fix both at $1$ & 18.64 & 15.84 & 53.87 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Noise ablation for the 750M Diagonal KDN trained on 50B tokens at $\mu=1$.
+  The baseline learns both $r_t$ and $\ve{\omega}_t$; the next row fixes $r_t=1$; the final row
+  additionally fixes $\ve{\omega}_t=\ve{1}$.
+  \emph{Avg.} is the mean of the six accuracies in Table~\ref{tab:pretrain-lm}.}
+  \label{tab:fixed-noise-ablation}
+  \vspace{-0.6\baselineskip}
+\end{wraptable}
+Table~\ref{tab:fixed-noise-ablation} summarizes progressively constrained noise parameterizations.
+Relative to the learned-noise baseline, fixing $r_t=1$ improves WikiText perplexity by $0.23$ but
+worsens LAMBADA perplexity by $0.21$ and average accuracy by $0.35$ points. Additionally fixing
+$\ve{\omega}_t=\ve{1}$ changes the last logged training loss only from $2.154$ to $2.162$ and
+recovers $0.10$ average-accuracy points, while worsening WikiText and LAMBADA perplexity by another
+$0.19$ and $0.12$. These small, mixed single-seed shifts provide no evidence that either constraint
+consistently improves short-context quality. The last two rows form the controlled comparison;
+the baseline comes from the information-scale sweep and is included as a reference.
+
+\FloatBarrier
+
 \paragraph{Throughput.}
 \begin{wrapfigure}{r}{0.52\textwidth}
   \vspace{-0.8\baselineskip}
