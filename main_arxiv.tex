@@ -2301,9 +2301,10 @@ $(b_t\ve{I})^{-1}=\Pi_{\mathrm{iso}}(\ve{C}_t^\star)$, so the variational soluti
 information-coordinate projection in \eqref{eq:iso-information-projection} coincide.
 \end{proof}
 
-Using this retained posterior as the next token's prior yields a scalar information recurrence.
-Like the per-channel diagonal recurrence, it is a M\"obius map and therefore admits an associative
-prefix scan. The resulting Isotropic KDN is summarized below.
+Starting from the isotropic variational update above, we introduce an information scale $\mu>0$
+only in the retained post-write precision increment; $\mu=1$ recovers the variational update.
+Like the per-channel diagonal recurrence, the resulting scalar recurrence is a M\"obius map and
+therefore admits an associative prefix scan. Isotropic KDN is summarized below.
 
 \refstepcounter{definition}\label{prop:isotropic-kalman-linear-attention}
 \begin{tcolorbox}[
@@ -2321,7 +2322,8 @@ prefix scan. The resulting Isotropic KDN is summarized below.
   top=5pt,
   bottom=5pt
 ]
-Let the retained covariance satisfy $\ve{P}_t=b_t\ve{I}$, and parameterize
+Let $\mu>0$ be an information scale, let the retained covariance satisfy
+$\ve{P}_t=b_t\ve{I}$, and parameterize
 $\ve{D}_t$, $\ve{\Omega}_t$, and $r_t$ by
 \begin{equation}
 \begin{aligned}
@@ -2339,11 +2341,11 @@ $\ve{D}_t$, $\ve{\Omega}_t$, and $r_t$ by
 \end{equation}
 Here $\ve{x}_t$ is the token hidden state, and all weights and biases are learnable parameters.
 For each memory column, Proposition~\ref{prop:iso-variational-inference} gives the isotropic
-variational state. For the unscaled variational information update, define
+variational state at $\mu=1$. Scaling only its retained post-write information increment, define
 \begin{equation}
   a_t=\frac{1}{d_k}\sum_i\alpha_{t,i}^2,
   \qquad
-  u_t=\frac{\|\ve{k}_t\|_2^2}{d_k r_t},
+  u_t=\mu\frac{\|\ve{k}_t\|_2^2}{d_k r_t},
   \qquad
   c_t=\widehat c_t+u_t,
   \qquad
@@ -2407,6 +2409,8 @@ as the exact Kalman filter:
   \label{eq:iso-kla-box-memory}
 \end{equation}
 \end{tcolorbox}
+
+In all reported Isotropic KDN runs, we fix the information scale to $\mu=d_k$.
 
 Isotropic KDN therefore preserves the predict--update decomposition and Kalman residual write, but
 compresses the uncertainty state to one scalar per head. Its gain is constrained to
