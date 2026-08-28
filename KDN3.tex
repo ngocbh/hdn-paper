@@ -47,7 +47,9 @@ posterior, characterize the exceptional closure condition, and obtain the joint 
 projection back to the separable family.  That projection is a positive matrix-scaling problem,
 unique only up to an intrinsic factor gauge.  Consequently, KDN-3 is a principled two-axis
 uncertainty model, but it does not inherit the independent M\"obius scans or the single shared
-compact-WY memory system of one-axis KDN without an additional approximation.
+compact-WY memory system of one-axis KDN without an additional approximation.  We also connect
+KDN-3 to Gated DeltaNet-2: both expose key- and value-axis modulation, but KDN-3 ties erasure and
+writing through one innovation, and their generic algebraic intersection is the scalar KDA rule.
 \end{abstract}
 
 \section{Scope and notation}
@@ -676,6 +678,201 @@ With $N_{\mathrm{proj}}$ alternating sweeps, uncertainty work is
 $O(N_{\mathrm{proj}}(K+V))$ per token and the memory update is $O(KV)$.  This is suitable as a
 correctness oracle and as a small-scale experiment.  It is not yet a drop-in replacement for the
 current scan-parallel KDN kernel.
+
+\section{Connection to Gated DeltaNet-2}
+\label{sec:gdn2-connection}
+
+\subsection{The two updates side by side}
+
+Use the same predicted memory
+$\widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1}$.  Gated DeltaNet-2 (GDN-2) can be written as
+\begin{equation}
+\begin{aligned}
+  \ve{S}_t^{\mathrm{GDN2}}
+  &={}
+    \widehat{\ve{S}}_t
+    -\ve{k}_t
+      (\ve{b}_t^{\mathrm{erase}}\odot\ve{k}_t)^{\tr}\widehat{\ve{S}}_t
+    +\ve{k}_t(\ve{w}_t\odot\ve{v}_t)^{\tr},
+  \\
+  \ve{b}_t^{\mathrm{erase}}&\in\R^K,
+  \qquad
+  \ve{w}_t\in\R^V,
+\end{aligned}
+  \label{eq:gdn2-update}
+\end{equation}
+where $\ve{b}_t^{\mathrm{erase}}$ is a key-channel erase gate and $\ve{w}_t$ is a value-channel
+write gate.  Both are predicted directly from the current token and are sigmoid-valued in the
+default implementation; an optional GDN-2 variant expands only the erase-gate range.  The keys are
+$\ell_2$-normalized in both model families.  Defining the pseudo-key and pseudo-value
+\begin{equation}
+  \widetilde{\ve{k}}_t=\ve{b}_t^{\mathrm{erase}}\odot\ve{k}_t,
+  \qquad
+  \widetilde{\ve{v}}_t=\ve{w}_t\odot\ve{v}_t,
+  \label{eq:gdn2-pseudo-observation}
+\end{equation}
+gives the residual-like form
+\begin{equation}
+  \ve{S}_t^{\mathrm{GDN2}}
+  =\widehat{\ve{S}}_t
+   +\ve{k}_t
+    \left(
+      \widetilde{\ve{v}}_t
+      -\widehat{\ve{S}}_t^{\tr}\widetilde{\ve{k}}_t
+    \right)^{\tr}.
+  \label{eq:gdn2-pseudo-residual}
+\end{equation}
+This resembles a Kalman residual update algebraically, but its erased read uses
+$\widetilde{\ve{k}}_t$ while its injected target is $\widetilde{\ve{v}}_t$.  In general it is not
+the posterior mean for the original observation
+$\ve{v}_t=\widetilde{\ve{S}}_t^{\tr}\ve{k}_t+\ve{e}^{\mathrm{obs}}_t$.
+
+Expanding the KDN-3 mean update in Equation~\eqref{eq:kdn3-mean-update} gives
+\begin{equation}
+  \ve{S}_t^{\mathrm{KDN3}}
+  =\widehat{\ve{S}}_t
+   -\ve{g}_t\ve{k}_t^{\tr}\widehat{\ve{S}}_t\diag(\ve{\beta}_t)
+   +\ve{g}_t(\ve{\beta}_t\odot\ve{v}_t)^{\tr},
+  \qquad
+  \ve{g}_t=\widehat{\ve{P}}_t\ve{k}_t.
+  \label{eq:kdn3-expanded-gdn2-comparison}
+\end{equation}
+Both models therefore use an $O(KV)$ low-rank correction, and both can modulate the incoming value
+coordinatewise.  Their factorizations differ:
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+  \toprule
+  Model & outer write direction & erased read direction & value multiplier \\
+  \midrule
+  GDN-2 & $\ve{k}_t$ & $\ve{b}_t^{\mathrm{erase}}\odot\ve{k}_t$ & $\ve{w}_t$ \\
+  KDN-3 & $\ve{g}_t=\widehat{\ve{P}}_t\ve{k}_t$ & $\ve{k}_t$ & $\ve{\beta}_t$ \\
+  \bottomrule
+\end{tabular}
+\end{center}
+For KDN-3, the same $\beta_{t,j}$ multiplies the observation write and the erasure of the predicted
+value in column $j$.  This tie is forced by the Kalman innovation.  GDN-2 instead predicts
+$\ve{b}_t^{\mathrm{erase}}$ and $\ve{w}_t$ independently, deliberately decoupling how much old
+content is erased from how much new value is injected.
+
+The two covariance factors explain the two visible parts of the KDN-3 update.  The key factor
+$\widehat{\ve{P}}_t$ changes the outer write direction from $\ve{k}_t$ to $\ve{g}_t$, while the
+value factor $\widehat{\ve{B}}_t$ and observation noise determine the relative entries of
+$\ve{\beta}_t$.  These gates are functions of the carried uncertainty state and therefore depend
+on the history, not only on the current token representation.
+
+\subsection{Exact intersection of the update families}
+
+The similarity between Equations~\eqref{eq:gdn2-update} and
+\eqref{eq:kdn3-expanded-gdn2-comparison} does not imply that either family contains the other.
+Their common intersection is much smaller.
+
+\begin{proposition}[Algebraic GDN-2--KDN-3 intersection]
+At the level of the memory-update equations, assume a nondegenerate update with
+$\ve{k}_t\ne\ve{0}$ and require
+Equations~\eqref{eq:gdn2-update} and \eqref{eq:kdn3-expanded-gdn2-comparison} to agree for arbitrary
+$\widehat{\ve{S}}_t$ and $\ve{v}_t$.  Then there must be scalars $\lambda_t>0$ and
+$\beta_t>0$ such that
+\begin{equation}
+\begin{aligned}
+  \ve{g}_t&=\lambda_t\ve{k}_t,
+  &
+  \ve{\beta}_t&=\beta_t\ve{1}_V,
+  \\
+  \ve{w}_t&=\lambda_t\beta_t\ve{1}_V,
+  &
+  \ve{b}_t^{\mathrm{erase}}\odot\ve{k}_t
+  &=\lambda_t\beta_t\ve{k}_t.
+\end{aligned}
+  \label{eq:gdn2-kdn3-intersection}
+\end{equation}
+Conversely, these conditions make the two updates identical.
+\end{proposition}
+
+\begin{proof}
+Equality of the coefficients multiplying each arbitrary $v_{t,j}$ requires
+\begin{equation}
+  \beta_{t,j}\ve{g}_t=w_{t,j}\ve{k}_t.
+  \label{eq:gdn2-kdn3-write-condition}
+\end{equation}
+For a nonzero write this forces $\ve{g}_t=\lambda_t\ve{k}_t$ and
+$w_{t,j}=\lambda_t\beta_{t,j}$.  Equality of the linear maps applied to each arbitrary memory
+column then requires
+\begin{equation}
+  \lambda_t\beta_{t,j}\ve{k}_t\ve{k}_t^{\tr}
+  =\ve{k}_t(\ve{b}_t^{\mathrm{erase}}\odot\ve{k}_t)^{\tr}
+  \qquad\text{for every }j.
+  \label{eq:gdn2-kdn3-erase-condition}
+\end{equation}
+The right-hand side is shared across value columns, so every $\beta_{t,j}$ must equal one scalar
+$\beta_t$, and
+$\ve{b}_t^{\mathrm{erase}}\odot\ve{k}_t
+=\lambda_t\beta_t\ve{k}_t$.  Substitution proves sufficiency.
+\end{proof}
+
+For the implemented default GDN-2 parameterization, the converse additionally requires
+$\lambda_t\beta_t\in(0,1)$ so that both gates lie in their sigmoid ranges.  The optional
+negative-eigenvalue variant permits an erase coefficient up to two but leaves the write gate in
+$(0,1)$.
+
+For a dense key and diagonal $\widehat{\ve{P}}_t$, the condition
+$\ve{g}_t=\lambda_t\ve{k}_t$ requires
+$\widehat p_{t,i}=\lambda_t$ on the support of $\ve{k}_t$.  The intersection therefore reduces to
+the scalar-gated delta update
+\begin{equation}
+  \ve{S}_t
+  =\widehat{\ve{S}}_t
+   +\gamma_t\ve{k}_t
+    (\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t)^{\tr},
+  \qquad
+  \gamma_t=\lambda_t\beta_t,
+  \label{eq:gdn2-kdn3-scalar-intersection}
+\end{equation}
+which is the KDA form.  Away from this intersection, KDN-3 can rotate the write direction through
+key-space uncertainty, which GDN-2 cannot express with its fixed outer direction $\ve{k}_t$;
+GDN-2 can independently choose erase and write gates, which a coherent KDN-3 innovation cannot
+express.
+
+The one-axis boundaries expose the two separate mismatches.  When
+$\widehat{\ve{P}}_t\propto\ve{I}_K$ but $\ve{\beta}_t$ remains value dependent, KDN-3 reduces to
+the value-wise isotropic update: it shares GDN-2's outer direction and value-wise write scaling,
+but still uses the same $\beta_{t,j}$ for both halves of each column's innovation.  When
+$\widehat{\ve{B}}_t\propto\ve{I}_V$ and $\ve{R}_t\propto\ve{I}_V$, KDN-3 reduces to Diagonal KDN:
+its value gate becomes common, but the anisotropic direction
+$\widehat{\ve{P}}_t\ve{k}_t$ generally cannot be represented by GDN-2.
+
+\subsection{Interpretation and controlled comparisons}
+
+GDN-2 may be viewed as a discriminative relaxation of an uncertainty-gated delta rule.  It
+predicts the two sides of the update directly and gains token-local flexibility, but it does not
+carry a covariance whose predictive variance or posterior contraction constrains those gates.
+KDN-3 instead derives its update from the separable predictive covariance and diagonal observation
+noise.  Its restrictions provide a calibrated predictive distribution and a causal notion of
+future protection, at the cost of the coupled covariance projection derived above.
+
+The connection suggests four controlled ablations:
+\begin{enumerate}
+  \item \textbf{Native scalar innovation tying.}  Within the existing GDN-2 operator, constrain
+    $\ve{b}_t^{\mathrm{erase}}=\gamma_t\ve{1}_K$ and
+    $\ve{w}_t=\gamma_t\ve{1}_V$.  This tests the benefit of decoupling while retaining the native
+    shared erase system.
+  \item \textbf{Value-wise tied innovation.}  Replace the shared erase operator by
+    $-\ve{k}_t\ve{k}_t^{\tr}\widehat{\ve{S}}_t\diag(\ve{\beta}_t)$ and use the same
+    $\ve{\beta}_t$ on the incoming value.  This is a structural recurrence ablation, not merely a
+    gate constraint on GDN-2.
+  \item \textbf{Gain direction.}  Replace $\ve{g}_t=\widehat{\ve{P}}_t\ve{k}_t$ by a collinear
+    direction
+    \begin{equation*}
+      \ve{g}_{t,\parallel}
+      =\frac{\ve{k}_t^{\tr}\ve{g}_t}{\|\ve{k}_t\|_2^2}\ve{k}_t,
+    \end{equation*}
+    which preserves $\ve{k}_t^{\tr}\ve{g}_t$ and hence the current-key contraction while
+    removing the off-key component.
+  \item \textbf{Stateful versus direct gates.}  Match instantaneous write strengths while
+    comparing uncertainty-derived gates with gates predicted only from the current token.
+\end{enumerate}
+Useful diagnostics are the cosine between $\ve{g}_t$ and $\ve{k}_t$, dispersion across
+$\beta_{t,j}$, disagreement between GDN-2 erase and write strengths, predictive innovation NLL,
+and repeated-key protection.
 
 \section{Parallelism and approximation choices}
 \label{sec:parallelism}
