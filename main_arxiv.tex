@@ -757,7 +757,7 @@ Thus the approximation reduces the uncertainty state from a dense $d_k\times d_k
 $d_k$ scalars and replaces the sequential Riccati recursion with an associative scan of
 logarithmic parallel depth.
 
-\paragraph{Protection--write decoupling.}
+\paragraph{Information scaling.}
 Parallelizability is not free. The associative M\"obius scan requires projecting each dense
 posterior back to a product Gaussian, thereby discarding cross-channel correlations and inheriting
 the familiar coordinatewise overconfidence of reverse-KL mean field~\citep{blei2017variational}.
@@ -2122,167 +2122,193 @@ read-out inverts.
 \section{Isotropic Kalman Delta Network}
 \label{app:iso-kla}
 
-\paragraph{Restriction to an isotropic state.}
-The diagonal KDN retains one uncertainty per key channel. A cheaper alternative is to restrict
-the filtering covariance to the isotropic family
+\paragraph{Retained isotropic state.}
+Following the notation of Section~\ref{sec:preliminaries},
+$\widetilde{\ve{S}}_t$ is the latent random memory, while $\ve{S}_t$ and $\ve{P}_t$ are the retained
+filtering mean and covariance. Isotropic KDN replaces the $d_k$ diagonal uncertainty values of
+Diagonal KDN by one scalar per head:
 \begin{equation}
-  \mathcal{I}_{++}^{d_k}
-  =\{b\ve{I}:b\in\R_{++}\},
-  \qquad
-  \ve{P}_t\in\mathcal{I}_{++}^{d_k},
-  \qquad
   \ve{P}_t=b_t\ve{I},
   \qquad
   \ve{C}_t=\ve{P}_t^{-1}=c_t\ve{I},
-  \quad c_t=b_t^{-1}.
+  \qquad
+  b_t>0,
+  \qquad
+  c_t=b_t^{-1}.
   \label{eq:iso-cov-family}
 \end{equation}
-This reduces the uncertainty state from $d_k$ scalars to one.
+A hat continues to denote a one-step predictive quantity before conditioning on the current
+observation.
 
-\paragraph{Two isotropic approximations.}
-For Diagonal KDN, $\ve{P}_{t-1}=\diag(\ve{p}_{t-1})$,
-$\ve{D}_t=\diag(\ve{\alpha}_t)$, and $\ve{\Omega}_t=\diag(\ve{\omega}_t)$ produce the exact
-diagonal predictive covariance
-$\widehat{\ve{P}}_t=\diag(\widehat{\ve{p}}_t)$, where
-$\widehat{\ve{p}}_t=\ve{\alpha}_t^2\odot\ve{p}_{t-1}+\ve{\omega}_t$; only the measurement
-posterior leaves the diagonal family. The isotropic restriction is more aggressive. Even when
-$\ve{P}_{t-1}=b_{t-1}\ve{I}$ and
-$\ve{\Omega}_t=\omega_t\ve{I}$, a channel-wise $\ve{D}_t$ generally produces an anisotropic
-predictive covariance. Isotropic KDN must therefore approximate twice: once after prediction and
-again after conditioning.
+\paragraph{Two isotropic projections.}
+The isotropic family is not closed under either stage of the Kalman recursion. Starting from
+$\ve{P}_{t-1}=b_{t-1}\ve{I}$, a channel-wise transition
+$\ve{D}_t=\diag(\ve{\alpha}_t)$ generally produces an anisotropic predictive covariance. Even
+after projecting that prediction back to an isotropic covariance, conditioning on a key
+$\ve{k}_t$ produces a dense posterior. Isotropic KDN therefore projects once after prediction and
+once after conditioning.
 
-We use the same isotropic trace projection at both approximation points, in the matrix coordinate
-in which the corresponding Kalman operation is affine. For any
-$\ve{A}\in\mathbb{S}_{++}^{d_k}$, define
+For any $\ve{X}\in\mathbb{S}_{++}^{d_k}$, the Frobenius-nearest isotropic matrix is
 \begin{equation}
-  z^\star(\ve{A})
-  =\argmin_{z>0}\frac12\|\ve{A}-z\ve{I}\|_F^2
-  =\frac{1}{d_k}\Trace(\ve{A}),
-  \qquad
-  \Pi_{\mathrm{iso}}(\ve{A})=z^\star(\ve{A})\ve{I}.
+  \Pi_{\mathrm{iso}}(\ve{X})
+  =\argmin_{b\ve{I}:\,b>0}\frac12\|\ve{X}-b\ve{I}\|_F^2
+  =\frac{1}{d_k}\Trace(\ve{X})\ve{I}.
   \label{eq:iso-trace-projection}
 \end{equation}
 Indeed,
-$\|\ve{A}-z\ve{I}\|_F^2
-=\|\ve{A}\|_F^2-2z\Trace(\ve{A})+d_kz^2$, whose unique minimizer is the average eigenvalue of
-$\ve{A}$. Thus $\Pi_{\mathrm{iso}}$ preserves total variance or total information, depending on
-which coordinate is projected.
+$\|\ve{X}-b\ve{I}\|_F^2
+=\|\ve{X}\|_F^2-2b\Trace(\ve{X})+d_kb^2$, so the projection preserves the average eigenvalue. We
+apply it in covariance coordinates after prediction, where the process update is affine, and in
+information coordinates after conditioning, where the measurement update is additive.
 
-\paragraph{Prediction approximation.}
-The memory mean is still predicted by the channel-wise transition
-$\ve{D}_t=\diag(\ve{\alpha}_t)$. Starting from $\ve{P}_{t-1}=b_{t-1}\ve{I}$, the unprojected
-covariance prediction and its isotropic trace projection are
+\paragraph{Predictive covariance.}
+The memory mean follows the full channel-wise prediction
+$\widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1}$. With isotropic process noise
+$\ve{\Omega}_t=\omega_t\ve{I}$, the retained predictive covariance is
 \begin{equation}
 \begin{aligned}
-  \widehat{\ve{P}}_t^\star
-  &=b_{t-1}\ve{D}_t^2+\omega_t\ve{I},
+  a_t
+  &=\frac{1}{d_k}\Trace(\ve{D}_t^2)
+   =\frac{1}{d_k}\sum_{i=1}^{d_k}\alpha_{t,i}^2,
   &
-  \widehat{\ve{P}}_t
-  &=\Pi_{\mathrm{iso}}(\widehat{\ve{P}}_t^\star)
-    =\widehat b_t\ve{I},
-  \\[2pt]
   \widehat b_t
   &=a_tb_{t-1}+\omega_t,
+  \\
+  \widehat{\ve{P}}_t
+  &=\Pi_{\mathrm{iso}}\!\left(
+      \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t
+    \right)
+   =\widehat b_t\ve{I},
   &
-  a_t
-  &=\frac{1}{d_k}\sum_{i=1}^{d_k}\alpha_{t,i}^2,
-  &
+  \widehat{\ve{C}}_t
+  &=\widehat{\ve{P}}_t^{-1}
+   =\widehat c_t\ve{I},
+  \qquad
   \widehat c_t
-  &=\frac{c_{t-1}}{a_t+\omega_t c_{t-1}}.
+  =\frac{c_{t-1}}{a_t+\omega_t c_{t-1}}.
 \end{aligned}
   \label{eq:iso-kla-predict}
 \end{equation}
-Hence $\widehat b_t$ is the average marginal variance. When $\ve{\alpha}_t$ is uniform across
-channels, the prediction is exact; otherwise the memory keeps the full channel-wise transition
-while the uncertainty tracker retains its closest isotropic covariance under
-\eqref{eq:iso-trace-projection}.
+Thus $\widehat b_t$ is the average predictive marginal variance. The projection is inactive when
+$\ve{\alpha}_t$ is constant across channels; otherwise the memory retains the full channel-wise
+transition while the uncertainty tracker keeps only its isotropic projection.
 
-\paragraph{Posterior-update approximation.}
+\paragraph{Posterior covariance.}
 By the columnwise factorization, it suffices to consider value coordinate $j$. Let
-$\widehat{\ve{s}}_{t,j}$ be column $j$ of the predicted memory $\widehat{\ve{S}}_t$. Under the
-isotropic predictive state, the one-step model is
+$\widehat{\ve{s}}_{t,j}$ and $\ve{s}_{t,j}$ denote column $j$ of the predicted memory
+$\widehat{\ve{S}}_t$ and filtered memory $\ve{S}_t$, respectively. Under the retained predictive
+state, the one-step model is
 \begin{equation}
   \widetilde{\ve{s}}_{t,j}\mid\mathcal{F}_{t-1}
-  \sim\mathcal{N}(\widehat{\ve{s}}_{t,j},\widehat b_t\ve{I}),
+  \sim\N(\widehat{\ve{s}}_{t,j},\widehat{\ve{P}}_t),
   \qquad
   v_{t,j}=\ve{k}_t^{\tr}\widetilde{\ve{s}}_{t,j}+e_{t,j},
   \qquad
-  e_{t,j}\sim\mathcal{N}(0,r_t).
+  e_{t,j}\sim\N(0,r_t).
   \label{eq:iso-variational-model}
 \end{equation}
-The exact filtering mean is a Kalman residual update, but its covariance
+The exact one-step filtering posterior under \eqref{eq:iso-variational-model}, treating
+$\ve{k}_t$ and $r_t$ as known at step $t$, has the Kalman residual-update mean and a generally
+dense covariance:
 \begin{equation}
+\begin{aligned}
+  \ve{\kappa}_t
+  &=\beta_t\ve{k}_t,
+  &
+  \beta_t
+  &=\frac{\widehat b_t}{r_t+\widehat b_t\|\ve{k}_t\|_2^2},
+  \\
+  \ve{s}_{t,j}
+  &=\widehat{\ve{s}}_{t,j}
+    +\ve{\kappa}_t
+      \left(v_{t,j}-\ve{k}_t^{\tr}\widehat{\ve{s}}_{t,j}\right),
+  \\
   \ve{P}_t^\star
-  =\widehat b_t\ve{I}
+  &=\widehat b_t\ve{I}
    -\frac{\widehat b_t^2\ve{k}_t\ve{k}_t^{\tr}}
     {r_t+\widehat b_t\|\ve{k}_t\|_2^2},
-  \qquad
-  \ve{C}_t^\star\equiv(\ve{P}_t^\star)^{-1}
-  =\widehat c_t\ve{I}+\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr}
+  &
+  \ve{C}_t^\star
+  &=(\ve{P}_t^\star)^{-1}
+   =\widehat c_t\ve{I}+\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr}.
+\end{aligned}
   \label{eq:iso-exact-posterior}
 \end{equation}
-is generally dense and therefore leaves $\mathcal{I}_{++}^{d_k}$. Since the measurement update
-is additive in precision, applying \eqref{eq:iso-trace-projection} in information coordinates gives
+The star distinguishes this exact posterior covariance from the retained isotropic covariance
+$\ve{P}_t$. Because the measurement update is additive in precision, we project
+$\ve{C}_t^\star$ rather than $\ve{P}_t^\star$:
 \begin{equation}
+\begin{aligned}
   \ve{C}_t
-  =\Pi_{\mathrm{iso}}\!\left(\ve{C}_t^\star\right)
-  =c_t\ve{I},
-  \qquad
-  c_t=\widehat c_t+\frac{\|\ve{k}_t\|_2^2}{d_k r_t}.
+  &=\Pi_{\mathrm{iso}}\!\left(\ve{C}_t^\star\right)
+   =c_t\ve{I},
+  &
+  c_t
+  &=\widehat c_t+\frac{\|\ve{k}_t\|_2^2}{d_k r_t},
+  \\
+  \ve{P}_t
+  &=\ve{C}_t^{-1}=b_t\ve{I},
+  &
+  b_t&=c_t^{-1}.
+\end{aligned}
   \label{eq:iso-information-projection}
 \end{equation}
-This second projection retains the average marginal information contributed by the observation.
-The inverse of the projected precision is also exactly the covariance obtained by online
-variational inference within the isotropic mean-field family
-$\mathcal{Q}_{\mathrm{iso}}
-=\{\mathcal{N}(\ve{m},b\ve{I}):\ve{m}\in\R^{d_k},\ b>0\}$.
+This projection retains the average coordinatewise precision contributed by the observation. It is
+also the reverse-KL projection of the exact one-step posterior onto
+\begin{equation*}
+  \mathcal{Q}_{\mathrm{iso}}
+  =\{\N(\ve{s},b\ve{I}):\ve{s}\in\R^{d_k},\ b>0\}.
+\end{equation*}
 
 \begin{proposition}[Online isotropic variational update]
 \label{prop:iso-variational-inference}
-Let $\pi_{t,j}=p(\widetilde{\ve{s}}_{t,j}\mid v_{t,j},\mathcal{F}_{t-1})$ denote the exact posterior
-under \eqref{eq:iso-variational-model}, with the known $\ve{k}_t$ and $r_t$ suppressed. Then
+Let
+$\pi_{t,j}=p(\widetilde{\ve{s}}_{t,j}\mid
+v_{t,j},\mathcal{F}_{t-1},\ve{k}_t,r_t)$ denote the exact one-step filtering posterior under
+\eqref{eq:iso-variational-model}. The variational approximation is
 \begin{equation}
-  q_{t,j}^{\mathrm{VI}}
+  q_{t,j}
   =\argmin_{q\in\mathcal{Q}_{\mathrm{iso}}}
-    \operatorname{KL}(q\,\|\,\pi_{t,j})
+    \operatorname{KL}\!\left(q\,\|\,\pi_{t,j}\right).
   \label{eq:iso-variational-objective}
 \end{equation}
-has the unique solution
+Its unique solution is
 \begin{equation}
 \begin{aligned}
-  q_{t,j}^{\mathrm{VI}}
-  &=\mathcal{N}(\ve{m}_{t,j}^{\mathrm{VI}},b_t^{\mathrm{VI}}\ve{I}), \\
-  \ve{m}_{t,j}^{\mathrm{VI}}
+  q_{t,j}
+  &=\N(\ve{s}_{t,j},b_t\ve{I}),
+  \\
+  \ve{s}_{t,j}
   &=\widehat{\ve{s}}_{t,j}
-    +\beta_t\ve{k}_t
-      \left(v_{t,j}-\ve{k}_t^{\tr}\widehat{\ve{s}}_{t,j}\right), \\
-  \beta_t
-  &=\frac{\widehat b_t}{r_t+\widehat b_t\|\ve{k}_t\|_2^2}, \\
-  b_t^{\mathrm{VI}}
-  &=\left(\widehat c_t+\frac{\|\ve{k}_t\|_2^2}{d_k r_t}\right)^{-1}.
+    +\ve{\kappa}_t
+      \left(v_{t,j}-\ve{k}_t^{\tr}\widehat{\ve{s}}_{t,j}\right),
+  \\
+  b_t
+  &=\left(\widehat c_t+\frac{\|\ve{k}_t\|_2^2}{d_k r_t}\right)^{-1},
+  \qquad
+  \ve{\kappa}_t=\beta_t\ve{k}_t.
 \end{aligned}
   \label{eq:iso-variational-solution}
 \end{equation}
-Thus the variational approximation preserves the exact mean of the one-step posterior and retains
-one scalar posterior variance. Its precision coincides with the trace projection in
-\eqref{eq:iso-information-projection}.
+Thus the retained mean $\ve{s}_{t,j}$ is the exact one-step posterior mean, while $b_t\ve{I}$ is
+the isotropic approximation to its covariance.
 \end{proposition}
 
 \begin{proof}
-The exact posterior is Gaussian with mean given by the Kalman update in
-\eqref{eq:iso-variational-solution} and precision $\ve{C}_t^\star$ given in
-\eqref{eq:iso-exact-posterior}. For
-$q=\mathcal{N}(\ve{m},b\ve{I})$, minimizing the Gaussian KL first sets $\ve{m}$ to the exact
-posterior mean. Its covariance-dependent terms are
+The exact posterior is Gaussian with mean $\ve{s}_{t,j}$ and precision $\ve{C}_t^\star$ from
+\eqref{eq:iso-exact-posterior}. For $q=\N(\ve{s},b\ve{I})$, minimizing the Gaussian KL first sets
+$\ve{s}=\ve{s}_{t,j}$. Its covariance-dependent terms are
 $\tfrac12\{b\Trace(\ve{C}_t^\star)-d_k\log b\}$ up to constants, so
 $b=d_k/\Trace(\ve{C}_t^\star)$. Substituting
-$\Trace(\ve{C}_t^\star)=d_k\widehat c_t+\|\ve{k}_t\|_2^2/r_t$ gives
+$\Trace(\ve{C}_t^\star)=d_k\widehat c_t+\|\ve{k}_t\|_2^2/r_t$ gives $b=b_t$ in
 \eqref{eq:iso-variational-solution}. Equivalently,
-$(b\ve{I})^{-1}=\Pi_{\mathrm{iso}}(\ve{C}_t^\star)$, so the one-step variational solution and
-the information-coordinate trace projection are identical.
+$(b_t\ve{I})^{-1}=\Pi_{\mathrm{iso}}(\ve{C}_t^\star)$, so the variational solution and the
+information-coordinate projection in \eqref{eq:iso-information-projection} coincide.
 \end{proof}
 
-Analogously to the diagonal case, this gives the following Isotropic KDN formulation.
+Using this retained posterior as the next token's prior yields a scalar information recurrence.
+Like the per-channel diagonal recurrence, it is a M\"obius map and therefore admits an associative
+prefix scan. The resulting Isotropic KDN is summarized below.
 
 \refstepcounter{definition}\label{prop:isotropic-kalman-linear-attention}
 \begin{tcolorbox}[
@@ -2300,8 +2326,8 @@ Analogously to the diagonal case, this gives the following Isotropic KDN formula
   top=5pt,
   bottom=5pt
 ]
-Let the predictive covariance be restricted to $\mathcal{I}_{++}^{d_k}$ and let
-$\ve{D}_t$, $\ve{\Omega}_t$, and $r_t$ be parameterized by
+Let the retained covariance satisfy $\ve{P}_t=b_t\ve{I}$, and parameterize
+$\ve{D}_t$, $\ve{\Omega}_t$, and $r_t$ by
 \begin{equation}
 \begin{aligned}
   \ve{\alpha}_t &= \sigma(\ve{W}_{\alpha}\ve{x}_t+\ve{b}_{\alpha}),
@@ -2316,8 +2342,9 @@ $\ve{D}_t$, $\ve{\Omega}_t$, and $r_t$ be parameterized by
 \end{aligned}
 \label{eq:iso-kla-box-parameterization}
 \end{equation}
+Here $\ve{x}_t$ is the token hidden state, and all weights and biases are learnable parameters.
 For each memory column, Proposition~\ref{prop:iso-variational-inference} gives the isotropic
-variational state. Define
+variational state. For the unscaled variational information update, define
 \begin{equation}
   a_t=\frac{1}{d_k}\sum_i\alpha_{t,i}^2,
   \qquad
@@ -2351,36 +2378,45 @@ The information states are computed by the scalar M\"obius scan
 The adaptive write strength at token $t$ uses the exclusive prefix state $c_{t-1}$:
 \begin{equation}
 \begin{aligned}
-  \widehat{c}_t
+  \widehat c_t
   &= \frac{c_{t-1}}{a_t+\omega_t c_{t-1}},
   &
-  \widehat{b}_t
-  &= \frac{1}{\widehat{c}_t},
+  \widehat b_t
+  &= \frac{1}{\widehat c_t},
   \\[3pt]
   \beta_t
-  &= \frac{\widehat{b}_t}{r_t+\widehat{b}_t\|\ve{k}_t\|_2^2}.
+  &= \frac{\widehat b_t}{r_t+\widehat b_t\|\ve{k}_t\|_2^2},
+  &
+  \ve{\kappa}_t
+  &=\beta_t\ve{k}_t.
 \end{aligned}
 \label{eq:iso-kla-box-gain}
 \end{equation}
-With $\beta_t$ available before the memory scan, the memory update takes the KDA form:
+With $\ve{\kappa}_t$ available before the memory scan, the mean update has the same residual form
+as the exact Kalman filter:
 \begin{equation}
 \begin{aligned}
+  \widehat{\ve{S}}_t
+  &=\ve{D}_t\ve{S}_{t-1},
+  \\
   \ve{S}_t
-  &=
-  (\ve{I}-\beta_t\ve{k}_t\ve{k}_t^{\tr})\ve{D}_t\ve{S}_{t-1}
-  +\beta_t\ve{k}_t\ve{v}_t^{\tr},
-  &
-  \ve{o}_t &= \ve{S}_t^{\tr}\ve{q}_t.
+  &=\widehat{\ve{S}}_t
+    +\ve{\kappa}_t
+      \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr}
+  \\
+  &=(\ve{I}-\beta_t\ve{k}_t\ve{k}_t^{\tr})\ve{D}_t\ve{S}_{t-1}
+    +\beta_t\ve{k}_t\ve{v}_t^{\tr},
+  \qquad
+  \ve{o}_t=\ve{S}_t^{\tr}\ve{q}_t.
 \end{aligned}
   \label{eq:iso-kla-box-memory}
 \end{equation}
 \end{tcolorbox}
 
-Therefore Isotropic KDN sits between fixed-gain delta rules and diagonal KDN: it keeps a
-Kalman-style scalar uncertainty and token-dependent observation noise, but because
-$\ve{P}_t$ is isotropic, it always writes along $\ve{k}_t$ with one scalar strength. Diagonal
-KDN strictly generalizes this by replacing the scalar $b_t$ with a vector
-$\ve{p}_t$, allowing the gain to be anisotropic.
+Isotropic KDN therefore preserves the predict--update decomposition and Kalman residual write, but
+compresses the uncertainty state to one scalar per head. Its gain is constrained to
+$\ve{\kappa}_t=\beta_t\ve{k}_t$; Diagonal KDN replaces $b_t$ by the vector $\ve{p}_t$ and permits
+an anisotropic gain direction.
 
 \section{Hardware-Efficient Chunkwise Algorithm}
 \label{sec:chunkwise-algorithm}
