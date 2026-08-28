@@ -1,0 +1,765 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,mathtools,booktabs,microtype,xcolor}
+\usepackage{array,enumitem}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+
+\title{Rotational Diagonal Kalman Linear Attention:\\
+Model, Mamba-3 Lessons, and an Implementation Contract}
+\author{}
+\date{August 28, 2026}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\ve}[1]{\boldsymbol{#1}}
+\newcommand{\tr}{\mathsf{T}}
+\newcommand{\sg}{\operatorname{sigmoid}}
+\newcommand{\splus}{\operatorname{softplus}}
+\newcommand{\detach}{\operatorname{stopgrad}}
+\newcommand{\mean}{\operatorname{mean}}
+\newcommand{\diag}{\operatorname{diag}}
+\let\pathcode\path
+
+\setlist{itemsep=2pt,topsep=4pt}
+\setlength{\emergencystretch}{3em}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Mamba-2 supplies a strong selective state-space baseline, but its SISO state transition is a
+scalar radial contraction: it cannot rotate a two-dimensional latent subspace.  The installed
+Mamba-3 SISO implementation adds rotation economically by accumulating a bounded angular rate and
+applying the same rotary transform to queries and keys.  Its most useful lesson is therefore not a
+particular state-space write rule, but a representation: pairwise rotation can be moved out of the
+recurrent state update and into a phase-rotated query/key basis.
+
+Rotational diagonal Kalman linear attention (RDiag KLA, E2 clock) adopts that representation while
+retaining KLA's diagonal Kalman covariance and innovation write.  It pair-ties radial transition
+and process-noise parameters, uses a detached live radial statistic to set a bounded token/head
+clock, scans phase in a documented negative gauge, and isolates the phase VJP from radial dynamics.
+This note defines the model, the precise finite-precision implementation contract, and the tests
+needed for promotion.  A step-520 screen after 519 completed optimizer updates accepted the E2
+clock design, but the optimized composed
+implementation still requires its complete post-integration correctness, distributed, soak, and
+performance qualification; this document does not declare production readiness.
+\end{abstract}
+
+\section{Scope and notation}
+
+Let $B,T,H,K,V,D$ denote batch size, sequence length, number of heads, key dimension per
+head, value dimension per head, and model width.  The rotary prefix has even width $K_r=2P$,
+where $P$ is its number of adjacent pairs.  Tensors use the following shapes:
+\begin{align*}
+  \ve{x}&\in\R^{B\times T\times D},
+  &\ve{q},\ve{k},\ve{\alpha},\ve{\omega}
+    &\in\R^{B\times T\times H\times K},\\
+  \ve{v}&\in\R^{B\times T\times H\times V},
+  &\ve{e}&\in\R^{B\times T\times P},\\
+  \ve{\tau}&\in\R^{B\times T\times H},
+  &\ve{\delta},\ve{\phi}&\in\R^{B\times T\times H\times P}.
+\end{align*}
+The raw angle $e_{btj}$ is shared across heads; the clock $\tau_{bth}$ makes the resulting
+increment head-specific.  For an adjacent pair $(2j,2j+1)$, define
+\begin{equation}
+  R(\vartheta)=
+  \begin{bmatrix}
+    \cos\vartheta&-\sin\vartheta\\
+    \sin\vartheta& \cos\vartheta
+  \end{bmatrix},
+  \qquad R(\vartheta)^{\tr}R(\psi)=R(\psi-\vartheta).
+  \label{eq:rotation}
+\end{equation}
+All equations below are per batch element unless a batch index is useful.  ``SISO'' follows the
+Mamba implementation's terminology; a head can still carry multiple value channels that share
+the same scalar state-space coefficients.
+
+\section{What Mamba-2 has---and what it lacks}
+\label{sec:mamba2}
+
+For head $h$, value channel $p$, and SSM state coordinate $n$, the Mamba-2 selective SISO update
+can be written
+\begin{align}
+  d_{th} &= \splus(\widetilde d_{th}+b^{d}_h),
+  & a_{th}&=\exp(A_h d_{th}),\qquad A_h<0,\label{eq:m2-dt}\\
+  X_{t,h,p,n}
+    &=a_{th}X_{t-1,h,p,n}+d_{th}B_{t,n}u_{t,h,p},
+  & y_{t,h,p}&=\sum_n C_{t,n}X_{t,h,p,n}+D_hu_{t,h,p}.
+  \label{eq:m2-state}
+\end{align}
+The input projection is ordered as $[z,x,B,C,dt]$.  It emits one $dt$ row per token and head;
+$B$ and $C$ are token-dependent state vectors.  The factor $a_{th}$ is a scalar radial contraction
+over the head state, and $d_{th}B_tu_t$ is its discretized injection.  There is no angle projection,
+phase state, adjacent-pair structure, sine/cosine operation, or $2\times2$ rotation in this path.
+Mamba-2 therefore supplies selective decay and injection, but not oscillatory transport.  A pair
+of real coordinates within a head shares the same scalar decay, but that factor is $a_{th}I$: it
+has no skew component, phase state, or mechanism for rotating one coordinate into the other.
+
+\section{The installed Mamba-3 SISO rotational path}
+\label{sec:mamba3}
+
+This section describes the code shipped in the installed \texttt{mamba-ssm 2.3.2.post1} package,
+not an inferred variant.  Its input projection is ordered
+\begin{equation}
+  [z,x,B,C,dd_{dt},dd_A,\mathrm{trap},\mathrm{angle}].
+\end{equation}
+The $dd_{dt}$, $dd_A$, and trapezoid fields each have $H$ rows.  In contrast, the angle field has
+only $P_M$ rows, where $P_M$ is half of the selected half- or full-rotary state prefix.  The raw
+angle rows are expanded across heads.  Thus Mamba-3 separates a token/head clock from token/pair
+angular content:
+\begin{align}
+  DT_{th} &= \splus(dd_{dt,th}+b^d_h),\\
+  A_{th} &= \min\{-\splus(dd_{A,th}),-A_{\rm floor}\},
+  & \rho_{th}&=\exp(A_{th}DT_{th}),\\
+  \nu_{tj} &= \pi\tanh(e_{tj}),\\
+  \Delta\theta_{thj} &= DT_{th}\nu_{tj},\\
+  \theta_{thj} &= \theta_{0,hj}+\sum_{s=1}^{t}\Delta\theta_{shj}pmod{2\pi}.
+  \label{eq:m3-phase}
+\end{align}
+The cumulative phase is positive.  For every selected adjacent pair, the SISO kernel applies the
+same $R(+\theta_{thj})$ to $Q_t$ and $K_t$.  Consequently the same-token dot product is unchanged,
+whereas a cross-token term obtains the relative rotation
+\begin{equation}
+  (R(\theta_t)q_t)^{\tr}R(\theta_s)k_s
+  =q_t^{\tr}R(\theta_s-\theta_t)k_s.
+  \label{eq:m3-relative}
+\end{equation}
+If $S_t$ denotes a state in a fixed physical frame, this is equivalent to the moving-frame
+recurrence
+\begin{equation}
+  S_t^- = \rho_t R(-\Delta\theta_t)S_{t-1},
+  \label{eq:m3-moving-frame}
+\end{equation}
+pair by pair, with scalar radial decay $\rho_t$.  The identity follows from
+$R(\theta_t)^{\tr}R(\theta_{t-1})=R(-\Delta\theta_t)$.  It is the key computational idea: no dense
+rotational state transition is needed when radial coefficients are pair-isotropic.
+
+Mamba-3 additionally uses a trapezoidal SSM write.  With
+\begin{equation}
+  \gamma_t=DT_t\,\sg(\mathrm{trap}_t),
+  \qquad
+  \eta_{t+1}=DT_{t+1}\bigl(1-\sg(\mathrm{trap}_{t+1})\bigr),
+\end{equation}
+the offline kernel scales token $t$'s rotated key by
+$\gamma_t+\eta_{t+1}$, while its same-token contribution uses $\gamma_t$.  At a streaming boundary,
+the cached previous key/value contributes the missing $\eta_t$ term.  This is a two-endpoint
+discretization of the Mamba write; it is not the KLA innovation update defined below.
+
+The angle clock is also coupled in backward.  The VJP of the positive cumulative phase is a
+reverse cumulative sum.  It produces both
+\begin{align}
+  \overline e_{tj}
+    &=\sum_h\overline{\Delta\theta}_{thj}\,DT_{th}\,
+      \pi\bigl(1-\tanh^2(e_{tj})\bigr),\\
+  \overline{DT}^{\mathrm{angle}}_{th}
+    &=\sum_j\overline{\Delta\theta}_{thj}\,\pi\tanh(e_{tj}).
+\end{align}
+Here the sum over $h$ is the backward of the head expansion of the shared raw angle rows.  The
+combined implementation explicitly adds
+$\overline{DT}^{\mathrm{angle}}$ to the $DT$ gradient from the radial SSM dynamics.  This is a
+coherent choice for a shared physical discretization clock, but it is intentionally not the RDiag
+E2 gradient contract.
+
+\section{RDiag KLA with the E2 bounded clock}
+\label{sec:rdiag}
+
+\subsection{Pair-tied radial dynamics}
+
+Let the radial preactivation be $f_{bthk}$ with bias $b^d_{hk}$, and let
+\begin{equation}
+  d_{bthk}=\splus(f_{bthk}+b^d_{hk}).
+\end{equation}
+For rotary pair $j$, define the pair step and tied process noise
+\begin{align}
+  \bar d_{bthj}
+    &=\tfrac12(d_{bth,2j}+d_{bth,2j+1}),\\
+  \bar\omega_{bthj}
+    &=\tfrac12(\omega^{\rm in}_{bth,2j}+\omega^{\rm in}_{bth,2j+1}),\\
+  \alpha_{bth,2j}=\alpha_{bth,2j+1}
+    &=\exp\!\left[-\exp(A^{\log}_h)\bar d_{bthj}\right],\\
+  \omega_{bth,2j}=\omega_{bth,2j+1}&=\bar\omega_{bthj}.
+  \label{eq:pair-radial}
+\end{align}
+Only the selected prefix is pair-tied; tail lanes retain the diagonal-KLA frontend's original
+$\alpha$ and $\omega$.  Pair tying is not cosmetic.  On each pair it makes
+$\diag(\alpha_t)=\alpha_{tj}I_2$ and the diagonal process covariance
+$\diag(\omega_t)=\omega_{tj}I_2$, so the \emph{prediction} terms commute with
+$R(\vartheta)$.  It does not force posterior information or the Kalman gain to be pair-isotropic;
+an observation generally splits them.  The diagonal posterior approximation is defined in the
+current moving frame, as made explicit below.
+
+\subsection{Detached live radial clock and persistent anchor}
+
+Set the open upper clock bound to $C=0.1$.  At construction, snapshot one FP32 anchor per head,
+\begin{equation}
+  a_h=\mean_k\splus(b^d_{hk}),\qquad 0<a_h<C.
+  \label{eq:anchor}
+\end{equation}
+The anchor is a persistent buffer, not a parameter.  At each token compute the detached live radial
+mean
+\begin{equation}
+  m_{bth}=\mean_k\splus\!\left(\detach(f_{bthk}+b^d_{hk})\right),
+  \label{eq:live-mean}
+\end{equation}
+and a learnable token/head residual
+\begin{equation}
+  z^{\rm clk}_{bth}=\frac{\langle w_h,x_{bt}\rangle}{\sqrt D}+\beta_h,
+\end{equation}
+evaluated in FP32.
+The E2 clock is
+\begin{equation}
+  \boxed{
+  \tau_{bth}=C\,\sg\!\left[
+    \log m_{bth}-\log(C-a_h)+\tanh(z^{\rm clk}_{bth})
+  \right]}
+  \qquad(C=0.1).
+  \label{eq:e2-clock}
+\end{equation}
+The bounded residual is strictly in $(-1,1)$ and the sigmoid keeps a finite valid clock strictly in
+$(0,C)$.  The implementation does not clamp or use a straight-through estimator: invalid,
+nonfinite, endpoint, or dead-derivative conditions are made visible to health checks, with invalid
+clock outputs replaced by NaNs.
+
+Detachment is a model choice, not merely an optimization.  The current radial timescale determines
+the forward phase scale, while the phase loss cannot change $f$, $b^d$, $A^{\log}$, $\alpha$, or
+$\omega$ through this clock.  The persistent anchor fixes the initialization reference across
+save/resume; recomputing it from a trained $b^d$ would change the model after restart.
+
+\subsection{Angle, sign convention, and rotating basis}
+
+One projection shared across heads produces $e_{btj}$.  The head-specific increment is
+\begin{equation}
+  \delta_{bthj}=\pi\tanh(e_{btj})\tau_{bth},
+  \qquad |\delta_{bthj}|<0.1\pi.
+  \label{eq:rdiag-delta}
+\end{equation}
+RDiag uses the negative inclusive phase scan
+\begin{equation}
+  \phi_{bthj}=\phi_{b0,hj}-\sum_{s=1}^{t}\delta_{bshj},
+  \label{eq:negative-phase}
+\end{equation}
+implemented in FP32 and reduced to $[0,2\pi)$ at the bounded-clock consumer.  The same
+$R(+\phi_{thj})$ is applied to the corresponding pairs of $q_t$ and $k_t$.  Hence, for $s<t$,
+\begin{equation}
+  (R(\phi_t)q_t)^{\tr}R(\phi_s)k_s
+  =q_t^{\tr}R\!\left(\sum_{u=s+1}^{t}\delta_u\right)k_s.
+  \label{eq:rdiag-relative}
+\end{equation}
+Under the column-vector convention of Eq.~\eqref{eq:rotation}, the negative scan therefore
+represents $R(+\delta_t)$ transport.  Mamba-3's positive scan represents $R(-\Delta\theta_t)$.
+This sign is a gauge choice because replacing the zero-initialized angle projection by its negative
+maps one convention to the other.  It is nevertheless an implementation invariant: forward,
+streaming carry, and the negative suffix-scan VJP must use the same sign.
+
+More explicitly, let ${\cal R}_t$ be block diagonal with the pair rotations $R(\phi_{thj})$ and an
+identity tail.  The corresponding physical transition and process covariance are
+\begin{equation}
+  D_t={\cal R}_t^{\tr}\diag(\alpha_t){\cal R}_{t-1},
+  \qquad
+  \Omega_t^{\rm phys}={\cal R}_t^{\tr}\diag(\omega_t){\cal R}_t.
+  \label{eq:rdiag-physical}
+\end{equation}
+On a tied pair, these reduce to $D_{tj}=\alpha_{tj}R(+\delta_{tj})$ and
+$\Omega_{tj}^{\rm phys}=\omega_{tj}I_2$.  With moving-frame state
+$\bar S_t={\cal R}_t S_t$ and addresses
+$\bar k_t={\cal R}_tk_t$, $\bar q_t={\cal R}_tq_t$, the mean-state recurrence becomes purely
+radial and can reuse the diagonal-KLA memory kernel.
+
+\subsection{Diagonal Kalman gain and innovation memory}
+
+Let the phase-rotated addresses be $\widetilde q_t=\bar q_t$ and
+$\widetilde k_t=\bar k_t$.  With posterior diagonal
+information $c_{t-1,hk}>0$, observation noise $r_{th}>0$, and information scale $s_h>0$, RDiag KLA
+uses the moving-frame state (written as $S_t$ below for brevity)
+\begin{align}
+  p^-_{thk}
+    &=\frac{\alpha_{thk}^{2}}{c_{t-1,hk}}+\omega_{thk},
+    \label{eq:predict-cov}\\
+  \kappa_{thk}
+    &=\frac{p^-_{thk}\widetilde k_{thk}}
+      {r_{th}+\sum_i p^-_{thi}\widetilde k_{thi}^{2}},
+    \label{eq:gain}\\
+  c_{thk}
+    &=\frac{1}{p^-_{thk}}+
+      s_h\frac{\widetilde k_{thk}^{2}}{r_{th}}.
+  \label{eq:posterior-info}
+\end{align}
+For associative state $S_{th}\in\R^{K\times V}$,
+\begin{align}
+  S^-_{th}&=\diag(\alpha_{th})S_{t-1,h},\\
+  S_{th}&=S^-_{th}+\ve{\kappa}_{th}
+    \left(\ve{v}_{th}-\widetilde{\ve{k}}_{th}^{\tr}S^-_{th}\right)^{\tr},
+    \label{eq:kla-state}\\
+  o_{th}&=S_{th}^{\tr}\left(K^{-1/2}\widetilde{\ve{q}}_{th}\right).
+  \label{eq:kla-read}
+\end{align}
+This is the KLA estimator.  It is not a Mamba SSM write: $\kappa_t$ is an adaptive anisotropic
+Kalman gain and the write is the current innovation.  The diagonal information recurrence can be
+computed by its existing associative M\"obius scan, followed by the existing chunked affine memory
+recurrence.  In physical coordinates, $c_t$ represents the model's diagonal projection of
+${\cal R}_tP_t^{-1}{\cal R}_t^{\tr}$; it is not a claim that rotating an arbitrary anisotropic
+posterior covariance remains diagonal.  In particular, $c$, $\kappa$, $k$, and $q$ are never
+pair-tied.
+
+\subsection{VJP isolation}
+
+The computational graph has two intentionally separate branches:
+\begin{align*}
+  (f,b^d,A^{\log},\omega^{\rm in})
+    &\longrightarrow (\alpha,\omega)\longrightarrow\text{Kalman dynamics},\\
+  \detach(f+b^d),\ a,\ (W,\beta),\ e
+    &\longrightarrow \tau,\delta,\phi\longrightarrow\text{rotated }q,k.
+\end{align*}
+The direct radial backward has no angle input.  Conversely, the clock's $m$ and $a$ arguments are
+detached, so the phase VJP returns no gradient to the radial gate, radial bias, or $A^{\log}$.
+Unlike Mamba-3, RDiag does not add an angular-clock contribution to the dynamical radial-step
+gradient.  Among the new phase-specific parameters, gradients reach the angle projection and clock
+weight/bias; they also return to the shared hidden states through both projections.  The isolation
+claim is specifically that no clock edge reaches the radial parameters.
+
+\section{What to take from Mamba-3}
+\label{sec:takeaways}
+
+The useful transfer from Mamba-3 is structural: encode rotation as a relative query/key phase with
+a small shared angle projection and a token/head clock.  The estimator-specific pieces should
+remain KLA-specific.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.16\linewidth}p{0.23\linewidth}p{0.25\linewidth}p{0.27\linewidth}@{}}
+\toprule
+Aspect & Mamba-2 SISO & Mamba-3 SISO & RDiag KLA E2 \\
+\midrule
+Transition geometry
+  & Scalar radial decay; no rotation
+  & Radial SSM plus relative pair rotation
+  & Pair-tied radial KLA plus relative pair rotation \\
+Clock
+  & $DT_{th}>0$
+  & $DT_{th}>0$ shared by decay and angle
+  & $0<\tau_{th}<0.1$, based on detached live radial mean plus residual \\
+Angle rows
+  & None
+  & Token/pair rows shared across heads
+  & Token/pair rows shared across heads; head-specific $\tau$ \\
+Phase gauge
+  & None
+  & Positive cumulative phase
+  & Negative cumulative phase; sign documented by Eq.~\eqref{eq:rdiag-relative} \\
+Write
+  & Euler-like $DT\,B\,x$
+  & Trapezoidal two-endpoint SSM write
+  & Kalman innovation with anisotropic gain \\
+Clock gradient
+  & Only SSM dynamics
+  & Angle $dDT$ is added to dynamical $dDT$
+  & Phase/radial VJPs intentionally isolated \\
+Covariance
+  & No Kalman posterior covariance
+  & No KLA diagonal information update
+  & Diagonal information in moving frame; pair-isotropic prediction parameters \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Concretely, RDiag should take the following from Mamba-3:
+\begin{enumerate}[leftmargin=1.8em]
+  \item represent rotation by the same adjacent-pair transform on queries and keys, avoiding a
+        dense recurrent rotation;
+  \item use a bounded angular rate $\pi\tanh(e)$ and one token/head clock broadcast over pair modes;
+  \item share the compact angle projection across heads, while permitting head-specific timing;
+  \item accumulate phase and streaming carry in FP32, with a specified modular reduction contract;
+  \item treat every dependency of a shared clock explicitly in backward and test cancellation-heavy
+        reductions against the executable reference; and
+  \item retain half- or full-prefix rotary layouts rather than forcing every key lane to rotate.
+\end{enumerate}
+
+It should intentionally \emph{not} copy the following:
+\begin{enumerate}[leftmargin=1.8em]
+  \item Mamba-2's scalar-only transition as a purported rotational mechanism;
+  \item Mamba-3's trapezoidal SSM write, because KLA's innovation update defines a different
+        estimator;
+  \item Mamba-3's angle-to-$DT$ gradient coupling, because E2 deliberately uses a detached radial
+        timescale;
+  \item approximate softplus, trigonometric, or reassociated reduction sequences without proving
+        the required finite-precision parity;
+  \item independent radial coefficients inside a rotated pair while claiming a literal
+        scalar-damped rotation; they instead define a more general rotated anisotropic
+        contraction; or
+  \item hard clock clamps or straight-through boundary gradients, which conceal saturation instead
+        of making it observable.
+\end{enumerate}
+
+\section{Implementation contract}
+\label{sec:implementation}
+
+\subsection{Layout and forward pipeline}
+
+The production-oriented route is restricted to contiguous CUDA tensors, BF16 projected
+$q,k,v,f_{\rm raw},z_{\rm raw},y_{\rm raw}$, FP32 frontend parameters, equal key/value head counts,
+and $K\in\{64,128\}$.  The clock preactivation $z^{\rm clk}$ is a separate FP32 quantity.
+The rotary fraction is $1/2$ or $1$, so $K_r$ is positive and even.  Adjacent memory lanes
+$(0,1),(2,3),\ldots,(K_r-2,K_r-1)$ form the rotary pairs; no split-half pairing is permitted.
+
+The forward pipeline is:
+\begin{enumerate}[leftmargin=1.8em]
+  \item project $q,k,v$ and the diagonal-KLA radial/noise quantities;
+  \item compute the standard frontend's frozen $\alpha^{\rm in}$ and $\omega^{\rm in}$;
+  \item in the RDiag direct radial kernel, recompute the rotary prefix using
+        Eq.~\eqref{eq:pair-radial}, preserve the tail, and build the log-decay prefix consumed by
+        the chunked memory kernel;
+  \item form the exact detached FP32 radial mean $m$ described below;
+  \item keep $Wx$ as the existing FP32 GEMM, then fuse the pointwise clock chain and
+        Eq.~\eqref{eq:rdiag-delta};
+  \item perform the bounded negative phase scan in chunks of 64, retaining an FP32 carry;
+  \item normalize $q,k$ in FP32, round the memory-facing copies as specified, and rotate adjacent
+        pairs by the same phase; and
+  \item run the diagonal information/gain kernel and the S3 chunked KLA memory recurrence.
+\end{enumerate}
+The gain-facing key remains FP32.  The memory-facing query/key route is rounded through BF16 in the
+same place as its executable reference before rotation/final rounding; changing that boundary is a
+numerical model change for parity purposes.
+
+\subsection{The precise detached-clock mean}
+\label{sec:precise-mean}
+
+The actual radial dynamics retain the FLA softplus used by the qualified baseline.  The detached
+clock uses a separate precise FP32 copy
+\begin{equation}
+  \splus_{20}(x)=
+  \begin{cases}
+    x,&x>20,\\
+    \log1p(\exp x),&x\leq20,
+  \end{cases}
+  \label{eq:precise-softplus}
+\end{equation}
+evaluated with the precise device intrinsics.  To reproduce the eager reference, the optimized
+path must materialize
+\begin{equation}
+  \mathrm{clock\_dt}\in\R^{B\times T\times H\times K}
+\end{equation}
+in FP32 and then invoke the framework reduction
+\begin{equation}
+  \mathrm{radial\_clock}
+  =\texttt{torch.mean(clock\_dt, dim=-1, out=radial\_clock)}.
+  \label{eq:torch-mean}
+\end{equation}
+A mathematically equivalent Triton lane sum is not an exact substitute.  It changes addition order
+and was shown to leave small residual differences that can be amplified by long phase scans and
+cancellation-heavy angle gradients.  The precise clock copy is detached; the FLA-softplus radial
+outputs and their VJP remain untouched.
+The temporary costs exactly $4BTHK$ bytes.  At $B=4,T=4096,H=16$, that is 64 MiB for $K=64$ and
+128 MiB for $K=128$; at $H=18,K=128$ it is 144 MiB.  This cost belongs in the end-to-end memory and
+speed gate rather than being hidden by a numerically different reduction.
+
+\subsection{Phase scan and backward order}
+
+The phase forward is an inclusive FP32 scan.  Each chunk computes
+$\phi=\mathrm{carry}-\operatorname{cumsum}(\delta)$, wraps valid values to $[0,2\pi)$, and passes the
+wrapped final value as the next carry.  Before reduction, $|\phi|$ must not exceed $65{,}536$;
+nonfinite, out-of-contract, or noncanonical residues become sticky NaNs.  Its VJP is the global
+negative suffix scan
+\begin{equation}
+  \overline\delta_t=-\sum_{u=t}^{T}\overline\phi_u,
+  \label{eq:phase-vjp}
+\end{equation}
+with the final-carry cotangent subtracted from every token when present.
+
+For the fused clock/delta backward, operation order is part of the contract.  Let
+$g_{thj}=\overline\delta_{thj}$.  The eager-compatible order is
+\begin{align}
+  \overline\tau_{th}
+    &=\sum_j\left[g_{thj}\bigl(\pi\tanh(e_{tj})\bigr)\right],
+    \label{eq:dtau-order}\\
+  \overline z^{\rm clk}_{th}
+    &=\operatorname{mask}_{th}(\overline\tau_{th})
+      \,\tau^{\rm raw}_{th}\left(1-\frac{\tau^{\rm raw}_{th}}{C}\right)
+      \left(1-\tanh^2 z^{\rm clk}_{th}\right),\\
+  \overline e_{tj}
+    &=\left[\left(\sum_h g_{thj}\tau_{th}\right)\pi\right]
+      \left(1-\tanh^2 e_{tj}\right).
+  \label{eq:dangle-order}
+\end{align}
+Here $\operatorname{mask}_{th}(g)$ is $g$ when the forward validity predicate selected
+$\tau^{\rm raw}_{th}$ and zero when it selected the detached NaN branch.  The subsequent
+multiplication order is retained, so a NaN local derivative remains fail-visible even after a zero
+cotangent mask.
+Equation~\eqref{eq:dtau-order} must be evaluated as the displayed broadcast multiply followed by
+the framework's sum over $P$; pulling $\pi$ outside the sum is not accepted as ``equivalent.''
+For Eq.~\eqref{eq:dangle-order}, multiply by $\tau$, reduce over $H$, multiply by $\pi$, and only
+then apply the tanh derivative.  The validity mask is applied to the incoming clock cotangent
+before the sigmoid/tanh chain, matching the eager \texttt{where(valid, raw\_tau, detached\_nan)}
+VJP.  After the FP32 head reduction and factor order in Eq.~\eqref{eq:dangle-order}, the raw-angle
+gradient is stored in \texttt{angle\_raw}'s dtype (BF16 on the production route) before the angle
+projection VJP.  Weight and hidden-state gradients then flow through the ordinary linear
+operations.
+
+\subsection{Persistent state and FSDP}
+
+The anchor $a_h$ must satisfy all of the following:
+\begin{enumerate}[leftmargin=1.8em]
+  \item FP32, contiguous, shape $[H]$, finite, and strictly inside $(0,0.1)$;
+  \item registered as a persistent buffer and present in the model state dictionary;
+  \item absent from named parameters and optimizer groups;
+  \item identical across distributed ranks after construction, FSDP wrapping, save, and resume;
+  \item restored from the checkpoint rather than regenerated from the current radial bias.
+\end{enumerate}
+FSDP mixed precision must not downcast this buffer.  Resume tests must compare its bytes before and
+after round trips and verify that fresh construction cannot silently overwrite a checkpointed
+anchor.
+
+\subsection{Initialization and health signals}
+
+The angle projection weight and bias, and the bounded-clock residual weight and bias, are initialized
+to zero.  Rotation therefore starts at the \emph{pair-tied} diagonal-KLA function: $e=0$ gives
+$\delta=0$ even when $\tau$ is nonzero, while the pair averaging in Eq.~\eqref{eq:pair-radial}
+remains active.  This is preferable to initializing the clock at zero, which would place it on a
+boundary and kill useful clock gradients once angles become live.
+
+The audited bounded RDiag named configurations use $r_{\min}=0.01$, process-noise floor
+$\omega_{\min}=q_{\min}=0$, and \texttt{gain\_init=iso}.  The last setting zeroes the output map of
+the process-noise projection, so $\omega$ starts uniform across key channels; it does \emph{not}
+initialize $\omega$ itself to zero, because the positive softplus remains.  These are recipe and
+initialization choices rather than changes to Eqs.~\eqref{eq:predict-cov}--\eqref{eq:kla-read}.
+
+At every checked optimizer boundary, diagnostics should aggregate across microbatches, layers, and
+ranks:
+\begin{itemize}[leftmargin=1.8em]
+  \item nonfinite counts for the radial mean, base logit, residual, logit, raw clock, valid clock,
+        derivative, phase, parameters, and gradients;
+  \item exact endpoint and near-boundary counts, using $10^{-4}$ and $0.1-10^{-4}$ as the observed
+        lower and upper near-boundary bands;
+  \item minimum positive clock Jacobian and a near-dead count below $10^{-8}$;
+  \item token variation of the residual projection after bootstrap;
+  \item phase magnitude, delta magnitude, and canonical wrapped-range checks; and
+  \item schema/count agreement across ranks, including exactly one observation per expected
+        microbatch/layer pair.
+\end{itemize}
+The kernel itself fails visibly at invalid endpoints.  Promotion screens may impose stricter
+distributional thresholds than the continuous health controller; both classes of gate are needed.
+
+\section{Reference pseudocode}
+
+The following pseudocode fixes the mathematical order without prescribing launch geometry.
+\begin{enumerate}[leftmargin=1.8em]
+  \item \textbf{Radial and clock preparation.}
+  \begin{align*}
+    x^{d}&=f+\texttt{dt\_bias},\\
+    d^{\rm radial}&=\texttt{FLA\_softplus}(x^d),\\
+    \texttt{clock\_dt}&=\splus_{20}(\detach(x^d))\quad\text{materialized FP32 }[B,T,H,K],\\
+    m&=\texttt{torch.mean(clock\_dt, dim=-1, out=radial\_clock)}.
+  \end{align*}
+  Pair-average $d^{\rm radial}$ and $\omega$ on the rotary prefix, and construct $\alpha$ from
+  Eq.~\eqref{eq:pair-radial}.  Do not use \texttt{clock\_dt} for radial dynamics.
+
+  \item \textbf{Bounded clock and phase.}
+  \begin{align*}
+    z^{\rm clk}&=\texttt{linear}(x,W)/\sqrt D+\beta,\\
+    \tau&=0.1\,\sg\bigl(\log m-\log(0.1-a)+\tanh z^{\rm clk}\bigr),\\
+    \delta&=\pi\tanh(e)\,\tau,\\
+    \phi_t&=\operatorname{wrap}_{2\pi}(\phi_{t-1}-\delta_t).
+  \end{align*}
+  Reject invalid open-clock or phase-contract values by producing observable NaNs.
+
+  \item \textbf{Addresses and Kalman recurrence.}
+  Rotate the same adjacent prefix of normalized $q$ and $k$ by $R(\phi)$, preserve tail lanes,
+  then apply Eqs.~\eqref{eq:predict-cov}--\eqref{eq:kla-read}.  The chunked implementation must
+  match this token recurrence under the documented BF16/FP32 boundary.
+
+  \item \textbf{Backward.}
+  Run Eq.~\eqref{eq:phase-vjp}; use Eqs.~\eqref{eq:dtau-order}--\eqref{eq:dangle-order} exactly;
+  return no clock gradient to $m$ or $a$; and run the independent radial/Kalman VJPs.
+\end{enumerate}
+
+\section{Lessons from the E-screen and performance/numerical debugging}
+\label{sec:lessons}
+
+\paragraph{An open interval is not a distributional guarantee.}
+An earlier bounded-clock E screen completed 519 optimizer updates and produced no exact endpoints or
+nonfinite clocks, yet the step-520 evaluator rejected it.  In layer 0, the lower-near-boundary
+fraction was $0.00205326$, above the preregistered $10^{-3}$ threshold; the observed clock range was
+approximately $[8.65\times10^{-5},\,0.09813]$.  Thus a smooth sigmoid bound alone did not prevent
+probability mass from accumulating near a boundary.  The design response was the detached live
+radial base plus a bounded token/head residual, not a harder clamp.
+
+The redesigned E2 screen reached its step-520 evaluation after 519 completed optimizer updates
+(520 measured gradients), with zero lower and upper near-boundary counts in the reported gate and
+an observed clock range of approximately
+$[0.01060,\,0.08181]$.  That result supports the clock design and justified integration work.  It
+does not prove long-run training quality, kernel parity under every shape, distributed resume
+correctness, or a production speedup.
+
+\paragraph{Correctness-first composition exposed the actual performance target.}
+At $B=4,T=4096,H=16,K=V=128,D=2048$, the unfused rotational-v1 wrapper measured 24.706 ms for
+combined mixer forward/backward versus 13.735 ms for its frozen control, a $1.799\times$ ratio
+(79.9\% overhead).  The identical-input frozen S3 stage was $0.999\times$ its control, localizing
+the cost to the eager second-$dt$, pair tying, phase/trigonometry, three rotations, and prefix
+rebuild.  This motivated the direct radial kernel, fused normalization/rotation, and fused
+clock/delta path while retaining the established gain and S3 kernels.  These are historical
+isolation numbers for the v1 geometry, not a speed claim for the final E2 composition; the exact
+clock mean's FP32 scratch and full-layer runtime still require measurement.
+
+\paragraph{A tiny local error can become a large gradient discrepancy.}
+The first optimized clock path reused the FLA radial softplus.  Against eager PyTorch, the initial
+radial-mean discrepancy was only about $6.33\times10^{-8}$ in maximum absolute value and
+$1.54\times10^{-6}$ in relative $L_2$.  After the logit, long phase scan, BF16 rotation boundary,
+and cancellation across heads, the angle-weight gradient showed about $3.81\times10^{-3}$ relative
+$L_2$ error in the focused diagnostic.  Near-zero reference entries also made elementwise relative
+metrics misleading, so absolute, normwise, and cancellation-stress gates are all required.
+
+Using Eq.~\eqref{eq:precise-softplus} reduced the clock error substantially, but a Triton reduction
+still did not reproduce eager bitwise.  Materializing the FP32 $[B,T,H,K]$ precise values and using
+the exact framework mean was bitwise identical in the focused $K=64$ and $K=128$ experiment while
+leaving the FLA radial $\alpha$, log-prefix, and $\omega$ outputs bitwise unchanged.  Likewise,
+algebraically reassociated all-Triton backward reductions failed the focused VJP gate; the explicit
+framework reduction of Eq.~\eqref{eq:dtau-order} and the factor order of
+Eq.~\eqref{eq:dangle-order} passed it.  The lesson is narrow but important: the executable eager
+graph, including reduction order, is the reference for this mixed-precision path.
+
+\section{Invariants and promotion checklist}
+
+The following are invariants, not tunable approximations:
+\begin{enumerate}[leftmargin=1.8em]
+  \item rotary prefix width is positive and even; pairing is adjacent;
+  \item $\alpha$ and $\omega$ are exactly equal within each selected pair;
+  \item $q$ and $k$ receive the same phase and same rotation matrix;
+  \item the phase scan is negative and inclusive, and its backward is a negative suffix scan;
+  \item $m$ and $a$ are detached FP32 quantities; phase gradients do not enter radial dynamics;
+  \item the valid clock and its local derivative are finite and strictly positive, with
+        $0<\tau<0.1$;
+  \item the anchor is persistent FP32 checkpoint state, not optimizer state;
+  \item precise clock softplus plus \texttt{torch.mean} is separate from FLA radial softplus;
+  \item the displayed forward and backward reduction orders are preserved; and
+  \item the unrotated tail is an exact pass-through of diagonal KLA.
+\end{enumerate}
+
+Before production promotion, the following checklist should be closed:
+\begin{enumerate}[leftmargin=1.8em]
+  \item pure-PyTorch token recurrence versus optimized forward for zero, half, and full rotation;
+  \item first-order VJPs for every input/parameter, including adversarial cancellation and partial
+        chunks, at $K=64$ and $K=128$;
+  \item exact checks for radial outputs and detached clock mean where exactness is part of the
+        contract, plus justified tolerances elsewhere;
+  \item segmented/streaming equivalence, phase carry, wrap-boundary, and sticky-NaN tests;
+  \item zero-angle equivalence to pair-tied diagonal KLA and angle-sign/gauge unit tests;
+  \item FSDP construction, buffer dtype, state-dict, save/resume, and rank-consistency tests;
+  \item multi-step health checks covering bootstrap-zero angle, subsequently live clock gradients,
+        token variation, and no nonfinite/endpoints;
+  \item long-sequence and long-run soak tests beyond the step-520 design screen;
+  \item peak-memory and end-to-end throughput measurements against the same recipe, including the
+        cost of the materialized FP32 clock tensor; and
+  \item the full downstream evaluation suite after a naturally completed training run.
+\end{enumerate}
+
+\appendix
+\section{Reproducibility audit}
+\label{app:sources}
+
+\paragraph{RDiag implementation baseline.}
+The stable implementation statements in this note were audited against Git commit
+\texttt{2ff0a4987a1b40f627fbd3efd1fb16ff0490e307} (tree
+\texttt{2fd5560d8337523383c20dda503eb0098f996dbc}).  Relevant immutable commit/path regions are:
+\begin{itemize}[leftmargin=1.8em]
+  \item \pathcode{lit_gpt/rdiag_kla.py}, construction and buffers around lines 137--193, phase
+        construction around 222--293, and the fused layer route around 409--516;
+  \item \pathcode{lit_gpt/kla_ops/rdiag_clock.py}, anchor and eager oracle around 72--119 and
+        190--270, fused clock around 283--388, and custom backward around 621--722;
+  \item \pathcode{lit_gpt/kla_ops/rdiag_direct.py}, precise clock softplus around 43--47, direct
+        radial transform around 300--377, and isolated radial VJP beginning around 702;
+  \item \pathcode{lit_gpt/kla_ops/rdiag_phase.py}, negative scan contract and reference around
+        1--19 and 294--328;
+  \item \pathcode{lit_gpt/kla_ops/rdiag_bounded_phase.py}, bounded fail-visible phase contract
+        around 1--11 and 41--172;
+  \item \pathcode{lit_gpt/kla_ops/rdiag_norm.py}, public fused normalization/rotation contract
+        around 10--90;
+  \item \pathcode{lit_gpt/kla_ops/rdiag_norm_reference.py}, normalization, BF16 boundary, and
+        adjacent-pair rotation around 24--96;
+  \item \pathcode{lit_gpt/kla_ops/diag_naive.py}, KLA equations around 14--32, 144--199, and
+        451--491;
+  \item \pathcode{lit_gpt/diag_kla.py}, process-noise and isotropic-output initialization around
+        280--300;
+  \item \pathcode{lit_gpt/config.py}, bounded RDiag recipe fields around 349--369 and 742--763;
+  \item \pathcode{lit_gpt/rdiag_training_health.py}, health thresholds and observed counters around
+        24--37 and 121--255, and fail-closed decision logic around 579--612;
+  \item \pathcode{sanboxes/kernels/rotational_diag_kla_v1/DESIGN.md}, moving-frame semantics and
+        the pair-tied literal model; and
+  \item \pathcode{sanboxes/kernels/rotational_diag_kla_v1/RESULTS.md}, the correctness and v1
+        performance evidence around lines 128--166.
+\end{itemize}
+At that commit the source SHA-256 values, in the same order as the list above, are:
+\begin{quote}
+\ttfamily\footnotesize
+8f09aa5881681adc9fa958f109f0ebf07240bad7b05877376f7c1f76633b9879\\
+b15293c665f941002525ce6ccbf346265c13a83bb4ca1e2f4a0a276289c8bd0c\\
+95b4309cd07d3e55507b4be623769383451cbf0e72f1624a038c985dba3b1ac4\\
+647dda58e7855f3139c460afab7db97242cc18dfd5c5dc29e44b4497bda68f30\\
+8918f21b3d326e3387001595b709a54b30b0ad944a8760b4d83d4cbd07e3b49a\\
+261489c0076bc4752fa909319917fd14037471dea5416300d34cb1319d35c1b8\\
+0f9ad9598188979f3eab6e3b3872de109409a358751198f664d4ad5717b6393e\\
+431be42bf1d8903a675d8ca4a6ff06afdda86516f77d2258f0aa556747ccee86\\
+fbacfa199a38ac4fe58c18612e3a0971bb0acdcd6cb7dd126b4bc85caabfb8b3\\
+84634c19916fa88bf0e4b7849d4e71e8984fe3e7f385bfc0ada726a5b7eaf02c\\
+e352c78a009b0b24f0290429c16c5213e004b61aeec4fc0a3eb2a7636918a910\\
+c8004393867cdc7c638117a444db74030e7abfabe55c79f795468d27e8561d4c\\
+7f9a75e0237cb1c225da7734a2cbc903257687e368e4b675f8826d5889c072dc
+\end{quote}
+
+The exact-mean follow-up is commit
+\texttt{fe1b1258f601092ab29ae3431ec5a703d7087b25} (tree
+\texttt{bade1969461e68b8a987343ead8cc0f8634ac9e4}).  In that commit,
+\pathcode{lit_gpt/kla_ops/rdiag_direct.py} has SHA-256
+\begin{quote}
+\ttfamily\footnotesize
+7252664763c8d3b3b7af424b194f210424896f4d43f92ba39ef52a38a11f5628
+\end{quote}
+The precise softplus is around lines 43--47, FP32 clock materialization around 299--375, and the
+framework mean around 1155--1197.  This is the frozen source for the
+materialize-plus-\texttt{torch.mean} contract in Eq.~\eqref{eq:torch-mean}.
+H200 job 1777082 subsequently completed with 17 passed and 3 failed tests.  The exact radial-clock
+bitwise tests passed for $K=64$ and $K=128$, including threshold/extreme inputs; fused operator
+parity, backward-association checks, finite full-layer checks, and every legacy performance gate
+also passed.  Each of the three sealed-reference full-layer comparisons stopped at its first
+mismatch, \texttt{layer.rdiag\_angle\_proj.weight}, for the $(H,D,K)=(16,1024,64)$,
+$(16,2048,128)$, and $(18,2304,128)$ geometries; later VJPs were not reached.  Thus exact-mean
+operator qualification is positive, but full-layer sealed-reference parity---and therefore
+production qualification---remains open.
+
+\paragraph{Installed Mamba implementation.}
+The source audit used \texttt{mamba-ssm 2.3.2.post1} installed under the active \texttt{hdn}
+environment.  Paths and SHA-256 identities are:
+\begin{itemize}[leftmargin=1.8em]
+  \item \pathcode{mamba_ssm/modules/mamba2.py},\\[-2pt]
+        {\ttfamily\footnotesize 605e4439ff0baec8d8acaf4a191d9f0570eea9900065a065909124c472b08707};
+        inspect roughly lines 95--136, 210--260, and 309--318;
+  \item \pathcode{mamba_ssm/modules/mamba3.py},\\[-2pt]
+        {\ttfamily\footnotesize de1b104865c941eb6eeac63c3a75d5913fc2e7a119d52991590ef19c381b05ac};
+        inspect roughly lines 76--87, 150--178, and 220--237;
+  \item \pathcode{mamba_ssm/ops/triton/mamba3/angle_dt.py},\\[-2pt]
+        {\ttfamily\footnotesize 7d99f8cff37371cfbfe9d4dd36f17a16135fb07f2c6e14add3ad4dd5c0034e2e};
+        inspect roughly lines 83--118 and 298--337;
+  \item \pathcode{mamba_ssm/ops/triton/mamba3/mamba3_siso_combined.py},\\[-2pt]
+        {\ttfamily\footnotesize 410ad57555b5841fba7bd76fdafdc3ddf82741176489c3e3493f5c6f3c0c6012};
+        inspect roughly lines 90--105 and 247--259; and
+  \item \pathcode{mamba_ssm/ops/triton/mamba3/mamba3_siso_fwd.py},\\[-2pt]
+        {\ttfamily\footnotesize 68d8d0dba0e3913f2e996862603289fd0d7157e7dc57c872e04234be8bb82695};
+        inspect roughly lines 256--332, 348--352, and 386--425.
+\end{itemize}
+The hashes, package version, and paths are the durable identity; line numbers are navigation hints.
+
+\paragraph{Qualification evidence and present status.}
+The lower-tail rejection is recorded in
+\pathcode{/checkpoints/ngocbh/hdn/diagnostics/rdiag_bounded_clock/probe_v1_1774423/probe_trace.json}.
+The redesigned E2
+decision is recorded in
+\pathcode{/checkpoints/ngocbh/hdn/diagnostics/rdiag_bounded_clock/qualification_bounded_de_20260828_1145/D_E_DECISION.json}.
+The precision experiment is recorded in
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_bounded_clock/radial_clock_precision_1776573/result.json};
+focused VJP evidence is in
+\pathcode{/checkpoints/ngocbh/hdn/ckpts/logs/rdiag_vjp_diag_k64_1776509.log}, and the five-case
+composed check is in
+\pathcode{/checkpoints/ngocbh/hdn/ckpts/logs/rdiag_angle_order_1776788.log}.  These artifacts support
+the specific observations in Section~\ref{sec:lessons}.  The completed exact-mean H200 result is in
+\pathcode{/checkpoints/ngocbh/hdn/ckpts/logs/rdiag_clock_exact_1777082.log}.  These results do not
+close the production checklist above.
+
+\end{document}
