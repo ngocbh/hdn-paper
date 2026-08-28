@@ -1806,26 +1806,22 @@ Reading the updated memory at the same key shows its operational meaning:
 \end{equation}
 Thus $\beta_t^{\mathrm{eff}}$ is the fraction of the current residual removed at its own key;
 values near one correspond to an almost complete same-key rewrite. Figure~\ref{fig:kdn-overwrite}
-compares this quantity for parameter-matched 750M models. At information scale $\mu=1$, the
-Diagonal KDN already writes more strongly at initialization and, after 50B training tokens, its
-distribution is sharply concentrated near one (mean $0.943$), compared with KDA ($0.675$).
-The trained distributions are diagnostic rather than a causal comparison because each model can
-adapt its projections during training; the controlled scale intervention below isolates the
-effect of $\mu$.
+compares parameter-matched 750M models. After 50B training tokens, KDA has mean $0.675$, while the
+Diagonal KDN means decrease from $0.943$ to $0.891$ and $0.826$ as $\mu$ increases from $1$ to
+$\sqrt{d_k}$ and $d_k$. These separately trained distributions include learned compensation; the
+fixed-weight intervention below isolates the causal effect of $\mu$.
 
 \begin{figure}[H]
   \centering
   \includegraphics[width=\textwidth]{figures/kdn_overwrite_distributions.pdf}
   \caption{Effective-write distributions at a seed-controlled random initialization (top) and
-  after pretraining on 50B tokens (bottom). Columns show KDA and Diagonal KDN at information
-  scale $\mu=1$. The latter is the scale-one ablation, not the main-table
-  $\mu=d_k$ checkpoint; its trained panel retains the checkpoint's separately learned initial
-  precision. All models are 750M parameter-matched variants and are evaluated on the same eight
-  2048-token FineWeb-Edu sequences. KDA has $\ve{\kappa}_t=\beta_t\ve{k}_t$, so, with the
-  normalized keys used here, $\beta_t^{\mathrm{eff}}=\beta_t$; for Diagonal KDN it is the
-  comparable same-key contraction $\ve{k}_t^{\tr}\ve{\kappa}_t$. Dashed lines mark pooled means.
-  Initialization panels use a common analysis seed and the corresponding training initializer;
-  they are controls rather than reconstructions of the historical training seeds.}
+  after pretraining on 50B tokens (bottom). Columns show KDA and the matched Diagonal KDN
+  random-gain information-scale sweep at $\mu\in\{1,\sqrt{d_k},d_k\}$. Each trained Diagonal KDN
+  panel uses the checkpoint trained at its indicated fixed scale. All models are parameter-matched
+  750M variants evaluated on the same eight 2048-token FineWeb-Edu sequences. With normalized KDA
+  keys, $\beta_t^{\mathrm{eff}}=\beta_t$; Diagonal KDN uses the same-key contraction
+  $\ve{k}_t^{\tr}\ve{\kappa}_t$. Dashed lines mark pooled means. Initialization panels use a
+  common analysis seed and the corresponding initializer, not the historical training seeds.}
   \label{fig:kdn-overwrite}
 \end{figure}
 

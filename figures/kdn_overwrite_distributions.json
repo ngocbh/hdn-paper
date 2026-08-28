@@ -1,12 +1,26 @@
 {
   "metric": "beta_eff=<kappa,k>",
   "panels": {
-    "init/diag": {
+    "init/diag_dk": {
+      "count": 1048576,
+      "mean": 0.6295504570007324,
+      "median": 0.630225419998169,
+      "p90": 0.7424819469451904,
+      "p99": 0.8183918595314026
+    },
+    "init/diag_one": {
       "count": 1048576,
       "mean": 0.8417013883590698,
       "median": 0.8484979867935181,
       "p90": 0.9113315343856812,
       "p99": 0.9445476531982422
+    },
+    "init/diag_sqrt": {
+      "count": 1048576,
+      "mean": 0.742952823638916,
+      "median": 0.7474453449249268,
+      "p90": 0.8361833095550537,
+      "p99": 0.8901368975639343
     },
     "init/kda": {
       "count": 4194304,
@@ -15,12 +29,26 @@
       "p90": 0.67578125,
       "p99": 0.79296875
     },
-    "trained/diag": {
+    "trained/diag_dk": {
+      "count": 1048576,
+      "mean": 0.8259807825088501,
+      "median": 0.933578372001648,
+      "p90": 0.9893807172775269,
+      "p99": 0.9971021413803101
+    },
+    "trained/diag_one": {
       "count": 1048576,
       "mean": 0.942850649356842,
       "median": 0.9838183522224426,
       "p90": 0.9947486519813538,
       "p99": 0.9982550740242004
+    },
+    "trained/diag_sqrt": {
+      "count": 1048576,
+      "mean": 0.8906093835830688,
+      "median": 0.9598500728607178,
+      "p90": 0.9903528094291687,
+      "p99": 0.9965332746505737
     },
     "trained/kda": {
       "count": 4194304,
@@ -31,20 +59,50 @@
     }
   },
   "sources": {
-    "diag_init_arrays": {
+    "diag_dk_init_arrays": {
+      "bytes": 68289385,
+      "path": "/checkpoints/ngocbh/hdn/ckpts/outputs/diag_kla_ablation_probes/runs/tsz128x4k_50B_repro_ngocbh_diag_kla_750M_randgain_50B/init_metrics.npz",
+      "sha256": "a4c5ab294efa4ccb2b438cf6d8e950730d17e0241c07361e05d5b470ad175a9d"
+    },
+    "diag_dk_metadata": {
+      "bytes": 545565,
+      "path": "/checkpoints/ngocbh/hdn/ckpts/outputs/diag_kla_ablation_probes/runs/tsz128x4k_50B_repro_ngocbh_diag_kla_750M_randgain_50B/summary.json",
+      "sha256": "b6a2e5deeced1c9d31f1f80725eb7a37b17c4c1dd350c02757f9716651ca8c38"
+    },
+    "diag_dk_trained_arrays": {
+      "bytes": 70888454,
+      "path": "/checkpoints/ngocbh/hdn/ckpts/outputs/diag_kla_ablation_probes/runs/tsz128x4k_50B_repro_ngocbh_diag_kla_750M_randgain_50B/trained_metrics.npz",
+      "sha256": "cd9e3ebf9b860b07411d37b69ef0e05c0fe36aecb278a91c262a7345bb0ca5be"
+    },
+    "diag_one_init_arrays": {
       "bytes": 67280779,
       "path": "/checkpoints/ngocbh/hdn/ckpts/outputs/diag_kla_ablation_probes/runs/tsz128x4k_50B_repro_ngocbh_diag_kla_750M_isone_randgain_50B/init_metrics.npz",
       "sha256": "7fcd419f619fd75f25ebfe6ead0b51c541432eb727f6ce33ff3b89b104a2ff2f"
     },
-    "diag_metadata": {
+    "diag_one_metadata": {
       "bytes": 545223,
       "path": "/checkpoints/ngocbh/hdn/ckpts/outputs/diag_kla_ablation_probes/runs/tsz128x4k_50B_repro_ngocbh_diag_kla_750M_isone_randgain_50B/summary.json",
       "sha256": "a4f28cbed79f71bf1c24d22fd8e0b46a1afa1cf796e472bf6d18026b73475cd4"
     },
-    "diag_trained_arrays": {
+    "diag_one_trained_arrays": {
       "bytes": 69968453,
       "path": "/checkpoints/ngocbh/hdn/ckpts/outputs/diag_kla_ablation_probes/runs/tsz128x4k_50B_repro_ngocbh_diag_kla_750M_isone_randgain_50B/trained_metrics.npz",
       "sha256": "901bbf27c63b27029b479eacb55a61d2ca882a3c0a496c707bafefdb8a158b70"
+    },
+    "diag_sqrt_init_arrays": {
+      "bytes": 68160590,
+      "path": "/checkpoints/ngocbh/hdn/ckpts/outputs/diag_kla_ablation_probes/runs/tsz128x4k_50B_repro_ngocbh_diag_kla_750M_issqrt_randgain_50B/init_metrics.npz",
+      "sha256": "cb59cabba905458ae966414a8a3d8c8dc857244cb355798c05259f03967a77de"
+    },
+    "diag_sqrt_metadata": {
+      "bytes": 545448,
+      "path": "/checkpoints/ngocbh/hdn/ckpts/outputs/diag_kla_ablation_probes/runs/tsz128x4k_50B_repro_ngocbh_diag_kla_750M_issqrt_randgain_50B/summary.json",
+      "sha256": "58c6660793914b20ea45593ace1905d0105d8b1a0cc77c580b5f338a91b7cb52"
+    },
+    "diag_sqrt_trained_arrays": {
+      "bytes": 70351747,
+      "path": "/checkpoints/ngocbh/hdn/ckpts/outputs/diag_kla_ablation_probes/runs/tsz128x4k_50B_repro_ngocbh_diag_kla_750M_issqrt_randgain_50B/trained_metrics.npz",
+      "sha256": "cf99c4bf667defc5592b105f9df1164d398f9e8c5bdb179f688418ef96412832"
     },
     "kda_init_arrays": {
       "bytes": 41237622,
