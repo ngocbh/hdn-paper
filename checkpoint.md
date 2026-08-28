@@ -15,6 +15,12 @@ Path and cluster abbreviations:
 - `T20-H200=shared-aws-usw1-1`; `MAST-H100=grandteton`; `MAST-B200=grandteton_b200`
 - GPU allocations are written as nodes x GPUs per node.
 
+Historical IsoKLA checkpoints predate the current $q_{\min}=0$,
+$r_{\min}=0.01$ defaults. Reconstruct the 220M and 750M checkpoints with
+`iso_kla_220M_legacy_q0_r0p1` and `iso_kla_750M_legacy_q0_r0p1`, respectively;
+use `iso_kla_1.3B_legacy_q0p05_r0p05` and
+`swa_iso_kla_1.3B_legacy_q0p05_r0p05` for the recurrent and hybrid 1.3B checkpoints.
+
 | Paper block | Model | Run ID | Training cluster / job | Tracker | Final checkpoint |
 |---|---|---|---|---|---|
 | 220M / 20B | DeltaNet | `repro_ngocbh_deltanet_220M_20B_0718_0136` | T20-H200, 1x8, SLURM `1539011` | [W&B](https://wandb.ai/ngocjr7/llm_next_gen/runs/repro_ngocbh_deltanet_220M_20B_0718_0136) | `$OUT/tsz128x4k_20B_repro_ngocbh_deltanet_220M_20B_0718_0136/final-model-ckpt.pth` |
