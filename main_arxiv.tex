@@ -758,11 +758,15 @@ $d_k$ scalars and replaces the sequential Riccati recursion with an associative 
 logarithmic parallel depth.
 
 \paragraph{Protection--write decoupling.}
-The variational filter uses the observation precision $1/r_t$ both to set the current residual-write
-gain and to accumulate information that attenuates future writes. For an $\ell_2$-normalized key
-whose mass is spread across channels, $\mathbb{E}[k_{t,i}^2]\approx1/d_k$, so each variational
-information increment is only $O(1/(d_k r_t))$. We decouple these roles by rescaling only the
-increment carried forward:
+Parallelizability is not free. The associative M\"obius scan requires projecting each dense
+posterior back to a product Gaussian, thereby discarding cross-channel correlations and inheriting
+the familiar coordinatewise overconfidence of reverse-KL mean field~\citep{blei2017variational}.
+Those correlations record that a \emph{joint} key direction has already been observed. Their loss
+can therefore leave that direction underprotected even while every retained marginal variance is
+too small, so an immediately repeated key---or a later key with overlapping coordinatewise
+energy---receives an excessively strong residual write. We address this overwrite failure by
+separating the strength of the present write from the information passed forward to protect it.
+Specifically, we introduce an information scale $\mu>0$ only in the post-write increment
 \begin{equation}
   \ve{u}_t
   =\frac{\mu}{r_t}\,\ve{k}_t\odot\ve{k}_t,
@@ -772,14 +776,13 @@ increment carried forward:
   \ve{c}_0=\ve{1}.
   \label{eq:diag-info-update}
 \end{equation}
-The gain $\ve{\kappa}_t$ is computed from $\widehat{\ve{c}}_t$ before $\ve{u}_t$ is added. Hence
-the rescaled increment at token $t$ affects only later gains; at token $t$, $\mu$ acts only through
-earlier increments already accumulated in $\widehat{\ve{c}}_t$. Setting $\mu=1$ recovers the
-variational filter, while $\mu=d_k$ makes a typical per-channel increment $O(1/r_t)$. As $\mu$
-increases, each write contributes more information along its active key channels, reducing their
-future predictive variance and suppressing later writes in those directions. If $\mu$ becomes too
-large, the memory overprotects old associations and adapts too slowly to new evidence; the process
-noise $\ve{\omega}_t$ limits this effect by imposing a floor on the predictive variance.
+The gain $\ve{\kappa}_t$ is emitted from $\widehat{\ve{c}}_t$ before $\ve{u}_t$ is added. Thus a
+token-local change in $\mu$ leaves the current write unchanged, but increases the confidence
+carried to later tokens and reduces their effective write
+$\beta^{\mathrm{eff}}=\ve{k}^{\tr}\ve{\kappa}$. Setting $\mu=1$ recovers the variational update;
+for a normalized dense key, $\mu=d_k$ compensates the $1/d_k$ dilution of each channel's
+information increment. Appendix~\ref{app:protection-write} derives the resulting overwrite
+mechanism and reports the measured write distributions and scale intervention.
 
 Combining this calibrated information scan with the Kalman residual write yields the Diagonal
 Kalman Delta Network, summarized in Proposition~\ref{prop:kalman-linear-attention}.
@@ -1782,6 +1785,211 @@ which is the Kalman mean update with gain \eqref{eq:diag-kalman-gain}. Together 
 \eqref{eq:proof-diag-vi-variance}, this proves
 \eqref{eq:diag-variational-solution}.
 \end{proof}
+
+% =============================================================================
+\section{Overwrite, Overconfidence, and Protection--Write Decoupling}
+\label{app:protection-write}
+
+\paragraph{Empirical symptom.}
+For any delta-style residual update, define the effective write strength
+\begin{equation}
+  \beta_t^{\mathrm{eff}}
+  =\ve{k}_t^{\tr}\ve{\kappa}_t.
+  \label{eq:appendix-effective-write}
+\end{equation}
+Reading the updated memory at the same key shows its operational meaning:
+\begin{equation}
+  \ve{v}_t-\ve{S}_t^{\tr}\ve{k}_t
+  =\left(1-\beta_t^{\mathrm{eff}}\right)
+   \left(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\right).
+  \label{eq:appendix-effective-write-residual}
+\end{equation}
+Thus $\beta_t^{\mathrm{eff}}$ is the fraction of the current residual removed at its own key;
+values near one correspond to an almost complete same-key rewrite. Figure~\ref{fig:kdn-overwrite}
+compares this quantity for parameter-matched 750M models. At information scale $\mu=1$, the
+Diagonal KDN already writes more strongly at initialization and, after 50B training tokens, its
+distribution is sharply concentrated near one (mean $0.943$), compared with KDA ($0.675$) and
+the Isotropic KDN ($0.499$). The trained distributions are diagnostic rather than a causal
+comparison because each model can adapt its projections during training; the controlled scale
+intervention below isolates the effect of $\mu$.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{figures/kdn_overwrite_distributions.pdf}
+  \caption{Effective-write distributions at a seed-controlled random initialization (top) and
+  after pretraining on 50B tokens (bottom). Columns show KDA, Isotropic KDN, and the Diagonal KDN
+  at information scale $\mu=1$. The latter is the scale-one ablation, not the main-table
+  $\mu=d_k$ checkpoint; its trained panel retains the checkpoint's separately learned initial
+  precision. All models are 750M parameter-matched variants and are evaluated on the same eight
+  2048-token FineWeb-Edu sequences. KDA and Isotropic KDN have
+  $\ve{\kappa}_t=\beta_t\ve{k}_t$, so, with the normalized keys used here,
+  $\beta_t^{\mathrm{eff}}=\beta_t$; for Diagonal KDN it is the comparable same-key contraction
+  $\ve{k}_t^{\tr}\ve{\kappa}_t$. Dashed lines mark pooled means. Initialization panels use a
+  common analysis seed and the corresponding training initializer; they are controls rather than
+  reconstructions of the historical training seeds.}
+  \label{fig:kdn-overwrite}
+\end{figure}
+
+\paragraph{What the parallel approximation discards.}
+Suppress the token index and write the diagonal predictive covariance as
+$\ve{P}^{-}=\diag(\widehat p_1,\ldots,\widehat p_{d_k})$. Define
+\begin{equation}
+  q_i=\widehat p_i k_i^2,
+  \qquad
+  z=\sum_i q_i,
+  \qquad
+  D=r+z.
+  \label{eq:appendix-overwrite-notation}
+\end{equation}
+Conditioning on the scalar observation creates the dense exact posterior
+\begin{equation}
+  \ve{P}^{\star}
+  =\ve{P}^{-}
+   -\frac{(\ve{P}^{-}\ve{k})(\ve{P}^{-}\ve{k})^{\tr}}{D},
+  \qquad
+  P_{ij}^{\star}=-\frac{\widehat p_i\widehat p_jk_ik_j}{D}
+  \quad(i\ne j).
+  \label{eq:appendix-overwrite-exact-posterior}
+\end{equation}
+These cross-channel terms encode that the joint direction $\ve{k}$ has been observed. Retaining
+them would require a dense, state-dependent Riccati recurrence; dropping them is the price that
+makes the per-channel M\"obius maps scan-parallel.
+
+At $\mu=1$, the reverse-KL mean-field projection underlying Diagonal KDN and a forward-KL
+moment-matching projection retain, respectively,
+\begin{equation}
+\begin{aligned}
+  p_i^{\mathrm{VI}}
+  &=\left(\widehat p_i^{-1}+\frac{k_i^2}{r}\right)^{-1}
+    =\widehat p_i-\frac{\widehat p_i^2k_i^2}{r+q_i},
+  &
+  p_i^{\mathrm{MM}}
+  &=P_{ii}^{\star}
+    =\widehat p_i-\frac{\widehat p_i^2k_i^2}{D}.
+\end{aligned}
+  \label{eq:appendix-overwrite-diagonal-projections}
+\end{equation}
+Since $r+q_i\leq D$, $p_i^{\mathrm{VI}}\leq p_i^{\mathrm{MM}}=P_{ii}^{\star}$: reverse-KL
+mean field retains conditional rather than marginal variances and is therefore coordinatewise
+overconfident. However, marginal calibration is not the same as protection of the measured
+direction. The variances left along $\ve{k}$ obey
+\begin{equation}
+\begin{aligned}
+  V^{\star}
+  &:=\ve{k}^{\tr}\ve{P}^{\star}\ve{k}
+    =\frac{rz}{r+z},
+  &
+  V^{\mathrm{VI}}
+  &:=\sum_i\frac{rq_i}{r+q_i},
+  &
+  V^{\mathrm{MM}}
+  &:=V^{\star}+\frac{2\sum_{i<j}q_iq_j}{D},
+\end{aligned}
+  \label{eq:appendix-overwrite-directional-variances}
+\end{equation}
+and hence
+\begin{equation}
+  V^{\star}\leq V^{\mathrm{VI}}\leq V^{\mathrm{MM}}.
+  \label{eq:appendix-overwrite-directional-order}
+\end{equation}
+The first inequality follows from the subadditivity of $f(x)=rx/(r+x)$, and the second follows
+from the coordinatewise ordering above. Reverse KL is therefore already more protective than
+moment matching, but it still retains too much uncertainty along a previously measured dense key
+relative to the exact posterior. For an immediate repeated observation with noise
+$r_{\mathrm{next}}$, its effective write is $V/(r_{\mathrm{next}}+V)$, an increasing function of
+$V$; Equation~\eqref{eq:appendix-overwrite-directional-order}
+therefore predicts excessive rewriting despite the coordinatewise overconfidence. Moment matching
+repairs the marginals but discards the same correlations and makes this directional overwrite
+still stronger.
+
+\paragraph{Information scale as future protection.}
+Diagonal KDN changes only the information state retained after the current write. To expose the
+causal ordering, temporarily allow a token-specific scale $\mu_t$; the model's scale is constant
+across tokens:
+\begin{equation}
+  p_{t,i}(\mu_t)
+  =\left(\widehat p_{t,i}^{-1}
+    +\mu_t\frac{k_{t,i}^2}{r_t}\right)^{-1}.
+  \label{eq:appendix-protection-scale-update}
+\end{equation}
+Because $\ve{\kappa}_t$ is computed from the exclusive state
+$\widehat{\ve{p}}_t$ before Equation~\eqref{eq:appendix-protection-scale-update} is applied, a
+token-local intervention satisfies
+\begin{equation}
+  \frac{\partial\ve{\kappa}_t}{\partial\mu_t}=\ve{0},
+  \qquad
+  \frac{\partial\ve{S}_t}{\partial\mu_t}=\ve{0},
+  \qquad
+  \frac{\partial p_{t,i}}{\partial\mu_t}
+  =-\frac{k_{t,i}^2}{r_t}p_{t,i}^2\leq0.
+  \label{eq:appendix-protection-current-invariance}
+\end{equation}
+It therefore cannot strengthen the write that creates an association. Its first effect is on
+future gains. Holding subsequent token projections fixed and defining
+$z_{t+1}=\sum_i\widehat p_{t+1,i}k_{t+1,i}^2$, we obtain
+\begin{equation}
+\begin{aligned}
+  \frac{\partial z_{t+1}}{\partial\mu_t}
+  &=-\frac{1}{r_t}\sum_i
+    \alpha_{t+1,i}^2p_{t,i}^2k_{t,i}^2k_{t+1,i}^2\leq0, \\
+  \frac{\partial\beta_{t+1}^{\mathrm{eff}}}{\partial\mu_t}
+  &=\frac{r_{t+1}}{(r_{t+1}+z_{t+1})^2}
+    \frac{\partial z_{t+1}}{\partial\mu_t}\leq0.
+\end{aligned}
+  \label{eq:appendix-protection-future-write}
+\end{equation}
+Thus $\mu$ is a protection scale: it leaves present assimilation unchanged locally, but makes
+later tokens less able to rewrite directions with overlapping coordinatewise energy. This
+statement is local in causal time. Across complete runs, earlier scaled increments change the
+incoming state, and learned projections may compensate.
+
+For intuition, suppose a normalized key has equal energy on $m$ active channels and the incoming
+variance is isotropic, $k_i^2=1/m$ and $\widehat p_i=p$ on that support. The exact posterior leaves
+directional variance $rp/(r+p)$, whereas Equation~\eqref{eq:appendix-protection-scale-update}
+leaves
+\begin{equation}
+  V(\mu)=\frac{mrp}{mr+\mu p}.
+  \label{eq:appendix-balanced-key-protection}
+\end{equation}
+Hence $\mu=m$ exactly matches the one-step exact directional variance in this balanced case;
+$\mu=d_k$ is the corresponding calibration for a dense key. It is not a generally calibrated
+posterior: increasing $\mu$ deliberately makes the retained marginals still more confident in
+exchange for stronger future protection.
+
+\paragraph{Measured scale response.}
+The matched 750M sweep exhibits the predicted reduction in write strength. At both initialization
+and after training, the pooled mean $\beta^{\mathrm{eff}}$ decreases monotonically as $\mu$
+increases:
+\begin{table}[H]
+  \centering
+  \small
+  \setlength{\tabcolsep}{8pt}
+  \begin{tabular}{@{}lccc@{}}
+    \toprule
+    Information scale $\mu$ & Random init. & Trained at $\mu$ & Fixed-weight intervention \\
+    \midrule
+    $1$          & 0.842 & 0.943 & 0.886 \\
+    $\sqrt{d_k}$ & 0.743 & 0.891 & 0.873 \\
+    $d_k$        & 0.630 & 0.826 & 0.862 \\
+    $4d_k$       & 0.580 & 0.805 & 0.857 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Mean effective write for the 750M Diagonal KDN ($d_k=128$). The first two columns use
+  the matched random-initialization controls and checkpoints trained at each scale, evaluated on
+  eight 2048-token sequences. The final column uses a separate 4096-token trajectory, changes only
+  the runtime information scale of each trained checkpoint, and averages the resulting
+  layer--head--token means across the four checkpoints; model weights are fixed, while downstream
+  hidden states respond to the changed recurrence. Absolute levels should therefore be compared
+  within, not across, these probe protocols. The intervention isolates the monotone protection
+  effect from retraining compensation.}
+  \label{tab:appendix-effective-write-scale}
+\end{table}
+The intervention reduces the mean from $0.886$ at $\mu=1$ to $0.857$ at $4d_k$, while the
+matched trained models decrease from $0.943$ to $0.805$. Together with
+Equation~\eqref{eq:appendix-protection-future-write}, this supports the interpretation of $\mu$ as
+a future-write control rather than an increase in current observation strength.
+
+\FloatBarrier
 
 % =============================================================================
 \section{Background: the Kalman filter}
