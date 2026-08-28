@@ -1808,25 +1808,24 @@ Thus $\beta_t^{\mathrm{eff}}$ is the fraction of the current residual removed at
 values near one correspond to an almost complete same-key rewrite. Figure~\ref{fig:kdn-overwrite}
 compares this quantity for parameter-matched 750M models. At information scale $\mu=1$, the
 Diagonal KDN already writes more strongly at initialization and, after 50B training tokens, its
-distribution is sharply concentrated near one (mean $0.943$), compared with KDA ($0.675$) and
-the Isotropic KDN ($0.499$). The trained distributions are diagnostic rather than a causal
-comparison because each model can adapt its projections during training; the controlled scale
-intervention below isolates the effect of $\mu$.
+distribution is sharply concentrated near one (mean $0.943$), compared with KDA ($0.675$).
+The trained distributions are diagnostic rather than a causal comparison because each model can
+adapt its projections during training; the controlled scale intervention below isolates the
+effect of $\mu$.
 
 \begin{figure}[H]
   \centering
   \includegraphics[width=\textwidth]{figures/kdn_overwrite_distributions.pdf}
   \caption{Effective-write distributions at a seed-controlled random initialization (top) and
-  after pretraining on 50B tokens (bottom). Columns show KDA, Isotropic KDN, and the Diagonal KDN
-  at information scale $\mu=1$. The latter is the scale-one ablation, not the main-table
+  after pretraining on 50B tokens (bottom). Columns show KDA and Diagonal KDN at information
+  scale $\mu=1$. The latter is the scale-one ablation, not the main-table
   $\mu=d_k$ checkpoint; its trained panel retains the checkpoint's separately learned initial
   precision. All models are 750M parameter-matched variants and are evaluated on the same eight
-  2048-token FineWeb-Edu sequences. KDA and Isotropic KDN have
-  $\ve{\kappa}_t=\beta_t\ve{k}_t$, so, with the normalized keys used here,
-  $\beta_t^{\mathrm{eff}}=\beta_t$; for Diagonal KDN it is the comparable same-key contraction
-  $\ve{k}_t^{\tr}\ve{\kappa}_t$. Dashed lines mark pooled means. Initialization panels use a
-  common analysis seed and the corresponding training initializer; they are controls rather than
-  reconstructions of the historical training seeds.}
+  2048-token FineWeb-Edu sequences. KDA has $\ve{\kappa}_t=\beta_t\ve{k}_t$, so, with the
+  normalized keys used here, $\beta_t^{\mathrm{eff}}=\beta_t$; for Diagonal KDN it is the
+  comparable same-key contraction $\ve{k}_t^{\tr}\ve{\kappa}_t$. Dashed lines mark pooled means.
+  Initialization panels use a common analysis seed and the corresponding training initializer;
+  they are controls rather than reconstructions of the historical training seeds.}
   \label{fig:kdn-overwrite}
 \end{figure}
 

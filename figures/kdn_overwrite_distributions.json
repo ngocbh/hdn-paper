@@ -8,13 +8,6 @@
       "p90": 0.9113315343856812,
       "p99": 0.9445476531982422
     },
-    "init/isokla": {
-      "count": 4194304,
-      "mean": 0.5659189820289612,
-      "median": 0.5678492784500122,
-      "p90": 0.7038403153419495,
-      "p99": 0.7931733131408691
-    },
     "init/kda": {
       "count": 4194304,
       "mean": 0.5004092454910278,
@@ -28,13 +21,6 @@
       "median": 0.9838183522224426,
       "p90": 0.9947486519813538,
       "p99": 0.9982550740242004
-    },
-    "trained/isokla": {
-      "count": 4194304,
-      "mean": 0.49882662296295166,
-      "median": 0.4947006404399872,
-      "p90": 0.8252307176589966,
-      "p99": 0.9656426906585693
     },
     "trained/kda": {
       "count": 4194304,
@@ -60,22 +46,22 @@
       "path": "/checkpoints/ngocbh/hdn/ckpts/outputs/diag_kla_ablation_probes/runs/tsz128x4k_50B_repro_ngocbh_diag_kla_750M_isone_randgain_50B/trained_metrics.npz",
       "sha256": "901bbf27c63b27029b479eacb55a61d2ca882a3c0a496c707bafefdb8a158b70"
     },
-    "scalar_init_arrays": {
+    "kda_init_arrays": {
       "bytes": 41237622,
       "path": "/checkpoints/ngocbh/hdn/ckpts/outputs/kdn_overwrite_probe_750m_full/iso_kla_kda_750M_init_gain_distributions.npz",
       "sha256": "9554bdaa43aa5d6d886fe4856ede5b9bbcc9b60f0d15beecf60f33df691cac3b"
     },
-    "scalar_init_metadata": {
+    "kda_init_metadata": {
       "bytes": 2899,
       "path": "/checkpoints/ngocbh/hdn/ckpts/outputs/kdn_overwrite_probe_750m_full/iso_kla_kda_750M_init_gain_distributions.json",
       "sha256": "329578a0fc4a17c88da0c7fdb5ff352f594ad6cbef85902c3f39d5cd0b640b72"
     },
-    "scalar_trained_arrays": {
+    "kda_trained_arrays": {
       "bytes": 42179640,
       "path": "/checkpoints/ngocbh/hdn/ckpts/outputs/kdn_overwrite_probe_750m_full/iso_kla_kda_750M_trained_gain_distributions.npz",
       "sha256": "57bf1b0fd3653dafb6c0564ee43ed6c1da120109e985d4420818312328ad6b9b"
     },
-    "scalar_trained_metadata": {
+    "kda_trained_metadata": {
       "bytes": 2933,
       "path": "/checkpoints/ngocbh/hdn/ckpts/outputs/kdn_overwrite_probe_750m_full/iso_kla_kda_750M_trained_gain_distributions.json",
       "sha256": "f4085f8ad5d6adf44c72f4cf77f6965fb8b4cdc8b069e6a12769b05d289ccea5"
