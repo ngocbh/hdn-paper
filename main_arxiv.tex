@@ -959,7 +959,9 @@ row, the scalar information scale in each head is learned within $[1,8d_k]$ from
 of $d_k$, and the initial precision $c_{0}$ is also learned per head from an initialization of $1$;
 we use $\omega_{\min}=10^{-6}$, $r_{\min}=10^{-2}$, and an isotropic process-noise initialization.
 It retains the matched backbone, parameter count, optimizer, token budget, and data seed, but is not
-a one-knob mixer-only comparison with the fixed-scale rows. Recurrent-state size is additionally
+a one-knob mixer-only comparison with the fixed-scale rows. Its 128-GPU data-parallel layout also
+differs from the other recurrent $1.3$B runs, so the streamed sample order is not byte-identical
+despite the shared seed. Recurrent-state size is additionally
 matched at $220$M and $750$M. At $1.3$B/$100$B,
 we evaluate a hybrid architecture that alternates nine recurrent mixer layers with nine
 sliding-window-attention (SWA) layers using a $2$K window. For hybrid GDN-2, both Mamba-3 variants,
