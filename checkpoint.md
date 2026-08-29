@@ -1,8 +1,10 @@
 # Paper checkpoints
 
 Source of truth for the trained checkpoints used by the result tables in
-`main_arxiv.tex`. The retrieval table reuses the 750M and 1.3B checkpoints
-below; the information-scale table uses three matched 750M Diagonal KDN arms
+`main_arxiv.tex`. Unless marked table-specific below, the retrieval table reuses
+the 750M and 1.3B checkpoints. The 1.3B Diagonal KDN language-modeling and
+retrieval rows currently use separate checkpoints and are labeled explicitly.
+The information-scale table uses three matched 750M Diagonal KDN arms
 with random omega initialization, the main-table $\mu=d_k$ checkpoint, and one
 learned-scale checkpoint initialized at $d_k$; the overwrite appendix additionally
 uses the matched random-gain $\mu=d_k$ arm. The fixed-noise table uses two matched
@@ -47,17 +49,19 @@ use `iso_kla_1.3B_legacy_q0p05_r0p05` and
 | 1.3B / 100B | Mamba-3 (MIMO) | `repro_ngocbh_mamba3_mimo_1.3B_100B_bs0p5m` | T20-H200, 2x8, SLURM `1697857` | [W&B](https://wandb.ai/ngocjr7/llm_next_gen/runs/repro_ngocbh_mamba3_mimo_1.3B_100B_bs0p5m) | `$OUT/tsz128x4k_100B_repro_ngocbh_mamba3_mimo_1.3B_100B_bs0p5m/final-model-ckpt.pth` |
 | 1.3B / 100B | KDA | `repro_ngocbh_kda_1.3B_100B_bs0p5m` | MAST-H100, 8x8, `hdn_kda_1p3B_100B-ngocbh-grw6jgqn` | [MAST](https://www.internalfb.com/mlhub/pipelines/runs/mast/hdn_kda_1p3B_100B-ngocbh-grw6jgqn); [W&B eval](https://wandb.ai/ngocjr7/llm_next_gen/runs/repro_ngocbh_kda_1.3B_100B_bs0p5m); TB: `$MF/tb/tsz128x4k_100B_repro_ngocbh_kda_1.3B_100B_bs0p5m/` | `$OUT/tsz128x4k_100B_repro_ngocbh_kda_1.3B_100B_bs0p5m/final-model-ckpt.pth` |
 | 1.3B / 100B | Isotropic KDN | `repro_ngocbh_iso_kla_1.3B_100B_bs0p5m_b200` | MAST-B200, 8x8, `hdn_iso_kla_1p3B_100B-ngocbh-hlfvpdn5` | [MAST](https://www.internalfb.com/mlhub/pipelines/runs/mast/hdn_iso_kla_1p3B_100B-ngocbh-hlfvpdn5); [W&B eval](https://wandb.ai/ngocjr7/llm_next_gen/runs/repro_ngocbh_iso_kla_1.3B_100B_bs0p5m_b200); TB: `$MF/tb/tsz128x4k_100B_repro_ngocbh_iso_kla_1.3B_100B_bs0p5m_b200/` | `$OUT/tsz128x4k_100B_repro_ngocbh_iso_kla_1.3B_100B_bs0p5m_b200/final-model-ckpt.pth` |
-| 1.3B / 100B | Diagonal KDN | `repro_ngocbh_diag_kla_1.3B_100B_bs0p5m` | MAST-H100, 16x8, `hdn_diag_kla_1p3B_100B-ngocbh-hz0pcm3g` | [MAST](https://www.internalfb.com/mlhub/pipelines/runs/mast/hdn_diag_kla_1p3B_100B-ngocbh-hz0pcm3g); [W&B eval](https://wandb.ai/ngocjr7/llm_next_gen/runs/repro_ngocbh_diag_kla_1.3B_100B_bs0p5m); TB: `$MF/tb/tsz128x4k_100B_repro_ngocbh_diag_kla_1.3B_100B_bs0p5m/` | `$OUT/tsz128x4k_100B_repro_ngocbh_diag_kla_1.3B_100B_bs0p5m/final-model-ckpt.pth` |
+| LM table, 1.3B / 100B | Diagonal KDN (learned information scale and $\mu$) | `repro_ngocbh_diag_kla_1.3B_learnis_learnmu_isoinit_q1em6_r0p01_100B_s3_16n_b200` | MAST-B200, 16x8, `fire-ngocbh-UFM-hdn-d1p3b-100b-s3-learnis-lmu-iso-q1em6-r0p-pjx093p4` | [MAST](https://www.internalfb.com/mlhub/pipelines/runs/mast/fire-ngocbh-UFM-hdn-d1p3b-100b-s3-learnis-lmu-iso-q1em6-r0p-pjx093p4); TB: `$MF/tb/tsz128x4k_100B_repro_ngocbh_diag_kla_1.3B_learnis_learnmu_isoinit_q1em6_r0p01_100B_s3_16n_b200/` | `$MF/outputs/tsz128x4k_100B_repro_ngocbh_diag_kla_1.3B_learnis_learnmu_isoinit_q1em6_r0p01_100B_s3_16n_b200/final-model-ckpt.pth` |
+| Retrieval table, 1.3B / 100B | Diagonal KDN | `repro_ngocbh_diag_kla_1.3B_100B_bs0p5m` | MAST-H100, 16x8, `hdn_diag_kla_1p3B_100B-ngocbh-hz0pcm3g` | [MAST](https://www.internalfb.com/mlhub/pipelines/runs/mast/hdn_diag_kla_1p3B_100B-ngocbh-hz0pcm3g); [W&B eval](https://wandb.ai/ngocjr7/llm_next_gen/runs/repro_ngocbh_diag_kla_1.3B_100B_bs0p5m); TB: `$MF/tb/tsz128x4k_100B_repro_ngocbh_diag_kla_1.3B_100B_bs0p5m/` | `$OUT/tsz128x4k_100B_repro_ngocbh_diag_kla_1.3B_100B_bs0p5m/final-model-ckpt.pth` |
 | Hybrid 1.3B / 100B | GDN-2 + SWA | `repro_ngocbh_swa_gdn2_1.3B_100B_bs0p5m` | T20-H200, 4x8, SLURM `1645030` | [W&B](https://wandb.ai/ngocjr7/llm_next_gen/runs/repro_ngocbh_swa_gdn2_1.3B_100B_bs0p5m) | `$OUT/tsz128x4k_100B_repro_ngocbh_swa_gdn2_1.3B_100B_bs0p5m/final-model-ckpt.pth` |
 | Hybrid 1.3B / 100B | Mamba-3 (SISO) + SWA | `repro_ngocbh_swa_mamba3_siso_1.3B_100B_bs0p5m` | T20-H200, 2x8, SLURM `1722329` | [W&B](https://wandb.ai/ngocjr7/llm_next_gen/runs/repro_ngocbh_swa_mamba3_siso_1.3B_100B_bs0p5m) | `$OUT/tsz128x4k_100B_repro_ngocbh_swa_mamba3_siso_1.3B_100B_bs0p5m/final-model-ckpt.pth` |
 | Hybrid 1.3B / 100B | Mamba-3 (MIMO) + SWA | `repro_ngocbh_swa_mamba3_mimo_1.3B_100B_bs0p5m` | T20-H200, 2x8, SLURM `1722330` | [W&B](https://wandb.ai/ngocjr7/llm_next_gen/runs/repro_ngocbh_swa_mamba3_mimo_1.3B_100B_bs0p5m) | `$OUT/tsz128x4k_100B_repro_ngocbh_swa_mamba3_mimo_1.3B_100B_bs0p5m/final-model-ckpt.pth` |
 | Hybrid 1.3B / 100B | KDA + SWA | `repro_ngocbh_swa_kda_1.3B_100B_bs0p5m` | T20-H200, 2x8, SLURM `1677268` | [W&B](https://wandb.ai/ngocjr7/llm_next_gen/runs/repro_ngocbh_swa_kda_1.3B_100B_bs0p5m) | `$OUT/tsz128x4k_100B_repro_ngocbh_swa_kda_1.3B_100B_bs0p5m/final-model-ckpt.pth` |
 | Hybrid 1.3B / 100B | Isotropic KDN + SWA | `repro_ngocbh_swa_iso_kla_1.3B_100B_bs0p5m` | T20-H200, 4x8, SLURM `1645029` | [W&B](https://wandb.ai/ngocjr7/llm_next_gen/runs/repro_ngocbh_swa_iso_kla_1.3B_100B_bs0p5m) | `$OUT/tsz128x4k_100B_repro_ngocbh_swa_iso_kla_1.3B_100B_bs0p5m/final-model-ckpt.pth` |
 
-All listed local checkpoints were verified by 2026-08-24. For MAST rows, the
-listed `OUT` file is the local mirror; the native artifact has the same suffix
-under `$MF/outputs/`. W&B on those rows contains uploaded evaluation results,
-while the linked MAST/TensorBoard run is the training record.
+All listed local checkpoints were verified by 2026-08-24. For MAST rows that
+use `OUT`, the listed file is the local mirror and the native artifact has the
+same suffix under `$MF/outputs/`; rows using `MF` point directly to the native
+artifact. W&B on rows that link it contains uploaded evaluation results, while
+the linked MAST/TensorBoard run is the training record.
 
 The Isotropic KDN files were losslessly migrated in place to the packed
 production layout. Their pre-migration backups are under
