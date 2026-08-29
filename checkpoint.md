@@ -9,7 +9,8 @@ uses the matched random-gain $\mu=d_k$ arm. The fixed-noise table uses two match
 750M Diagonal KDN arms; the throughput figure does not use a checkpoint. Rows labeled
 "held-out registry only" are superseded table checkpoints retained because the
 local held-out FineWeb manifest still references their verified mirror; they are not
-used by the current result tables.
+used by the current result tables. The overwrite-diagnostic checkpoint is likewise
+excluded from that held-out manifest because it supports only the diagnostic appendix.
 
 Path and cluster abbreviations:
 
