@@ -954,7 +954,13 @@ RULER~\citep{hsieh2024ruler}.
 \paragraph{Model architectures.}
 We study both recurrent-only and hybrid architectures. At each scale, all recurrent-only models
 use the same backbone; only the token mixer and the feed-forward width required to match parameter
-count vary. Recurrent-state size is additionally matched at $220$M and $750$M. At $1.3$B/$100$B,
+count vary, except for the recurrent-only $1.3$B Diagonal KDN follow-up reported below. For that
+row, the scalar information scale in each head is learned within $[1,8d_k]$ from an initialization
+of $d_k$, and the initial precision $c_{0}$ is also learned per head from an initialization of $1$;
+we use $\omega_{\min}=10^{-6}$, $r_{\min}=10^{-2}$, and an isotropic process-noise initialization.
+It retains the matched backbone, parameter count, optimizer, token budget, and data seed, but is not
+a one-knob mixer-only comparison with the fixed-scale rows. Recurrent-state size is additionally
+matched at $220$M and $750$M. At $1.3$B/$100$B,
 we evaluate a hybrid architecture that alternates nine recurrent mixer layers with nine
 sliding-window-attention (SWA) layers using a $2$K window. For hybrid GDN-2, both Mamba-3 variants,
 KDA, and Isotropic KDN, we calibrate the feed-forward widths to match non-embedding parameter count
@@ -1067,7 +1073,8 @@ Isotropic KDN $+$ SWA & \textbf{14.98} & \underline{10.90} & \underline{50.49} &
 the mean of the six accuracies. The upper three blocks are recurrent-only; the final block alternates
 nine recurrent mixer layers with nine $2$K sliding-window-attention layers. Models are matched in
 parameter count within each block. Best per column within each block in \textbf{bold}, second best
-\underline{underlined}.}
+\underline{underlined}. The recurrent-only $1.3$B Diagonal KDN row uses the targeted learned-scale,
+learned-initial-precision setting described in the text.}
 \label{tab:pretrain-lm}
 \end{table}
 
@@ -1097,9 +1104,10 @@ leads S-NIAH-2 at 8K, and Mamba-3 (MIMO) leads S-NIAH-2 at 1K--2K. MIMO's short-
 wins do not translate to length
 extrapolation: it falls to $15.4$ on both 8K single-key tasks, the lowest scores in those columns.
 KDA again degrades sharply on the easiest S-NIAH-1 probe. The previously observed
-short-context collapse of the 1.3B Diagonal KDN disappears under randomized essay windows
-(S-NIAH-2 @ 1K: $21.4\to98.6$; S-NIAH-3 @ 1K: $3.6\to96.4$), showing that it was an interaction
-with the fixed opening essay rather than a short-memory failure. These are single checkpoints and one
+short-context collapse of the previous 1.3B Diagonal KDN disappears under randomized essay windows
+on the same checkpoint (S-NIAH-2 @ 1K: $21.4\to88.0$; S-NIAH-3 @ 1K: $3.6\to82.4$), showing that
+it was an interaction with the fixed opening essay rather than a short-memory failure. The learned-scale
+follow-up reported here reaches $98.6$ and $96.4$ on those cells. These are single checkpoints and one
 window seed, so small differences should be read as directional.
 
 In the hybrid block, Mamba-3 (MIMO) has the highest 14-cell mean at $73.57$, narrowly ahead of
@@ -1171,7 +1179,9 @@ tasks~\citep{hsieh2024ruler}. The upper two blocks are recurrent-only; the final
 nine recurrent mixer layers with nine $2$K sliding-window-attention layers. S-NIAH-1/2 include
 8K evaluation; S-NIAH-3 and MK-NIAH-1 stop at 4K. Essay contexts use deterministic random corpus
 windows and a 25-word fitting increment; all models receive the same 500 samples per cell. Best per
-column within each block in \textbf{bold}, second best \underline{underlined}.}
+column within each block in \textbf{bold}, second best \underline{underlined}. The recurrent-only
+$1.3$B Diagonal KDN row uses the targeted learned-scale, learned-initial-precision setting described
+in the text.}
 \label{tab:pretrain-niah}
 \end{table}
 
