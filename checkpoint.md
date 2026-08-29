@@ -11,6 +11,8 @@ uses the matched random-gain $\mu=d_k$ arm. The fixed-noise table uses two match
 local held-out FineWeb manifest still references their verified mirror; they are not
 used by the current result tables. The overwrite-diagnostic checkpoint is likewise
 excluded from that held-out manifest because it supports only the diagnostic appendix.
+A table checkpoint whose final artifact is listed directly under `$MF/outputs/` is
+native-only and joins the held-out manifest after a local mirror and hash are verified.
 
 Path and cluster abbreviations:
 
