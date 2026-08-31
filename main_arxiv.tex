@@ -66,105 +66,71 @@ accuracy over state-of-the-art linear-attention models.
 \section{Introduction}
 \label{sec:intro}
 
-Linear attention trades storage for judgment. Softmax attention can revisit every preceding key
-and value, but its cache grows with context and its full-sequence cost is
-quadratic~\citep{vaswani2017attention}. Linear attention instead compresses the prefix into a
-fixed-size recurrent matrix for constant-memory decoding and scan-parallel
-training~\citep{katharopoulos2020transformers}. Once history is compressed, every edit is
-consequential: the model must decide not only what is new, but whether stored evidence should
-yield to it.
+Self-attention is the central content-addressing mechanism of modern sequence models: every
+query can retrieve the values associated with all preceding keys
+\citep{vaswani2017attention}. This flexibility comes from retaining the token history itself.
+Consequently, the autoregressive key--value cache grows with context length, and computing all
+query--key interactions remains quadratic in the sequence length. Linear attention offers a
+different scaling regime. It compresses the prefix into a fixed-size recurrent state that can
+be updated online and evaluated in parallel by a scan
+\citep{katharopoulos2020transformers}. This efficiency turns attention into an online
+memory-management problem. Each token must edit a compressed summary of the past before the model
+knows which associations future queries will need. An update that is too timid preserves stale
+information; one that is too aggressive destroys useful memory.
 
-Delta-rule mixers make this edit error-correcting. DeltaNet writes only the prediction
-residual~\citep{schlag2021linear,yang2024parallelizing}; Gated DeltaNet and KDA precede it with
-scalar or channel-wise forgetting~\citep{yang2024gdn,kimiteam2025kimilinear}. Their shared
-correction direction $\beta_t\ve{k}_t$ is predicted from the current token. The delta rule thus
-sees the error, but maintains no explicit same-layer confidence state: it carries the memory
-contents forward, not how much evidence supports each key direction. It cannot modulate a write
-according to whether that association is well supported or uncertain.
+Delta-rule mixers make these edits more selective. DeltaNet first reads what the memory predicts
+for the current key and writes only the residual~\citep{schlag2021linear,yang2024parallelizing};
+Gated DeltaNet and KDA additionally forget stored content at scalar or channel-wise rates
+\citep{yang2024gdn,kimiteam2025kimilinear}. Their write strength is learned from the current token embedding,
+but the recurrent state contains no explicit record of how strongly past observations support an
+existing association. The model therefore cannot distinguish whether a large residual should
+revise a tentative association or be discounted because the existing association has been
+repeatedly confirmed.
 
-We instead derive this family from an inference problem. Treat the recurrent matrix as an estimate
-of a latent, time-varying associative map: a transition predicts persistence or drift, and the
-current key--value pair is a noisy linear observation. Under this linear--Gaussian model, the
-MMSE-optimal Kalman correction is
-\begin{equation}
-  \ve{S}_t
-  =\widehat{\ve{S}}_t
-   +\ve{\kappa}_t
-    \bigl(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\bigr)^{\tr},
-  \qquad
-  \ve{\kappa}_t
-  =\frac{\widehat{\ve{P}}_t\ve{k}_t}
-   {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}.
-  \label{eq:intro-kalman-residual}
-\end{equation}
-Here $\widehat{\ve{S}}_t$ is the predicted memory, $\widehat{\ve{P}}_t$ its key-space
-covariance, and $r_t$ the observation noise. The familiar delta recurrence is therefore the
-Kalman mean-update algebra. Replacing the covariance-derived gain by
-$\ve{\kappa}_t=\beta_t\ve{k}_t$, then choosing the transition as $\ve{I}$,
-$\alpha_t\ve{I}$, or $\diag(\ve{\alpha}_t)$, recovers DeltaNet, Gated DeltaNet, or KDA,
-respectively. These are fixed-gain special cases in the filtering sense: $\beta_t$ may vary with
-the token, but is prescribed independently of the covariance accumulated from history.
+We argue that uncertainty is the missing state variable. The recurrent memory can be viewed as an
+estimate of a latent, non-stationary key--value map. Each token supplies a noisy observation of
+that map at one key, while the learned transition describes how the map persists or drifts between
+observations. This is precisely an online filtering problem. Under a linear--Gaussian model, the
+Kalman filter predicts both the memory and its covariance, then uses the covariance to determine how
+strongly the new value should correct the prediction~\citep{grewal2025kalman}. The resulting update
+is still a residual delta write, but the write strength is larger in uncertain directions and smaller where
+past evidence should be protected. From this observation, we introduce
+\emph{Kalman Delta Networks (KDNs)}, which track both the memory state and its uncertainty,
+allowing each update to balance accumulated evidence against observation reliability.
+DeltaNet, Gated DeltaNet, and KDA emerge as covariance-free approximations that retain different
+memory transitions while omitting this uncertainty recursion.
 
-This equivalence isolates the missing state. The predictive covariance records confidence
-accumulated from past observations and reshaped by the transition and process noise; the gain
-combines that confidence with the current observation noise $r_t$. Delta-style models preserve the
-optimal residual algebra but sever it from this uncertainty recursion. In this sense, they are
-covariance-free specializations of the Kalman mean update.
+The exact Kalman covariance tracking, however, is not a practical linear-attention layer. It
+carries a dense $d_k\times d_k$ covariance per head, and its gain depends on a state-dependent
+Riccati recurrence that is poorly suited to efficient parallel scans. We make the filter tractable by
+restricting the predictive covariance, transition, and process noise to the diagonal family.
+Although a measurement immediately produces a dense exact posterior, an online mean-field
+variational update gives the reverse-KL-optimal diagonal approximation while preserving the exact
+one-step posterior mean conditional on the diagonal predictive prior. The resulting
+\emph{Diagonal KDN} tracks one uncertainty value per key channel and admits an associative scan
+with $O(d_k)$ auxiliary state; \emph{Isotropic KDN} instead shares one uncertainty scalar per head.
 
-Why not retain the exact filter? Its dense covariance costs $O(d_k^2)$ state per head, and its
-state-dependent Riccati recursion makes future gains depend on a nonlinear uncertainty
-trajectory. Although parallel Kalman formulations exist, this dense recursion is not directly
-compatible with the low-rank affine scan and $O(d_k)$ auxiliary state targeted by
-linear-attention kernels. The covariance is the bottleneck between the statistical optimum and
-the desired computational form.
-
-We approximate the uncertainty, not the residual-update principle. Restricting the covariance,
-transition, and process-noise covariance to the diagonal family keeps prediction diagonal, but
-conditioning on a key still produces a dense posterior. We project each exact one-step posterior
-back to the diagonal Gaussian family by online reverse-KL variational inference across key
-coordinates; the value columns already factorize under the model. Given the diagonal predictive
-prior, the optimum preserves the exact one-step posterior mean and sets each retained variance to
-the reciprocal diagonal posterior precision. Reusing it as the next prior yields an $O(d_k)$
-uncertainty state.
-
-The covariance recurrence turns this statistical approximation into a parallel algorithm.
-Writing $u_{t,i}=k_{t,i}^2/r_t$ for the information contributed by the current observation,
-each key-channel variance obeys
-\begin{equation}
-  p_{t,i}
-  =\frac{\alpha_{t,i}^2p_{t-1,i}+\omega_{t,i}}
-    {u_{t,i}\alpha_{t,i}^2p_{t-1,i}+1+u_{t,i}\omega_{t,i}}.
-  \label{eq:intro-mobius}
-\end{equation}
-This is a M\"obius map of $p_{t-1,i}$: each token contributes one $2\times2$ matrix per channel, and
-temporal composition becomes associative matrix multiplication. A prefix scan first recovers the
-uncertainty trajectory and Kalman gains; its input-only coefficients then drive the usual affine
-memory scan. The dense Riccati state has become a per-channel associative recurrence without
-discarding the link between accumulated uncertainty and write strength.
-
-This construction gives \emph{Kalman Delta Networks} (KDNs). Diagonal KDN retains one uncertainty
-value per key channel and therefore permits anisotropic write directions; Isotropic KDN uses one
-uncertainty scalar per head. In parameter-matched recurrent-only pretraining on
-FineWeb-Edu~\citep{penedo2024fineweb}, both variants obtain lower WikiText and LAMBADA perplexity
-and a higher unweighted mean of six zero-shot accuracies than GDN-2~\citep{hatamizadeh2026gdn2} at
-750M and 1.3B parameters. At both scales, Diagonal KDN achieves the highest observed
-14-cell RULER aggregate~\citep{hsieh2024ruler}; on the 1.3B standard suite, the results do not
-establish a stable ordering among KDA and the two KDN variants.
+Empirically, in parameter-matched recurrent-only pretraining on FineWeb-Edu~\citep{penedo2024fineweb}, both KDN
+variants obtain lower WikiText and LAMBADA perplexity and a higher unweighted mean of six zero-shot
+accuracies than GDN-2~\citep{hatamizadeh2026gdn2} at 750M/50B and 1.3B/100B. At both scales,
+Diagonal KDN achieves the highest observed 14-cell RULER aggregate~\citep{hsieh2024ruler} among the
+evaluated recurrent-only models. On the 1.3B standard suite, however, the results do not establish
+a stable ordering among KDA and the two KDN variants.
 
 Our contributions are:
 
 \begin{itemize}[leftmargin=1.4em,itemsep=3pt,topsep=2pt]
-  \item \textbf{Emergence and diagnosis.} We derive the exact Kalman residual update for a latent
-  associative memory and show that DeltaNet, Gated DeltaNet, and KDA emerge as fixed-gain special
-  cases of its mean-update algebra. This identifies their missing mechanism: an explicit
-  covariance recursion whose confidence combines with observation noise to set the write.
-  \item \textbf{Approximation and algorithm.} We derive an online reverse-KL projection of each
-  dense one-step posterior onto a diagonal family. Given the retained diagonal predictive prior,
-  it preserves that step's exact mean while reducing auxiliary uncertainty state from $O(d_k^2)$
-  to $O(d_k)$. The resulting per-channel covariance updates are M\"obius maps, admitting an
-  associative gain scan followed by an affine memory scan.
-  \item \textbf{Empirical evidence.} At both evaluated scales, both KDN variants improve the two
-  reported perplexities and mean six-task zero-shot accuracy over GDN-2.
+  \item \textbf{A confidence-based view of delta rules.} We show that DeltaNet, Gated DeltaNet, and
+  KDA recover the Kalman residual update after replacing its covariance-derived gain with a
+  token-predicted gain that does not track uncertainty accumulated across observations.
+  \item \textbf{Scalable uncertainty-aware memory.} We derive Diagonal KDN through online
+  variational inference and introduce Isotropic and Diagonal variants with $O(1)$ and $O(d_k)$
+  uncertainty state per head, respectively. Their uncertainty updates admit an associative gain
+  scan followed by the usual affine memory scan.
+  \item \textbf{Overwrite analysis and empirical evidence.} We identify how the diagonal
+  uncertainty approximation can underprotect stored key directions, introduce information scaling to control future
+  overwrite, and show improvements over the evaluated state-of-the-art delta-rule models and
+  Mamba-3 variants in both reported perplexities and mean six-task zero-shot accuracy.
 \end{itemize}
 
 
@@ -481,9 +447,9 @@ The predict--innovation--correct recursion therefore computes the conditional ex
 \eqref{eq:online-filtering-objective} at every step.
 The following proposition summarizes this optimal recursion.
 
-\refstepcounter{definition}\label{prop:kalman-optimal-update}
+\refstepcounter{definition}\label{prop:kalman-associative-memory}
 \begin{tcolorbox}[
-  title={Proposition~\thedefinition: Kalman Optimal Update},
+  title={Proposition~\thedefinition: Kalman Associative Memory},
   colback=blue!7,
   colbacktitle=blue!22,
   colframe=blue!45!black,
@@ -1039,9 +1005,10 @@ average is $0.96$ points higher.
 \centering
 \small
 \setlength{\tabcolsep}{4.5pt}
-\begin{tabular}{@{}l cc cccccc c@{}}
+\begin{tabular}{@{}l >{\columncolor{gray!10}}c >{\columncolor{gray!10}}c cccccc >{\columncolor{gray!10}}c@{}}
 \toprule
-& \multicolumn{2}{c}{Perplexity $\downarrow$} & \multicolumn{6}{c}{Zero-shot accuracy (\%) $\uparrow$} & \\
+& \multicolumn{2}{>{\columncolor{gray!10}}c}{Perplexity $\downarrow$}
+& \multicolumn{6}{c}{Zero-shot accuracy (\%) $\uparrow$} & \cellcolor{gray!10}\\
 \cmidrule(lr){2-3}\cmidrule(lr){4-9}
 Model & Wiki. & LMB. & LMB. & PIQA & Hella. & Wino. & ARC-e & ARC-c & Avg. \\
 \midrule
@@ -1083,7 +1050,8 @@ the mean of the six accuracies. The upper two blocks are recurrent-only; the fin
 an 18-layer $2$K sliding-window Transformer with hybrids that alternate nine recurrent mixer layers
 and nine $2$K sliding-window-attention layers. Models are matched in
 parameter count within each block. Best per column within each block in \textbf{bold}, second best
-\underline{underlined}; light-blue rows denote our KDN variants. The recurrent-only $1.3$B Diagonal KDN row uses the targeted learned-scale,
+\underline{underlined}; light-gray columns highlight perplexity and average accuracy, while
+light-blue rows denote our KDN variants. The recurrent-only $1.3$B Diagonal KDN row uses the targeted learned-scale,
 learned-initial-precision setting described in the text.}
 \label{tab:pretrain-lm}
 \end{table}
@@ -1416,7 +1384,7 @@ to the Kalman update.
 \subsection{Proof of the Kalman optimal update}
 \label{app:proof-kalman-optimal-update}
 
-\begin{proof}[Proof of Proposition~\ref{prop:kalman-optimal-update} (Kalman Optimal Update)]
+\begin{proof}[Proof of Proposition~\ref{prop:kalman-associative-memory} (Kalman Associative Memory)]
 
 Let the latent associative-memory state be
 \[
