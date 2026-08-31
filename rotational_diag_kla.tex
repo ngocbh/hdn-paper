@@ -6,9 +6,9 @@
 \usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
 
 \title{Rotational Diagonal Kalman Linear Attention:\\
-Model, Mamba-3 Lessons, and an Implementation Contract}
+Model, Lessons from Mamba-2/Mamba-3, and Production Implementation}
 \author{}
-\date{August 28, 2026}
+\date{August 29, 2026}
 
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\ve}[1]{\boldsymbol{#1}}
@@ -39,10 +39,12 @@ retaining KLA's diagonal Kalman covariance and innovation write.  It pair-ties r
 and process-noise parameters, uses a detached live radial statistic to set a bounded token/head
 clock, scans phase in a documented negative gauge, and isolates the phase VJP from radial dynamics.
 This note defines the model, the precise finite-precision implementation contract, and the tests
-needed for promotion.  A step-520 screen after 519 completed optimizer updates accepted the E2
-clock design, but the optimized composed
-implementation still requires its complete post-integration correctness, distributed, soak, and
-performance qualification; this document does not declare production readiness.
+used for promotion.  The finalized kernel/layer implementation is commit
+\texttt{c3346feaecae1486cdbc71f82b4edeacc4198950}; its immutable production snapshot passed the
+complete one-H200 correctness and performance gate (117 core RDiag tests plus 54 E2 tests).
+Distributed training-system checks and the multi-node soak/attestation remain before the planned
+750M DiagKLA production submission.  The one-H200 result concerns implementation correctness and
+measured kernel/layer performance, not the eventual language-model quality of a long training run.
 \end{abstract}
 
 \section{Scope and notation}
@@ -310,8 +312,9 @@ The computational graph has two intentionally separate branches:
   \detach(f+b^d),\ a,\ (W,\beta),\ e
     &\longrightarrow \tau,\delta,\phi\longrightarrow\text{rotated }q,k.
 \end{align*}
-The direct radial backward has no angle input.  Conversely, the clock's $m$ and $a$ arguments are
-detached, so the phase VJP returns no gradient to the radial gate, radial bias, or $A^{\log}$.
+In its radial-only specialization, the direct-pair backward has no angle data dependency or load.
+Conversely, the clock's $m$ and $a$ arguments are detached, so the phase VJP returns no gradient to
+the radial gate, radial bias, or $A^{\log}$.
 Unlike Mamba-3, RDiag does not add an angular-clock contribution to the dynamical radial-step
 gradient.  Among the new phase-specific parameters, gradients reach the angle projection and clock
 weight/bias; they also return to the shared hidden states through both projections.  The isolation
@@ -405,12 +408,12 @@ The forward pipeline is:
 \begin{enumerate}[leftmargin=1.8em]
   \item project $q,k,v$ and the diagonal-KLA radial/noise quantities;
   \item compute the standard frontend's frozen $\alpha^{\rm in}$ and $\omega^{\rm in}$;
-  \item in the RDiag direct radial kernel, recompute the rotary prefix using
-        Eq.~\eqref{eq:pair-radial}, preserve the tail, and build the log-decay prefix consumed by
-        the chunked memory kernel;
-  \item form the exact detached FP32 radial mean $m$ described below;
+  \item call the unchanged direct-pair operator with a detached angle, retain its pair-tied
+        $\alpha$, $\omega$, and log-decay prefix, and discard its legacy phase output;
+  \item independently materialize the precise detached FP32 $[B,T,H,K]$ clock steps and form the
+        exact native-framework radial mean $m$ described below;
   \item keep $Wx$ as the existing FP32 GEMM, then fuse the pointwise clock chain and
-        Eq.~\eqref{eq:rdiag-delta};
+        Eq.~\eqref{eq:rdiag-delta}, using the exact CUDA-eager sigmoid quotient;
   \item perform the bounded negative phase scan in chunks of 64, retaining an FP32 carry;
   \item normalize $q,k$ in FP32, round the memory-facing copies as specified, and rotate adjacent
         pairs by the same phase; and
@@ -452,6 +455,44 @@ The temporary costs exactly $4BTHK$ bytes.  At $B=4,T=4096,H=16$, that is 64 MiB
 128 MiB for $K=128$; at $H=18,K=128$ it is 144 MiB.  This cost belongs in the end-to-end memory and
 speed gate rather than being hidden by a numerically different reduction.
 
+\subsection{Reusing the direct-pair radial path safely}
+
+The production wrapper does not maintain a second implementation of Eq.~\eqref{eq:pair-radial}.
+It calls the established direct-pair transform with \texttt{angle\_raw.detach()}, ignores the
+returned legacy delta, and reuses only $g$, $\alpha$, and $\omega$.  This keeps the radial forward
+arithmetic and its VJP identical to the already-qualified direct-pair path.
+
+Discarding the legacy delta makes its incoming cotangent absent.  The direct-pair backward turns
+that fact into the compile-time specialization \texttt{HAS\_DDELTA=false}.  In this specialization
+the generated kernel does not load the detached angle, evaluate its tanh, or form the phase term
+$\pi\tanh(e)\,\overline\delta$.  The guard is semantically important: merely setting
+$\overline\delta=0$ would not isolate a nonfinite discarded angle, because IEEE arithmetic gives
+$0\times\mathrm{NaN}=\mathrm{NaN}$.  The phase-enabled
+\texttt{HAS\_DDELTA=true} algebra is unchanged, while dedicated NaN/$\pm\infty$ tests establish
+that a discarded phase cannot contaminate radial outputs or gradients.
+
+\subsection{Exact sigmoid and bounded-delta forward}
+
+Let
+\begin{equation}
+  \ell_{bth}=\log m_{bth}-\log(C-a_h)+\tanh(z^{\rm clk}_{bth}).
+\end{equation}
+For FP32 CUDA inputs, PyTorch's native sigmoid kernel evaluates
+$1/(1+\exp(-\ell))$.  The generic Triton \texttt{tl.sigmoid} uses a different approximate
+lowering and produced one-ULP clock differences even when $\ell$ was bitwise identical.  The
+production kernel therefore spells out the eager expression as
+\begin{equation}
+  \tau^{\rm raw}_{bth}
+  =0.1\,\texttt{tl.div\_rn}
+    \left(1,\,1+\texttt{libdevice.exp}(-\ell_{bth})\right),
+  \label{eq:exact-sigmoid}
+\end{equation}
+then applies the fail-visible validity predicate to obtain $\tau$.  The angle nonlinearity is
+computed once by native ATen as
+\texttt{torch.tanh(angle\_raw.float()).contiguous()} and passed to the fused clock kernel, which
+forms $\delta=\pi\tanh(e)\tau$.  This boundary makes the actual-logit $\tau$ and $\delta$ bitwise
+equal to the eager oracle, rather than merely close in real arithmetic.
+
 \subsection{Phase scan and backward order}
 
 The phase forward is an inclusive FP32 scan.  Each chunk computes
@@ -487,12 +528,17 @@ cotangent mask.
 Equation~\eqref{eq:dtau-order} must be evaluated as the displayed broadcast multiply followed by
 the framework's sum over $P$; pulling $\pi$ outside the sum is not accepted as ``equivalent.''
 For Eq.~\eqref{eq:dangle-order}, multiply by $\tau$, reduce over $H$, multiply by $\pi$, and only
-then apply the tanh derivative.  The validity mask is applied to the incoming clock cotangent
-before the sigmoid/tanh chain, matching the eager \texttt{where(valid, raw\_tau, detached\_nan)}
-VJP.  After the FP32 head reduction and factor order in Eq.~\eqref{eq:dangle-order}, the raw-angle
-gradient is stored in \texttt{angle\_raw}'s dtype (BF16 on the production route) before the angle
-projection VJP.  Weight and hidden-state gradients then flow through the ordinary linear
-operations.
+then apply the tanh derivative.  Concretely, production saves the native-ATen tanh output from the
+forward and evaluates
+\begin{center}
+\texttt{torch.ops.aten.tanh\_backward(}\linebreak[0]
+\texttt{  (d\_delta * tau[..., None]).sum(dim=2) * pi, angle)}.
+\end{center}
+The result is cast to \texttt{angle\_raw}'s dtype (BF16 on the production route) before the angle
+projection VJP.  No Triton angle-partial tensor or head-reduction kernel remains.  The validity
+mask is applied to the incoming clock cotangent before the sigmoid/tanh clock chain, matching the
+eager \texttt{where(valid, raw\_tau, detached\_nan)} VJP.  Weight and hidden-state gradients then
+flow through the ordinary linear operations.
 
 \subsection{Persistent state and FSDP}
 
@@ -504,9 +550,10 @@ The anchor $a_h$ must satisfy all of the following:
   \item identical across distributed ranks after construction, FSDP wrapping, save, and resume;
   \item restored from the checkpoint rather than regenerated from the current radial bias.
 \end{enumerate}
-FSDP mixed precision must not downcast this buffer.  Resume tests must compare its bytes before and
-after round trips and verify that fresh construction cannot silently overwrite a checkpointed
-anchor.
+Production enforces this with \texttt{bounded\_rdiag\_fsdp\_mixed\_precision}: it retains the
+installed BF16-mixed parameter/reduction policy but overrides
+\texttt{buffer\_dtype=torch.float32}.  Resume tests compare the anchor bytes before and after round
+trips and verify that fresh construction cannot silently overwrite a checkpointed anchor.
 
 \subsection{Initialization and health signals}
 
@@ -549,14 +596,18 @@ The following pseudocode fixes the mathematical order without prescribing launch
     \texttt{clock\_dt}&=\splus_{20}(\detach(x^d))\quad\text{materialized FP32 }[B,T,H,K],\\
     m&=\texttt{torch.mean(clock\_dt, dim=-1, out=radial\_clock)}.
   \end{align*}
-  Pair-average $d^{\rm radial}$ and $\omega$ on the rotary prefix, and construct $\alpha$ from
-  Eq.~\eqref{eq:pair-radial}.  Do not use \texttt{clock\_dt} for radial dynamics.
+  Invoke the unchanged direct-pair transform with a detached angle, pair-average
+  $d^{\rm radial}$ and $\omega$ on the rotary prefix, and construct $\alpha$ from
+  Eq.~\eqref{eq:pair-radial}.  Discard its legacy delta and do not use
+  \texttt{clock\_dt} for radial dynamics.
 
   \item \textbf{Bounded clock and phase.}
   \begin{align*}
     z^{\rm clk}&=\texttt{linear}(x,W)/\sqrt D+\beta,\\
-    \tau&=0.1\,\sg\bigl(\log m-\log(0.1-a)+\tanh z^{\rm clk}\bigr),\\
-    \delta&=\pi\tanh(e)\,\tau,\\
+    \ell&=\log m-\log(0.1-a)+\tanh z^{\rm clk},\\
+    \tau&=0.1\,\texttt{div\_rn}(1,1+\texttt{libdevice.exp}(-\ell)),\\
+    \widehat e&=\texttt{torch.tanh}(e.\texttt{float()}),\\
+    \delta&=\pi\widehat e\,\tau,\\
     \phi_t&=\operatorname{wrap}_{2\pi}(\phi_{t-1}-\delta_t).
   \end{align*}
   Reject invalid open-clock or phase-contract values by producing observable NaNs.
@@ -568,7 +619,10 @@ The following pseudocode fixes the mathematical order without prescribing launch
 
   \item \textbf{Backward.}
   Run Eq.~\eqref{eq:phase-vjp}; use Eqs.~\eqref{eq:dtau-order}--\eqref{eq:dangle-order} exactly;
-  return no clock gradient to $m$ or $a$; and run the independent radial/Kalman VJPs.
+  evaluate the angle derivative with native \texttt{aten.tanh\_backward} on the saved
+  $\widehat e$; compile the discarded direct-pair phase branch with
+  \texttt{HAS\_DDELTA=false}; return no clock gradient to $m$ or $a$; and run the independent
+  radial/Kalman VJPs.
 \end{enumerate}
 
 \section{Lessons from the E-screen and performance/numerical debugging}
@@ -596,8 +650,9 @@ combined mixer forward/backward versus 13.735 ms for its frozen control, a $1.79
 the cost to the eager second-$dt$, pair tying, phase/trigonometry, three rotations, and prefix
 rebuild.  This motivated the direct radial kernel, fused normalization/rotation, and fused
 clock/delta path while retaining the established gain and S3 kernels.  These are historical
-isolation numbers for the v1 geometry, not a speed claim for the final E2 composition; the exact
-clock mean's FP32 scratch and full-layer runtime still require measurement.
+isolation numbers for the v1 geometry, not a speed claim for the final E2 composition.  The later
+final A/B measurements, including the exact-mean FP32 scratch, are reported in
+Table~\ref{tab:final-perf}.
 
 \paragraph{A tiny local error can become a large gradient discrepancy.}
 The first optimized clock path reused the FLA radial softplus.  Against eager PyTorch, the initial
@@ -616,7 +671,19 @@ framework reduction of Eq.~\eqref{eq:dtau-order} and the factor order of
 Eq.~\eqref{eq:dangle-order} passed it.  The lesson is narrow but important: the executable eager
 graph, including reduction order, is the reference for this mixed-precision path.
 
-\section{Invariants and promotion checklist}
+\paragraph{Elementary functions are also part of the executable reference.}
+After the exact mean fix, a full $K=64$ trace found bitwise-identical radial clock, base logit,
+bounded residual, and final logit, yet the fused clock still differed from eager at 61,655 of
+262,144 FP32 $\tau$ entries (maximum absolute error $7.45\times10^{-9}$).  Those one-ULP clock
+differences propagated to 929,205 of 4,194,304 delta entries and were amplified by the length-4096
+phase scan.  The cause was \texttt{tl.sigmoid}, not the model equations.  Replacing it with
+Eq.~\eqref{eq:exact-sigmoid}, matching PyTorch's CUDA source expression and rounded division,
+removed the actual-logit discrepancy.  Computing the angle tanh and its backward with native ATen
+then removed the remaining reduction/transcendental-order drift.  This is why the final path uses
+selective eager operations at two small boundaries rather than insisting that every operation be
+fused into Triton.
+
+\section{Invariants and qualification status}
 
 The following are invariants, not tunable approximations:
 \begin{enumerate}[leftmargin=1.8em]
@@ -629,11 +696,15 @@ The following are invariants, not tunable approximations:
         $0<\tau<0.1$;
   \item the anchor is persistent FP32 checkpoint state, not optimizer state;
   \item precise clock softplus plus \texttt{torch.mean} is separate from FLA radial softplus;
-  \item the displayed forward and backward reduction orders are preserved; and
+  \item the bounded sigmoid uses Eq.~\eqref{eq:exact-sigmoid}, not \texttt{tl.sigmoid};
+  \item the displayed forward and backward reduction orders are preserved, with the angle tanh
+        and its VJP evaluated by native ATen;
+  \item a discarded direct-pair delta selects \texttt{HAS\_DDELTA=false}, eliminating every angle
+        access and phase product from the radial backward; and
   \item the unrotated tail is an exact pass-through of diagonal KLA.
 \end{enumerate}
 
-Before production promotion, the following checklist should be closed:
+The one-H200 kernel/layer checklist is closed by the cumulative qualification campaign:
 \begin{enumerate}[leftmargin=1.8em]
   \item pure-PyTorch token recurrence versus optimized forward for zero, half, and full rotation;
   \item first-order VJPs for every input/parameter, including adversarial cancellation and partial
@@ -642,30 +713,63 @@ Before production promotion, the following checklist should be closed:
         contract, plus justified tolerances elsewhere;
   \item segmented/streaming equivalence, phase carry, wrap-boundary, and sticky-NaN tests;
   \item zero-angle equivalence to pair-tied diagonal KLA and angle-sign/gauge unit tests;
-  \item FSDP construction, buffer dtype, state-dict, save/resume, and rank-consistency tests;
   \item multi-step health checks covering bootstrap-zero angle, subsequently live clock gradients,
         token variation, and no nonfinite/endpoints;
-  \item long-sequence and long-run soak tests beyond the step-520 design screen;
-  \item peak-memory and end-to-end throughput measurements against the same recipe, including the
-        cost of the materialized FP32 clock tensor; and
-  \item the full downstream evaluation suite after a naturally completed training run.
+  \item exact full-layer forward/VJP comparison with the sealed E2 candidate at $K=64$, $K=128$,
+        and the 18-head 1.3B-style geometry; and
+  \item interleaved A/B timing against both the sealed E2 candidate and the legacy pair clock.
 \end{enumerate}
+
+The authoritative one-H200 job 1777777 completed with exit code 0 and reported 117 passing core
+RDiag tests followed by 54 passing E2 tests.  Table~\ref{tab:final-perf} gives the paired runtime
+ratios for an exact RDiag-layer forward plus backward; values below one are faster than the named
+reference.  Every upper endpoint of the bootstrap 95\% confidence interval is below the 1.05
+promotion limit.
+
+\begin{table}[ht]
+  \centering
+  \small
+  \caption{Final H200 paired A/B timing from job 1777777, with 40 measured rounds after 20 warmups.
+  ``Accepted'' is the sealed eager E2 candidate and ``legacy'' is the production pair-$dt$ path.}
+  \label{tab:final-perf}
+  \begin{tabular}{@{}lrrrr@{}}
+    \toprule
+    Geometry $(H,D,K)$ & E2/accepted & 95\% CI high & E2/legacy & 95\% CI high \\
+    \midrule
+    $(16,1024,64)$   & 0.969512 & 0.978247 & 1.014135 & 1.020172 \\
+    $(16,2048,128)$  & 0.950407 & 0.956546 & 1.008590 & 1.013666 \\
+    $(18,2304,128)$  & 0.960111 & 0.964929 & 1.013622 & 1.014984 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Thus the optimized E2 implementation is bitwise faithful where exact parity is required, faster
+than the sealed accepted implementation in all three measured geometries, and within roughly
+1--1.4\% of the simpler legacy clock.  This closes the one-H200 kernel/layer gate, but not the full
+production-submission gate.  Final train-smoke, distributed checkpoint/resume, and multi-node
+soak/attestation checks remain; after they pass, the 750M DiagKLA recipe can be submitted, trained
+to natural completion, and evaluated on the full standard-plus-NIAH suite.
 
 \appendix
 \section{Reproducibility audit}
 \label{app:sources}
 
 \paragraph{RDiag implementation baseline.}
-The stable implementation statements in this note were audited against Git commit
-\texttt{2ff0a4987a1b40f627fbd3efd1fb16ff0490e307} (tree
-\texttt{2fd5560d8337523383c20dda503eb0098f996dbc}).  Relevant immutable commit/path regions are:
+The production implementation statements in this note were audited against branch
+\texttt{rdiag} at Git commit
+\texttt{c3346feaecae1486cdbc71f82b4edeacc4198950} (tree
+\texttt{88e423d2926d8ae81945c08393a59861d285907c}).  This pin identifies the sealed implementation
+snapshot; the present documentation-only working-tree update is intentionally outside that
+snapshot.  Relevant regions are:
 \begin{itemize}[leftmargin=1.8em]
   \item \pathcode{lit_gpt/rdiag_kla.py}, construction and buffers around lines 137--193, phase
         construction around 222--293, and the fused layer route around 409--516;
   \item \pathcode{lit_gpt/kla_ops/rdiag_clock.py}, anchor and eager oracle around 72--119 and
-        190--270, fused clock around 283--388, and custom backward around 621--722;
-  \item \pathcode{lit_gpt/kla_ops/rdiag_direct.py}, precise clock softplus around 43--47, direct
-        radial transform around 300--377, and isolated radial VJP beginning around 702;
+        190--270, exact fused clock around 283--390, and native-order custom backward beginning
+        around line 515;
+  \item \pathcode{lit_gpt/kla_ops/rdiag_direct.py}, the unchanged direct-pair forward around line
+        162, guarded direct-pair backward around line 338, precise clock materializer around line
+        300, and radial wrapper around line 920;
   \item \pathcode{lit_gpt/kla_ops/rdiag_phase.py}, negative scan contract and reference around
         1--19 and 294--328;
   \item \pathcode{lit_gpt/kla_ops/rdiag_bounded_phase.py}, bounded fail-visible phase contract
@@ -681,48 +785,34 @@ The stable implementation statements in this note were audited against Git commi
   \item \pathcode{lit_gpt/config.py}, bounded RDiag recipe fields around 349--369 and 742--763;
   \item \pathcode{lit_gpt/rdiag_training_health.py}, health thresholds and observed counters around
         24--37 and 121--255, and fail-closed decision logic around 579--612;
+  \item \pathcode{lit_gpt/fsdp_strategy.py}, the FP32-buffer mixed-precision override beginning
+        around line 131;
+  \item \pathcode{scripts/tests/rdiag/test_rdiag_bounded_h200.py}, exact radial, actual-logit,
+        exceptional-value, full-layer parity, and A/B performance gates;
   \item \pathcode{sanboxes/kernels/rotational_diag_kla_v1/DESIGN.md}, moving-frame semantics and
         the pair-tied literal model; and
   \item \pathcode{sanboxes/kernels/rotational_diag_kla_v1/RESULTS.md}, the correctness and v1
         performance evidence around lines 128--166.
 \end{itemize}
-At that commit the source SHA-256 values, in the same order as the list above, are:
-\begin{quote}
-\ttfamily\footnotesize
-8f09aa5881681adc9fa958f109f0ebf07240bad7b05877376f7c1f76633b9879\\
-b15293c665f941002525ce6ccbf346265c13a83bb4ca1e2f4a0a276289c8bd0c\\
-95b4309cd07d3e55507b4be623769383451cbf0e72f1624a038c985dba3b1ac4\\
-647dda58e7855f3139c460afab7db97242cc18dfd5c5dc29e44b4497bda68f30\\
-8918f21b3d326e3387001595b709a54b30b0ad944a8760b4d83d4cbd07e3b49a\\
-261489c0076bc4752fa909319917fd14037471dea5416300d34cb1319d35c1b8\\
-0f9ad9598188979f3eab6e3b3872de109409a358751198f664d4ad5717b6393e\\
-431be42bf1d8903a675d8ca4a6ff06afdda86516f77d2258f0aa556747ccee86\\
-fbacfa199a38ac4fe58c18612e3a0971bb0acdcd6cb7dd126b4bc85caabfb8b3\\
-84634c19916fa88bf0e4b7849d4e71e8984fe3e7f385bfc0ada726a5b7eaf02c\\
-e352c78a009b0b24f0290429c16c5213e004b61aeec4fc0a3eb2a7636918a910\\
-c8004393867cdc7c638117a444db74030e7abfabe55c79f795468d27e8561d4c\\
-7f9a75e0237cb1c225da7734a2cbc903257687e368e4b675f8826d5889c072dc
-\end{quote}
+The whole tree is sealed by the snapshot manifest identified below, which is the authoritative
+byte-level inventory.  Three central files in the final parity implementation and gate have
+SHA-256 values
+\begin{itemize}[leftmargin=1.8em]
+  \item \pathcode{lit_gpt/kla_ops/rdiag_clock.py},\\[-2pt]
+        {\ttfamily\scriptsize d02a3f0d0994067afc174f1a77f7ebd8fcecd73c3a18956e72ab79ab49afc966};
+  \item \pathcode{lit_gpt/kla_ops/rdiag_direct.py},\\[-2pt]
+        {\ttfamily\scriptsize 9fa3e29102bfa512ecbc57fc04ce6453e3a33e7aed61e7049026b71fe81faace};
+  \item \pathcode{scripts/tests/rdiag/test_rdiag_bounded_h200.py},\\[-2pt]
+        {\ttfamily\scriptsize 68d7db9b6793a33ef2574c7a39527306c3b3b500a03e1807790ce59889be8517}.
+\end{itemize}
 
-The exact-mean follow-up is commit
-\texttt{fe1b1258f601092ab29ae3431ec5a703d7087b25} (tree
-\texttt{bade1969461e68b8a987343ead8cc0f8634ac9e4}).  In that commit,
-\pathcode{lit_gpt/kla_ops/rdiag_direct.py} has SHA-256
-\begin{quote}
-\ttfamily\footnotesize
-7252664763c8d3b3b7af424b194f210424896f4d43f92ba39ef52a38a11f5628
-\end{quote}
-The precise softplus is around lines 43--47, FP32 clock materialization around 299--375, and the
-framework mean around 1155--1197.  This is the frozen source for the
-materialize-plus-\texttt{torch.mean} contract in Eq.~\eqref{eq:torch-mean}.
-H200 job 1777082 subsequently completed with 17 passed and 3 failed tests.  The exact radial-clock
-bitwise tests passed for $K=64$ and $K=128$, including threshold/extreme inputs; fused operator
-parity, backward-association checks, finite full-layer checks, and every legacy performance gate
-also passed.  Each of the three sealed-reference full-layer comparisons stopped at its first
-mismatch, \texttt{layer.rdiag\_angle\_proj.weight}, for the $(H,D,K)=(16,1024,64)$,
-$(16,2048,128)$, and $(18,2304,128)$ geometries; later VJPs were not reached.  Thus exact-mean
-operator qualification is positive, but full-layer sealed-reference parity---and therefore
-production qualification---remains open.
+The final result followed three deliberately narrow diagnoses.  Commit
+\texttt{fe1b1258} made the radial clock mean bitwise exact but left
+three full-layer angle-weight mismatches in job 1777082.  Job 1777229 then proved that the first
+remaining forward divergence occurred at sigmoid output despite a bitwise-identical input logit.
+Commit \texttt{4ce6e19} matched the CUDA-eager sigmoid and angle VJP, and commit
+\texttt{c3346fe} added the missing-delta compile-time guard that makes the detached radial path
+immune to nonfinite discarded angles.
 
 \paragraph{Installed Mamba implementation.}
 The source audit used \texttt{mamba-ssm 2.3.2.post1} installed under the active \texttt{hdn}
@@ -749,8 +839,7 @@ The hashes, package version, and paths are the durable identity; line numbers ar
 \paragraph{Qualification evidence and present status.}
 The lower-tail rejection is recorded in
 \pathcode{/checkpoints/ngocbh/hdn/diagnostics/rdiag_bounded_clock/probe_v1_1774423/probe_trace.json}.
-The redesigned E2
-decision is recorded in
+The redesigned E2 decision is recorded in
 \pathcode{/checkpoints/ngocbh/hdn/diagnostics/rdiag_bounded_clock/qualification_bounded_de_20260828_1145/D_E_DECISION.json}.
 The precision experiment is recorded in
 \pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_bounded_clock/radial_clock_precision_1776573/result.json};
@@ -758,8 +847,20 @@ focused VJP evidence is in
 \pathcode{/checkpoints/ngocbh/hdn/ckpts/logs/rdiag_vjp_diag_k64_1776509.log}, and the five-case
 composed check is in
 \pathcode{/checkpoints/ngocbh/hdn/ckpts/logs/rdiag_angle_order_1776788.log}.  These artifacts support
-the specific observations in Section~\ref{sec:lessons}.  The completed exact-mean H200 result is in
-\pathcode{/checkpoints/ngocbh/hdn/ckpts/logs/rdiag_clock_exact_1777082.log}.  These results do not
-close the production checklist above.
+the specific debugging observations in Section~\ref{sec:lessons}.
+
+The sealed implementation snapshot used by the one-H200 gate is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_bounded_clock/snapshots/production_e2_20260828_2344}.
+Its \pathcode{SOURCE_MANIFEST.json} SHA-256 is
+\begin{quote}
+\ttfamily\footnotesize
+05db76db18b8f4fe170a102e2e5df28bb54a4e36ca7ebe4565a1d813b44530a3.
+\end{quote}
+The authoritative qualification log is
+\pathcode{/checkpoints/ngocbh/hdn/ckpts/logs/rdiag_h200_1777777.log}.  SLURM job 1777777 completed
+with status \texttt{COMPLETED}, exit code \texttt{0:0}, 117 passing core tests, and 54 passing E2
+tests.  This closes the one-H200 kernel/layer gate.  Distributed training-system checks and the
+multi-node soak/attestation remain before submission; training completion and the full
+post-training evaluation are subsequent empirical deliverables.
 
 \end{document}

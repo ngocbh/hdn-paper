@@ -51,8 +51,8 @@ state-dependent Riccati recursion that is poorly suited to GPU-parallel linear-a
 To address this issue, we derive a diagonal KDN by projecting each one-step posterior onto the
 diagonal Gaussian family through online mean-field variational inference. The resulting
 per-channel information recurrences are M\"obius maps, enabling an associative scan with
-$O(d_k)$ auxiliary state and logarithmic parallel depth. Across controlled pretraining from
-220M to 1.3B parameters, KDN variants consistently improve perplexity and mean downstream
+$O(d_k)$ auxiliary state and logarithmic parallel depth. Across controlled pretraining at
+750M and 1.3B parameters, KDN variants consistently improve perplexity and mean downstream
 accuracy over state-of-the-art linear-attention models. At 750M, the diagonal KDN achieves the
 best mean downstream accuracy and the strongest aggregate long-context retrieval among the
 evaluated models.
@@ -150,7 +150,7 @@ value per key channel and therefore permits anisotropic write directions; Isotro
 uncertainty scalar per head. In parameter-matched recurrent-only pretraining on
 FineWeb-Edu~\citep{penedo2024fineweb}, both variants obtain lower WikiText and LAMBADA perplexity
 and a higher unweighted mean of six zero-shot accuracies than GDN-2~\citep{hatamizadeh2026gdn2} at
-220M, 750M, and 1.3B parameters. At both 750M and 1.3B, Diagonal KDN achieves the highest observed
+750M and 1.3B parameters. At both scales, Diagonal KDN achieves the highest observed
 14-cell RULER aggregate~\citep{hsieh2024ruler}; on the 1.3B standard suite, the results do not
 establish a stable ordering among KDA and the two KDN variants.
 
@@ -166,7 +166,7 @@ Our contributions are:
   it preserves that step's exact mean while reducing auxiliary uncertainty state from $O(d_k^2)$
   to $O(d_k)$. In information form, the resulting per-channel M\"obius maps admit an associative
   gain scan followed by an affine memory scan.
-  \item \textbf{Empirical evidence.} At every evaluated scale, both KDN variants improve the two
+  \item \textbf{Empirical evidence.} At both evaluated scales, both KDN variants improve the two
   reported perplexities and mean six-task zero-shot accuracy over GDN-2.
 \end{itemize}
 
@@ -934,7 +934,7 @@ Appendix~\ref{app:iso-kla} derives the two isotropic projections and the posteri
 \label{sec:experiments}
 
 We reproduce the $1.3$B/$100$B training setup of
-GDN-2~\citep{hatamizadeh2026gdn2} and extend the same controlled protocol to smaller scales. Our
+GDN-2~\citep{hatamizadeh2026gdn2} and extend the same controlled protocol to $750$M. Our
 goal is to isolate the effectiveness of different token mixers in recurrent-only and hybrid
 settings, rather than to search for a new architecture. Within each comparison, we therefore hold
 the data, surrounding backbone, optimization recipe, and evaluation protocol fixed while matching
@@ -944,9 +944,9 @@ model capacity.
 \label{sec:experimental-setup}
 
 \paragraph{Pretraining and evaluation datasets.}
-We pretrain all models from scratch on FineWeb-Edu~\citep{penedo2024fineweb} at three scales:
-$220$M parameters on $20$B tokens, $750$M parameters on $50$B tokens, and $1.3$B parameters on
-$100$B tokens. We evaluate language modeling with perplexity on WikiText and LAMBADA, and zero-shot
+We pretrain all models from scratch on FineWeb-Edu~\citep{penedo2024fineweb} at two scales:
+$750$M parameters on $50$B tokens and $1.3$B parameters on $100$B tokens. We evaluate language
+modeling with perplexity on WikiText and LAMBADA, and zero-shot
 reasoning with LAMBADA, PIQA, HellaSwag, WinoGrande, ARC-easy, and ARC-challenge. We evaluate
 in-context retrieval on the single- and multi-key needle-in-a-haystack tasks from
 RULER~\citep{hsieh2024ruler}.
@@ -961,25 +961,23 @@ we use $\omega_{\min}=10^{-6}$, $r_{\min}=10^{-2}$, and an isotropic process-noi
 It retains the matched backbone, parameter count, optimizer, token budget, and data seed, but is not
 a one-knob mixer-only comparison with the fixed-scale rows. Its 128-GPU data-parallel layout also
 differs from the other recurrent $1.3$B runs, so the streamed sample order is not byte-identical
-despite the shared seed. Recurrent-state size is additionally
-matched at $220$M and $750$M. At $1.3$B/$100$B,
+despite the shared seed. Recurrent-state size is additionally matched at $750$M. At $1.3$B/$100$B,
 we evaluate a hybrid architecture that alternates nine recurrent mixer layers with nine
-sliding-window-attention (SWA) layers using a $2$K window. For hybrid GDN-2, both Mamba-3 variants,
-KDA, and Isotropic KDN, we calibrate the feed-forward widths to match non-embedding parameter count
+sliding-window-attention (SWA) layers using a $2$K window. For both hybrid Mamba-3 variants, KDA,
+GDN-2, and Isotropic KDN, we calibrate the feed-forward widths to match non-embedding parameter count
 within $0.03\%$.
 
 \paragraph{Baselines.}
-We compare with DeltaNet~\citep{schlag2021linear}, Gated DeltaNet~\citep{yang2024gdn},
-GDN-2~\citep{hatamizadeh2026gdn2}, KDA~\citep{kimiteam2025kimilinear}, and the SISO and MIMO
-variants of Mamba-3~\citep{lahoti2026mamba3}. Our models are the Isotropic and Diagonal Kalman
-Delta Networks developed above. The available baselines differ by scale, as reported in the result
-tables; the hybrid comparisons include GDN-2, both Mamba-3 variants, KDA, and Isotropic KDN.
+We compare with the SISO and MIMO variants of Mamba-3~\citep{lahoti2026mamba3},
+KDA~\citep{kimiteam2025kimilinear}, and GDN-2~\citep{hatamizadeh2026gdn2}. Our models are the Isotropic and Diagonal Kalman
+Delta Networks developed above. The hybrid block also includes an attention-only Transformer with a
+$2$K sliding window.
 
 \paragraph{Implementation details.}
 We use the same training recipe as GDN-2~\citep{hatamizadeh2026gdn2} for all models: AdamW with a
 peak learning rate of $4\times10^{-4}$, $\beta=(0.9,0.95)$, weight decay $0.1$, gradient clipping
-at $1.0$, and a cosine schedule with a $1\%$ token-budget warm-up ($0.2$B/$0.5$B/$1$B tokens at
-the three scales). All runs use a global
+at $1.0$, and a cosine schedule with a $1\%$ token-budget warm-up ($0.5$B/$1$B tokens at
+the two scales). All runs use a global
 batch of $0.5$M tokens, a sequence length of $4$K, and the same data seed within each comparison.
 We evaluate zero-shot performance with the standard harness for recurrent language models. For
 RULER, we fit essay contexts in $25$-word rather than $500$-word increments, draw a deterministic
@@ -994,39 +992,35 @@ and needle depths so every model receives the same $500$ samples per cell.
 \paragraph{Language modeling and commonsense reasoning.}
 Table~\ref{tab:pretrain-lm} reports WikiText and LAMBADA perplexity, zero-shot LAMBADA accuracy,
 and the commonsense suite (PIQA, HellaSwag, WinoGrande, ARC-easy, ARC-challenge). In the
-state-matched $220$M and $750$M comparisons, gains reflect a stronger update rule rather than a
-larger recurrent memory.
-At $220$M/$20$B the two KDN variants and KDA form a clear top group, improving average accuracy
-over GDN-2 by $1.3$--$1.9$ points. The Isotropic KDN attains the best WikiText perplexity and
-average, while the Diagonal KDN attains the best LAMBADA perplexity. At $750$M/$50$B, the Diagonal KDN leads LAMBADA perplexity
+state-matched $750$M comparison, gains reflect a stronger update rule rather than a larger recurrent
+memory. At $750$M/$50$B, the Diagonal KDN leads LAMBADA perplexity
 and accuracy, WinoGrande, ARC-easy, and the average; Mamba-3 (MIMO) leads HellaSwag and ARC-challenge;
 and the Isotropic KDN leads WikiText, while KDA and both KDN variants tie on PIQA. The Diagonal KDN
 has the best average ($54.97$), followed closely by the Isotropic KDN ($54.41$) and Mamba-3 (MIMO;
 $54.39$), then KDA ($53.87$), Mamba-3 (SISO; $52.93$), and GDN-2 ($51.45$).
 At $1.3$B/$100$B, Mamba-3 (MIMO) improves on its SISO counterpart in every reported column and
 raises average accuracy from $58.20$ to $59.85$, placing just below the three uncertainty-gated
-mixers ($60.10$--$60.35$); it leads HellaSwag and ranks second on PIQA and ARC-easy. All three
+mixers ($60.28$--$60.45$); it leads HellaSwag and ranks second on ARC-easy. All three
 uncertainty-gated mixers beat GDN-2 on \emph{every} column --- average
-accuracy rises from $58.51$ to $60.10$--$60.35$ and WikiText perplexity falls from $16.15$ to
-$15.13$--$15.40$ --- but they no longer separate from each other: the three averages span
-$0.25$ points ($60.10$ / $60.28$ / $60.35$) against per-task standard errors of $0.5$--$1.4$ points,
-and the per-column wins split three ways. So the benefit of Kalman gating over the fixed-gain rule
-is large and reproducible at both scales, while the extra structure of the diagonal gain does not
-yet pay for itself over a single scalar on this suite. The $750$M and $1.3$B blocks disagree on
-which KDN leads, which is the expected signature of a difference inside noise rather than a trend.
+accuracy rises from $58.51$ to $60.28$--$60.45$ and WikiText perplexity falls from $16.15$ to
+$15.04$--$15.40$ --- but they remain statistically tied: the three averages span only
+$0.17$ points ($60.28$ / $60.35$ / $60.45$) against per-task standard errors of $0.5$--$1.4$ points.
+The fixed-$s=d_k$ Diagonal KDN is numerically best overall and leads WikiText, LAMBADA perplexity
+and accuracy, and PIQA, but its $0.10$-point edge over the Isotropic KDN remains well inside this
+noise scale. Thus Kalman gating remains consistently beneficial over GDN-2, while the distinction
+between scalar and diagonal uncertainty is not resolved by this suite.
 
-In the hybrid block, Mamba-3 (SISO) $+$ SWA reaches $59.16$ average accuracy, $1.39$ points above
-GDN-2 $+$ SWA and $0.96$ points above recurrent-only Mamba-3 (SISO); it ranks second on PIQA and
-WinoGrande. Mamba-3 (MIMO) $+$ SWA reaches $59.28$, leads ARC-easy, and ranks second on
-ARC-challenge; its $0.12$-point gain over hybrid SISO is within the per-task standard errors.
-The 32-GPU Isotropic KDN $+$ SWA run improves on GDN-2 $+$ SWA in every reported column, raising
-average accuracy from $57.77$ to $59.38$. KDA $+$ SWA also improves on GDN-2 in every column and
-has the highest observed average ($59.94$), but its differently sharded training stream precludes a
-controlled architectural ordering. Its $0.56$-point gap over Isotropic KDN, $0.66$-point gap over
-Mamba-3 (MIMO), and $0.78$-point gap over Mamba-3 (SISO) are modest relative to the per-task
-standard errors. The GDN-2, Mamba-3 (MIMO), KDA, and Isotropic KDN hybrid averages are
-$0.34$--$0.97$ points below their recurrent-only counterparts at the same scale and token budget,
-whereas the Mamba-3 (SISO) hybrid average is $0.96$ points higher.
+In the final block, the fixed-$s=d_k$ Diagonal KDN $+$ SWA obtains the highest observed average
+($60.11$) and leads LAMBADA perplexity and accuracy, PIQA, HellaSwag, ARC-easy, and ARC-challenge.
+KDA $+$ SWA ranks second overall ($59.94$) and leads WinoGrande, while the Isotropic KDN $+$ SWA
+leads WikiText. The Diagonal KDN's $0.17$-point edge over KDA and $0.73$-point edge over the
+Isotropic KDN are modest relative to the per-task standard errors and should not be read as a stable
+architectural ordering. Mamba-3 (SISO) and Mamba-3 (MIMO) $+$ SWA reach $59.16$ and $59.28$;
+MIMO's $0.12$-point advantage is likewise within evaluation noise. The attention-only 2K-window
+Transformer reaches $56.23$, below every recurrent--attention hybrid in the block. The Mamba-3 (MIMO),
+KDA, GDN-2, Isotropic KDN, and Diagonal KDN hybrid averages are $0.34$--$0.97$ points below their
+recurrent-only counterparts at the same scale and token budget, whereas the Mamba-3 (SISO) hybrid
+average is $0.96$ points higher.
 
 \begin{table}[t]
 \centering
@@ -1038,42 +1032,37 @@ whereas the Mamba-3 (SISO) hybrid average is $0.96$ points higher.
 \cmidrule(lr){2-3}\cmidrule(lr){4-9}
 Model & Wiki. & LMB. & LMB. & PIQA & Hella. & Wino. & ARC-e & ARC-c & Avg. \\
 \midrule
-\multicolumn{10}{@{}l}{\emph{Recurrent-only, 220M parameters, 20B tokens}}\\
-DeltaNet        & 31.26 & 54.07 & 27.36 & 63.38 & 36.06 & 51.38 & 53.11 & 26.45 & 42.96 \\
-Gated DeltaNet  & 30.83 & 46.89 & 27.34 & 65.07 & 37.12 & 49.96 & 55.01 & \underline{26.54} & 43.51 \\
-GDN-2           & 31.62 & 42.95 & 30.18 & 63.98 & 35.47 & 51.62 & 54.17 & 26.28 & 43.62 \\
-KDA             & 29.31 & 36.39 & 31.61 & 64.96 & \textbf{38.37} & \textbf{53.59} & \underline{56.61} & \textbf{27.39} & \underline{45.42} \\
-Isotropic KDN   & \textbf{28.67} & \underline{35.40} & \underline{32.99} & \underline{65.94} & \underline{37.89} & \underline{52.49} & \textbf{57.45} & 26.37 & \textbf{45.52} \\
-Diagonal KDN    & \underline{28.99} & \textbf{35.12} & \textbf{33.09} & \textbf{66.00} & 37.63 & 51.22 & 55.85 & 25.51 & 44.88 \\
-\midrule
 \multicolumn{10}{@{}l}{\emph{Recurrent-only, 750M parameters, 50B tokens}}\\
-GDN-2           & 21.20 & 17.88 & 41.18 & 70.08 & 46.90 & 54.54 & 64.27 & 31.74 & 51.45 \\
 Mamba-3 (SISO)  & 19.68 & 17.61 & 40.33 & \underline{70.57} & 50.87 & 53.83 & 67.51 & 34.47 & 52.93 \\
 Mamba-3 (MIMO)  & 18.99 & 15.67 & 43.24 & 69.86 & \textbf{52.24} & \underline{56.75} & 67.72 & \textbf{36.52} & 54.39 \\
 KDA             & 18.85 & 15.06 & \underline{44.34} & \textbf{70.95} & 51.23 & 54.93 & 67.72 & 34.04 & 53.87 \\
+GDN-2           & 21.20 & 17.88 & 41.18 & 70.08 & 46.90 & 54.54 & 64.27 & 31.74 & 51.45 \\
 Isotropic KDN   & \textbf{18.42} & \underline{14.68} & 44.05 & \textbf{70.95} & \underline{52.12} & 56.12 & \underline{68.01} & 35.24 & \underline{54.41} \\
 Diagonal KDN    & \underline{18.64} & \textbf{14.15} & \textbf{45.66} & \textbf{70.95} & 51.91 & \textbf{57.70} & \textbf{68.10} & \underline{35.49} & \textbf{54.97} \\
 \midrule
 \multicolumn{10}{@{}l}{\emph{Recurrent-only, 1.3B parameters, 100B tokens}}\\
-GDN-2           & 16.15 & 11.29 & 49.45 & 72.63 & 57.80 & 59.19 & 72.73 & 39.25 & 58.51 \\
 Mamba-3 (SISO)  & 15.94 & 11.98 & 47.45 & 73.61 & 59.39 & 57.77 & 72.64 & 38.31 & 58.20 \\
-Mamba-3 (MIMO)  & 15.63 & 10.49 & 50.20 & \underline{73.94} & \textbf{60.79} & 59.19 & \underline{73.91} & 41.04 & 59.85 \\
-KDA             & 15.40 & \underline{10.09} & \underline{51.15} & \textbf{74.16} & 60.61 & 60.54 & 73.48 & \textbf{41.72} & \underline{60.28} \\
-Isotropic KDN   & \underline{15.30} & \textbf{9.98} & 50.96 & 73.23 & 60.23 & \underline{61.33} & \textbf{74.71} & \underline{41.64} & \textbf{60.35} \\
-Diagonal KDN    & \textbf{15.13} & 10.26 & \textbf{51.50} & 73.67 & \underline{60.63} & \textbf{61.80} & 73.15 & 39.85 & 60.10 \\
+Mamba-3 (MIMO)  & 15.63 & 10.49 & 50.20 & 73.94 & \textbf{60.79} & 59.19 & \underline{73.91} & 41.04 & 59.85 \\
+KDA             & 15.40 & 10.09 & \underline{51.15} & \underline{74.16} & 60.61 & 60.54 & 73.48 & \textbf{41.72} & 60.28 \\
+GDN-2           & 16.15 & 11.29 & 49.45 & 72.63 & 57.80 & 59.19 & 72.73 & 39.25 & 58.51 \\
+Isotropic KDN   & \underline{15.30} & \underline{9.98} & 50.96 & 73.23 & 60.23 & \textbf{61.33} & \textbf{74.71} & \underline{41.64} & \underline{60.35} \\
+Diagonal KDN    & \textbf{15.04} & \textbf{9.75} & \textbf{51.87} & \textbf{74.21} & \underline{60.68} & \underline{60.62} & 73.70 & \underline{41.64} & \textbf{60.45} \\
 \midrule
-\multicolumn{10}{@{}l}{\emph{Hybrid, 1.3B parameters, 100B tokens}}\\
+\multicolumn{10}{@{}l}{\emph{Hybrid and attention-only, 1.3B parameters, 100B tokens}}\\
+Transformer (2K SWA)       & 16.67 & 13.10 & 48.38 & 71.22 & 56.62 & 56.75 & 68.56 & 35.84 & 56.23 \\
+Mamba-3 (SISO) $+$ SWA & 15.87 & 11.38 & 50.46 & 72.80 & 59.59 & 59.27 & 72.73 & 40.10 & 59.16 \\
+Mamba-3 (MIMO) $+$ SWA & 15.33 & 10.96 & 50.44 & 72.69 & 60.00 & 58.56 & \underline{72.81} & 41.21 & 59.28 \\
+KDA $+$ SWA           & \underline{15.08} & \underline{10.81} & \underline{51.23} & 72.14 & \underline{60.33} & \textbf{61.64} & 72.77 & \underline{41.55} & \underline{59.94} \\
 GDN-2 $+$ SWA         & 16.06 & 11.12 & 49.54 & 71.82 & 58.44 & 57.77 & 71.42 & 37.63 & 57.77 \\
-Mamba-3 (SISO) $+$ SWA & 15.87 & 11.38 & 50.46 & \underline{72.80} & 59.59 & \underline{59.27} & 72.73 & 40.10 & 59.16 \\
-Mamba-3 (MIMO) $+$ SWA & 15.33 & 10.96 & 50.44 & 72.69 & 60.00 & 58.56 & \textbf{72.81} & \underline{41.21} & 59.28 \\
-KDA $+$ SWA           & \underline{15.08} & \textbf{10.81} & \textbf{51.23} & 72.14 & \textbf{60.33} & \textbf{61.64} & \underline{72.77} & \textbf{41.55} & \textbf{59.94} \\
-Isotropic KDN $+$ SWA & \textbf{14.98} & \underline{10.90} & \underline{50.49} & \textbf{72.85} & \underline{60.31} & 59.12 & 72.64 & 40.87 & \underline{59.38} \\
+Isotropic KDN $+$ SWA & \textbf{14.98} & 10.90 & 50.49 & \underline{72.85} & 60.31 & 59.12 & 72.64 & 40.87 & 59.38 \\
+Diagonal KDN $+$ SWA  & 15.10 & \textbf{10.41} & \textbf{51.99} & \textbf{72.96} & \textbf{60.57} & \underline{60.38} & \textbf{72.98} & \textbf{41.81} & \textbf{60.11} \\
 \bottomrule
 \end{tabular}
 \caption{Language modeling and zero-shot commonsense reasoning. Perplexity on WikiText and LAMBADA
 (lower is better) and zero-shot accuracy (\%) on LAMBADA and the commonsense suite; \emph{Avg.} is
-the mean of the six accuracies. The upper three blocks are recurrent-only; the final block alternates
-nine recurrent mixer layers with nine $2$K sliding-window-attention layers. Models are matched in
+the mean of the six accuracies. The upper two blocks are recurrent-only; the final block compares
+an 18-layer $2$K sliding-window Transformer with hybrids that alternate nine recurrent mixer layers
+and nine $2$K sliding-window-attention layers. Models are matched in
 parameter count within each block. Best per column within each block in \textbf{bold}, second best
 \underline{underlined}. The recurrent-only $1.3$B Diagonal KDN row uses the targeted learned-scale,
 learned-initial-precision setting described in the text.}
@@ -1112,13 +1101,16 @@ it was an interaction with the fixed opening essay rather than a short-memory fa
 follow-up reported here reaches $98.6$ and $96.4$ on those cells. These are single checkpoints and one
 window seed, so small differences should be read as directional.
 
-In the hybrid block, Mamba-3 (MIMO) has the highest 14-cell mean at $73.57$, narrowly ahead of
-the Isotropic KDN ($73.49$), followed by KDA ($70.93$), GDN-2 ($67.43$), and Mamba-3
-(SISO; $64.73$); KDA comparisons carry the stream-sharding caveat above. MIMO leads S-NIAH-3
-at 4K and multi-key recall at 1K--2K, while the Isotropic KDN leads S-NIAH-3 at 1K--2K and
-multi-key recall at 4K. At 8K, GDN-2 and the Isotropic KDN tie at $28.4$ on S-NIAH-1 and
-$27.6$ on S-NIAH-2; Mamba-3 (MIMO) follows closely at $27.2$/$25.6$, ahead of KDA
-($21.2$/$25.4$) and Mamba-3 (SISO; $15.0$/$21.8$).
+In the final block, Mamba-3 (MIMO) has the highest 14-cell mean at $73.57$, narrowly ahead of
+the Isotropic KDN ($73.49$), followed by the Diagonal KDN ($71.36$), KDA ($70.93$), the
+2K-window Transformer ($69.91$), GDN-2 ($67.43$), and Mamba-3 (SISO; $64.73$); KDA comparisons
+carry the stream-sharding caveat above.
+MIMO leads S-NIAH-3 at 4K and multi-key recall at 1K--2K, while the Isotropic KDN leads
+S-NIAH-3 at 1K--2K and multi-key recall at 4K. The Diagonal KDN ranks second on S-NIAH-2 at
+4K--8K, S-NIAH-3 at 4K, and multi-key recall at 1K. At 8K, GDN-2 and the Isotropic KDN tie at
+$28.4$ on S-NIAH-1 and $27.6$ on S-NIAH-2; Mamba-3 (MIMO) ranks second on S-NIAH-1
+($27.2$), while the Diagonal KDN ranks second on S-NIAH-2 ($26.0$). The pure Transformer ties
+the best hybrid results through 4K on S-NIAH-1/2, but drops to $22.6$/$19.8$ at 8K.
 
 \begin{table}[t]
 \centering
@@ -1132,27 +1124,27 @@ $27.6$ on S-NIAH-2; Mamba-3 (MIMO) follows closely at $27.2$/$25.6$, ahead of KD
 Model & 1K & 2K & 4K & 8K & 1K & 2K & 4K & 8K & 1K & 2K & 4K & 1K & 2K & 4K \\
 \midrule
 \multicolumn{15}{@{}l}{\emph{Recurrent-only, 750M parameters, 50B tokens}}\\
-GDN-2         & \textbf{100.0} & \underline{99.8} & 90.2 & 47.2 & 95.0 & 74.6 & 36.0 & 12.6 & 64.6 & 31.0 & 9.2 & 27.8 & 25.6 & 22.0 \\
 Mamba-3 (SISO) & \textbf{100.0} & 98.8 & 73.8 & 33.2 & 95.4 & 82.2 & 43.0 & 17.6 & 65.6 & 26.4 & 9.0 & \underline{42.4} & 27.6 & 19.6 \\
 Mamba-3 (MIMO) & \textbf{100.0} & 99.0 & 79.2 & 39.6 & \underline{98.4} & \textbf{92.6} & 57.6 & 21.6 & 77.4 & 49.0 & 14.2 & \textbf{50.2} & \underline{36.0} & \underline{25.0} \\
 KDA           & \textbf{100.0} & \underline{99.8} & \underline{99.2} & 82.6 & 96.4 & 89.8 & \underline{63.2} & \underline{26.0} & 68.8 & 43.6 & 13.6 & 32.6 & 29.8 & 24.2 \\
+GDN-2         & \textbf{100.0} & \underline{99.8} & 90.2 & 47.2 & 95.0 & 74.6 & 36.0 & 12.6 & 64.6 & 31.0 & 9.2 & 27.8 & 25.6 & 22.0 \\
 Isotropic KDN & \textbf{100.0} & \textbf{100.0} & 98.2 & \underline{89.4} & 96.0 & 86.0 & 47.8 & 16.2 & \underline{80.4} & \underline{58.4} & \underline{22.6} & 30.4 & 25.4 & 22.2 \\
 Diagonal KDN  & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{98.6} & \underline{91.4} & \textbf{71.2} & \textbf{29.0} & \textbf{84.2} & \textbf{71.0} & \textbf{32.2} & 41.0 & \textbf{36.4} & \textbf{29.6} \\
 \midrule
 \multicolumn{15}{@{}l}{\emph{Recurrent-only, 1.3B parameters, 100B tokens}}\\
-GDN-2         & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{99.8} & \underline{98.6} & 92.4 & 67.4 & \textbf{28.0} & 88.0 & 64.4 & 29.4 & 50.6 & \underline{44.0} & \underline{31.4} \\
 Mamba-3 (SISO) & \textbf{100.0} & \underline{99.8} & 98.2 & 62.6 & \underline{98.6} & 93.6 & 62.6 & 20.6 & 69.0 & 50.2 & 16.6 & 46.6 & 38.4 & 27.2 \\
 Mamba-3 (MIMO) & \underline{99.8} & 99.4 & 75.2 & 15.4 & \textbf{99.6} & \textbf{96.0} & 64.8 & 15.4 & 85.8 & 63.6 & 29.8 & \underline{51.6} & 42.4 & 30.4 \\
 KDA           & \underline{99.8} & 99.2 & 66.6 & 30.2 & 98.0 & 95.0 & 62.2 & 23.6 & \underline{92.6} & \underline{77.2} & \underline{43.2} & 47.4 & 38.8 & 26.6 \\
+GDN-2         & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{99.8} & \underline{98.6} & 92.4 & 67.4 & \textbf{28.0} & 88.0 & 64.4 & 29.4 & 50.6 & \underline{44.0} & \underline{31.4} \\
 Isotropic KDN & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \underline{94.6} & 98.4 & 91.8 & \underline{68.4} & 24.2 & 86.8 & 67.6 & 34.6 & 41.6 & 29.8 & 23.4 \\
 Diagonal KDN  & \textbf{100.0} & \textbf{100.0} & \underline{99.8} & \textbf{99.8} & \underline{98.6} & \underline{95.6} & \textbf{74.6} & \underline{25.8} & \textbf{96.4} & \textbf{88.6} & \textbf{48.6} & \textbf{62.2} & \textbf{47.4} & \textbf{33.8} \\
 \midrule
-\multicolumn{15}{@{}l}{\emph{Hybrid, 1.3B parameters, 100B tokens}}\\
-GDN-2 $+$ SWA
-  & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & \textbf{28.4}
-  & \textbf{100.0} & \underline{99.8} & \textbf{53.4} & \textbf{27.6}
-  & 83.0 & 67.8 & 25.2
-  & 84.0 & 76.8 & 45.6 \\
+\multicolumn{15}{@{}l}{\emph{Hybrid and attention-only, 1.3B parameters, 100B tokens}}\\
+Transformer (2K SWA)
+  & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & 22.6
+  & \textbf{100.0} & \textbf{100.0} & \textbf{53.4} & 19.8
+  & \underline{99.2} & 94.6 & 35.4
+  & 76.6 & 79.4 & 45.4 \\
 Mamba-3 (SISO) $+$ SWA
   & \underline{99.4} & 73.8 & 29.4 & 15.0
   & 99.6 & 99.2 & 52.2 & 21.8
@@ -1160,25 +1152,36 @@ Mamba-3 (SISO) $+$ SWA
   & 74.8 & 76.0 & 39.0 \\
 Mamba-3 (MIMO) $+$ SWA
   & \textbf{100.0} & \underline{99.8} & \underline{52.0} & \underline{27.2}
-  & \underline{99.8} & \underline{99.8} & \underline{53.2} & \underline{25.6}
+  & \underline{99.8} & \underline{99.8} & \underline{53.2} & 25.6
   & 97.8 & 95.8 & \textbf{50.8}
   & \textbf{92.8} & \textbf{89.6} & \underline{45.8} \\
 KDA $+$ SWA
   & \textbf{100.0} & 87.8 & 47.4 & 21.2
   & \underline{99.8} & \textbf{100.0} & \textbf{53.4} & 25.4
-  & \underline{99.2} & \underline{97.0} & \underline{48.6}
-  & \underline{86.0} & 83.0 & 44.2 \\
+  & \underline{99.2} & \underline{97.0} & 48.6
+  & 86.0 & 83.0 & 44.2 \\
+GDN-2 $+$ SWA
+  & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & \textbf{28.4}
+  & \textbf{100.0} & \underline{99.8} & \textbf{53.4} & \textbf{27.6}
+  & 83.0 & 67.8 & 25.2
+  & 84.0 & 76.8 & 45.6 \\
 Isotropic KDN $+$ SWA
   & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & \textbf{28.4}
   & \textbf{100.0} & \textbf{100.0} & \textbf{53.4} & \textbf{27.6}
   & \textbf{99.8} & \textbf{98.4} & 44.6
   & 85.4 & \underline{89.0} & \textbf{49.8} \\
+Diagonal KDN $+$ SWA
+  & \textbf{100.0} & 96.2 & 48.8 & 24.2
+  & 99.2 & 98.0 & \underline{53.2} & \underline{26.0}
+  & 98.6 & 94.8 & \underline{50.0}
+  & \underline{89.2} & 76.4 & 44.4 \\
 \bottomrule
 \end{tabular}%
 }
 \caption{In-context retrieval accuracy (\%) on RULER single- and multi-key needle-in-a-haystack
-tasks~\citep{hsieh2024ruler}. The upper two blocks are recurrent-only; the final block alternates
-nine recurrent mixer layers with nine $2$K sliding-window-attention layers. S-NIAH-1/2 include
+tasks~\citep{hsieh2024ruler}. The upper two blocks are recurrent-only; the final block compares an
+18-layer $2$K sliding-window Transformer with hybrids that alternate nine recurrent mixer layers
+and nine $2$K sliding-window-attention layers. S-NIAH-1/2 include
 8K evaluation; S-NIAH-3 and MK-NIAH-1 stop at 4K. Essay contexts use deterministic random corpus
 windows and a 25-word fitting increment; all models receive the same 500 samples per cell. Best per
 column within each block in \textbf{bold}, second best \underline{underlined}. The recurrent-only
