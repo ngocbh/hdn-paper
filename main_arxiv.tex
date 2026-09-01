@@ -565,6 +565,21 @@ in addition to the associative memory itself. We therefore ask which parts of th
 can be relaxed while preserving both its uncertainty-aware residual write and an associative
 scan.
 
+Figure~\ref{fig:kdn-overview} summarizes the shared recurrent and hybrid architectures together
+with the filtering computation used by Diagonal KDN.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/kdn_draws.pdf}
+  \caption{Overview of the Kalman Delta Network. (a) Recurrent-only models stack KDN blocks,
+  whereas hybrid models alternate KDN and $2$K sliding-window-attention layers. (b) Each KDN
+  block predicts the memory transition, process and observation noise, and query, key, and value
+  projections used by the Kalman delta update. (c) For Diagonal KDN, the update predicts the latent
+  associative memory and its uncertainty, incorporates the current key--value observation, and
+  projects the dense posterior covariance back to the tractable diagonal family.}
+  \label{fig:kdn-overview}
+\end{figure}
+
 \subsection{Diagonal Kalman Delta Network}
 \label{sec:diagonal-kdn}
 
@@ -1094,16 +1109,15 @@ it was an interaction with the fixed opening essay rather than a short-memory fa
 follow-up reported here reaches $98.6$ and $96.4$ on those cells. These are single checkpoints and one
 window seed, so small differences should be read as directional.
 
-In the final block, Mamba-3 (MIMO) has the highest 14-cell mean at $73.57$, narrowly ahead of
-the Isotropic KDN ($73.49$), followed by the Diagonal KDN ($71.36$), KDA ($70.93$), the
-2K-window Transformer ($69.91$), GDN-2 ($67.43$), and Mamba-3 (SISO; $64.73$); KDA comparisons
-carry the stream-sharding caveat above.
-MIMO leads S-NIAH-3 at 4K and multi-key recall at 1K--2K, while the Isotropic KDN leads
-S-NIAH-3 at 1K--2K and multi-key recall at 4K. The Diagonal KDN ranks second on S-NIAH-2 at
-4K--8K, S-NIAH-3 at 4K, and multi-key recall at 1K. At 8K, GDN-2 and the Isotropic KDN tie at
-$28.4$ on S-NIAH-1 and $27.6$ on S-NIAH-2; Mamba-3 (MIMO) ranks second on S-NIAH-1
-($27.2$), while the Diagonal KDN ranks second on S-NIAH-2 ($26.0$). The pure Transformer ties
-the best hybrid results through 4K on S-NIAH-1/2, but drops to $22.6$/$19.8$ at 8K.
+In the final block, the Diagonal KDN has the highest 14-cell mean at $74.39$, ahead of
+Mamba-3 (MIMO; $73.57$) and the Isotropic KDN ($73.49$), followed by KDA ($70.93$), the
+2K-window Transformer ($69.91$), GDN-2 ($67.43$), and Mamba-3 (SISO; $64.73$).
+The Diagonal KDN leads S-NIAH-3 at 2K--4K and
+multi-key recall at 1K--2K, ties the best result on S-NIAH-1 at 1K, S-NIAH-2 at 1K and 4K,
+and S-NIAH-3 at 1K, and ranks second on S-NIAH-1/2 at 8K and multi-key recall at 4K.
+At 8K, GDN-2 and the Isotropic KDN tie at $28.4$ on S-NIAH-1 and $27.6$ on S-NIAH-2;
+the Diagonal KDN reaches $28.0$/$26.0$. The pure Transformer ties the best hybrid results
+through 4K on S-NIAH-1/2, but drops to $22.6$/$19.8$ at 8K.
 
 \begin{table}[t]
 \centering
@@ -1148,14 +1162,14 @@ Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
   & 96.4 & 86.2 & 43.4
   & 74.8 & 76.0 & 39.0 \\
 Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
-  & \textbf{100.0} & \underline{99.8} & \underline{52.0} & \underline{27.2}
+  & \textbf{100.0} & \underline{99.8} & \underline{52.0} & 27.2
   & \underline{99.8} & \underline{99.8} & \underline{53.2} & 25.6
-  & 97.8 & 95.8 & \textbf{50.8}
-  & \textbf{92.8} & \textbf{89.6} & \underline{45.8} \\
+  & 97.8 & 95.8 & \underline{50.8}
+  & \underline{92.8} & \underline{89.6} & 45.8 \\
 KDA~\citeyearpar{kimiteam2025kimilinear} $+$ SWA
   & \textbf{100.0} & 87.8 & 47.4 & 21.2
   & \underline{99.8} & \textbf{100.0} & \textbf{53.4} & 25.4
-  & \underline{99.2} & \underline{97.0} & 48.6
+  & \underline{99.2} & 97.0 & 48.6
   & 86.0 & 83.0 & 44.2 \\
 GDN-2~\citeyearpar{hatamizadeh2026gdn2} $+$ SWA
   & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & \textbf{28.4}
@@ -1166,14 +1180,14 @@ GDN-2~\citeyearpar{hatamizadeh2026gdn2} $+$ SWA
 Isotropic KDN $+$ SWA
   & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & \textbf{28.4}
   & \textbf{100.0} & \textbf{100.0} & \textbf{53.4} & \textbf{27.6}
-  & \textbf{99.8} & \textbf{98.4} & 44.6
-  & 85.4 & \underline{89.0} & \textbf{49.8} \\
+  & \textbf{99.8} & \underline{98.4} & 44.6
+  & 85.4 & 89.0 & \textbf{49.8} \\
 \rowcolor{blue!8}
 Diagonal KDN $+$ SWA
-  & \textbf{100.0} & 96.2 & 48.8 & 24.2
-  & 99.2 & 98.0 & \underline{53.2} & \underline{26.0}
-  & 98.6 & 94.8 & \underline{50.0}
-  & \underline{89.2} & 76.4 & 44.4 \\
+  & \textbf{100.0} & 98.6 & 51.6 & \underline{28.0}
+  & \textbf{100.0} & 98.4 & \textbf{53.4} & \underline{26.0}
+  & \textbf{99.8} & \textbf{99.2} & \textbf{53.0}
+  & \textbf{95.6} & \textbf{90.0} & \underline{47.8} \\
 \bottomrule
 \end{tabular}%
 }
@@ -1186,7 +1200,9 @@ windows and a 25-word fitting increment; all models receive the same 500 samples
 column within each block in \textbf{bold}, second best \underline{underlined}; light-blue rows denote
 our KDN variants. The recurrent-only
 $1.3$B Diagonal KDN row uses the targeted learned-scale, learned-initial-precision setting described
-in the text.}
+in the text. The hybrid Diagonal KDN row uses the four-node fixed-$s=d_k$ follow-up with
+$q_{\min}=10^{-6}$ and $r_{\min}=0.01$; Table~\ref{tab:pretrain-lm} retains the earlier
+$q_{\min}=0$ hybrid checkpoint.}
 \label{tab:pretrain-niah}
 \end{table}
 
