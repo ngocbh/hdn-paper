@@ -38,7 +38,7 @@ inference and constant-memory decoding. Its fixed-size recurrent memory, however
 decision at each token: what to write and how strongly to overwrite existing associations before
 knowing which information future queries will require. Delta-rule
 models learn this strength from the current token embedding but do not track confidence in the memory estimate,
-preventing each write from adapting to accumulated evidence. To represent this uncertainty explicitly, we revisit recurrent
+preventing each write from adapting to accumulated evidence. To represent this uncertainty explicitly, we reformulate recurrent
 associative memory as a linear--Gaussian state-space
 model, for which the Kalman filter is the optimal recursive estimator, and introduce a new family of
 models, \textit{Kalman Delta Networks (KDNs)}. Within KDNs, the transition propagates both the memory state and
@@ -90,40 +90,45 @@ repeatedly confirmed.
 We argue that uncertainty is the missing state variable. The recurrent memory can be viewed as an
 estimate of a latent, non-stationary key--value map. Each token supplies a noisy observation of
 that map at one key, while the learned transition describes how the map persists or drifts between
-observations. This is precisely an online filtering problem. Under a linear--Gaussian model, the
-Kalman filter predicts both the memory and its covariance, then uses the covariance to determine how
-strongly the new value should correct the prediction~\citep{grewal2025kalman}. The resulting update
-is still a residual delta write, but the write strength is larger in uncertain directions and smaller where
-past evidence should be protected. From this observation, we introduce
+observations. This is precisely an online filtering problem, where, under linear--Gaussian
+assumptions, the Kalman filter~\citep{kalman1960new} is the optimal recursive estimator.
+It tracks both the memory
+estimate and its covariance, balancing memory uncertainty against observation noise to set the
+strength of each correction. Each correction retains the familiar residual delta-write form, with
+greater write strength in uncertain directions and less where past evidence should be protected.
+From this observation, we introduce
 \emph{Kalman Delta Networks (KDNs)}, which track both the memory state and its uncertainty,
 allowing each update to balance accumulated evidence against observation reliability.
 DeltaNet, Gated DeltaNet, and KDA emerge as covariance-free approximations that retain different
 memory transitions while omitting this uncertainty recursion.
 
-The exact Kalman covariance tracking, however, is not a practical linear-attention layer. It
+The exact Kalman update, however, is not a practical linear-attention layer. It
 carries a dense $d_k\times d_k$ covariance per head, and its gain depends on a state-dependent
-Riccati recurrence that is poorly suited to efficient parallel scans. We make the filter tractable by
-restricting the predictive covariance, transition, and process noise to the diagonal family.
-Although a measurement immediately produces a dense exact posterior, an online mean-field
-variational update gives the reverse-KL-optimal diagonal approximation while preserving the exact
-one-step posterior mean conditional on the diagonal predictive prior. The resulting
-\emph{Diagonal KDN} tracks one uncertainty value per key channel and admits an associative scan
-with $O(d_k)$ auxiliary state; \emph{Isotropic KDN} instead shares one uncertainty scalar per head.
+Riccati recurrence that is poorly suited to efficient parallel scans. To make the filter tractable,
+we restrict the transition, process noise, and predictive covariance to diagonal form. Nevertheless,
+each measurement update still yields an exact posterior with a dense covariance. We therefore derive an
+online mean-field variational update that projects this posterior back onto the diagonal family by
+minimizing reverse KL. Conditional on the retained diagonal predictive prior, this projection
+preserves the exact one-step posterior mean. The
+resulting \emph{Diagonal KDN} maintains one uncertainty value per key channel and admits an
+associative scan with $O(d_k)$ auxiliary state, while \emph{Isotropic KDN} further ties these values
+to a single uncertainty scalar per head, requiring only $O(1)$ auxiliary state.
 
-Empirically, in parameter-matched recurrent-only pretraining on FineWeb-Edu~\citep{penedo2024fineweb}, both KDN
-variants obtain lower WikiText and LAMBADA perplexity and a higher unweighted mean of six zero-shot
-accuracies than GDN-2~\citep{hatamizadeh2026gdn2} at 750M/50B and 1.3B/100B. At both scales,
-Diagonal KDN achieves the highest observed 14-cell RULER aggregate~\citep{hsieh2024ruler} among the
-evaluated recurrent-only models. On the 1.3B standard suite, however, the results do not establish
-a stable ordering among KDA and the two KDN variants.
+Empirically, under parameter-matched recurrent-only pretraining on
+FineWeb-Edu~\citep{penedo2024fineweb}, both KDN variants achieve lower WikiText and LAMBADA
+perplexity and higher mean six-task zero-shot accuracy than every evaluated state-of-the-art
+linear-time recurrent mixer---including Mamba-3~\citep{lahoti2026mamba3},
+KDA~\citep{kimiteam2025kimilinear}, and GDN-2~\citep{hatamizadeh2026gdn2}---at both 750M/50B
+and 1.3B/100B. Diagonal KDN also achieves the highest observed 14-cell RULER
+aggregate~\citep{hsieh2024ruler} at both scales.
 
 Our contributions are:
 
 \begin{itemize}[leftmargin=1.4em,itemsep=3pt,topsep=2pt]
-  \item \textbf{A confidence-based view of delta rules.} We show that DeltaNet, Gated DeltaNet, and
+  \item \textbf{An uncertainty-aware view of associative memory and delta rules.} We show that DeltaNet, Gated DeltaNet, and
   KDA recover the Kalman residual update after replacing its covariance-derived gain with a
   token-predicted gain that does not track uncertainty accumulated across observations.
-  \item \textbf{Scalable uncertainty-aware memory.} We derive Diagonal KDN through online
+  \item \textbf{A hardware-efficient algorithm for uncertainty-aware associative memory.} We derive Diagonal KDN through online
   variational inference and introduce Isotropic and Diagonal variants with $O(1)$ and $O(d_k)$
   uncertainty state per head, respectively. Their uncertainty updates admit an associative gain
   scan followed by the usual affine memory scan.
@@ -138,7 +143,7 @@ Our contributions are:
 \section{Preliminaries}
 \label{sec:preliminaries}
 
-\paragraph{Self-attention: exact but growing memory.}
+\paragraph{Self-attention.}
 Causal softmax attention stores every preceding key--value pair and retrieves a
 query-dependent weighted combination \citep{vaswani2017attention},
   \begin{equation}
@@ -153,7 +158,7 @@ query-dependent weighted combination \citep{vaswani2017attention},
   quadratic query--key interactions. This scaling cost motivates replacing the growing cache
   with a fixed-size recurrent memory.
 
-\paragraph{Linear attention: fixed-size additive memory.}
+\paragraph{Linear attention.}
 Linear attention addresses this growth by compressing the token history into a fixed-size
 recurrent state $\ve{S}_t \in \R^{d_k \times d_v}$. In its unnormalized associative-memory
 form, each token writes a key--value association to the state, and each query reads from it
@@ -170,7 +175,7 @@ form, each token writes a key--value association to the state, and each query re
   associations cannot be explicitly removed from the fixed-size memory and may therefore
   interfere with new ones.
 
-\paragraph{DeltaNet: key-local erase and write.}
+\paragraph{DeltaNet.}
 DeltaNet addresses this limitation by replacing the additive update with an error-correcting
 delta rule \citep{schlag2021linear,yang2024parallelizing}. It reads the value currently
 associated with $\ve{k}_t$ and writes only the residual,
@@ -191,7 +196,7 @@ associated with $\ve{k}_t$ and writes only the residual,
   therefore persist for many steps and interfere with a later write when its key is
   non-orthogonal to the new key.
 
-\paragraph{Gated DeltaNet: global forgetting.}
+\paragraph{Gated DeltaNet.}
 Gated DeltaNet~\citep{yang2024gdn} addresses this limitation by applying a data-dependent decay
 $\alpha_t\in(0,1)$ to the entire state before the delta update, following the state-decay
 mechanism of Mamba-2~\citep{dao2024transformers}:
@@ -211,7 +216,7 @@ mechanism of Mamba-2~\citep{dao2024transformers}:
   rate to every key channel in a head. The model therefore cannot preserve long-lived
   information in some channels while rapidly forgetting transient information in others.
 
-\paragraph{KDA: channel-wise forgetting.}
+\paragraph{KDA.}
 KDA addresses this limitation by replacing the scalar decay with a diagonal transition
 $\ve{D}_t=\diag(\ve{\alpha}_t)$, giving each key channel its own decay rate
 \citep{kimiteam2025kimilinear},
@@ -258,7 +263,7 @@ Thus $\ve{P}$ denotes the key-space covariance shared across value coordinates.
 \label{sec:memory-kalman}
 
 We revisit DeltaNet-style models through the lens of a linear--Gaussian state-space model, for
-which the optimal recursive estimator is the Kalman filter~\citep{grewal2025kalman}. Under this
+which the optimal recursive estimator is the Kalman filter~\citep{kalman1960new}. Under this
 view, DeltaNet, Gated DeltaNet, and KDA emerge as fixed-gain special cases: they retain the Kalman
 residual correction
 but omit covariance tracking and predict the write strength directly from the current input.
@@ -728,9 +733,10 @@ Parallelizability is not free. The associative M\"obius scan requires projecting
 posterior back to a product Gaussian, thereby discarding cross-channel correlations and inheriting
 the familiar coordinatewise overconfidence of reverse-KL mean field~\citep{blei2017variational}.
 Those correlations record that a \emph{joint} key direction has already been observed. Their loss
-can therefore leave that direction underprotected even while every retained marginal variance is
-too small, so an immediately repeated key---or a later key with overlapping coordinatewise
-energy---receives an excessively strong residual write. We address this overwrite failure by
+can make the diagonal approximation appear overconfident in every individual channel while
+remaining too uncertain along that joint direction. As a result, an immediately repeated
+key---or a later key with energy on the same coordinates---can trigger an excessively strong
+residual write. We address this overwrite failure by
 separating the strength of the present write from the information passed forward to protect it.
 Specifically, we use an information scale $\mu>0$ to scale only the post-write precision increment:
 \begin{equation}
