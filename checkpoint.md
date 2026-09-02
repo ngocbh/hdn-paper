@@ -1,8 +1,10 @@
 # Paper checkpoints
 
 Source of truth for the trained checkpoints used by the result tables in
-`main_arxiv.tex`. The retrieval table reuses the 750M and 1.3B checkpoints
-below. The information-scale table uses three matched 750M Diagonal KDN arms
+`main_arxiv.tex`. The main real-world retrieval table uses selected recurrent
+and hybrid 1.3B checkpoints below; the companion analysis registry evaluates
+every locally readable 750M and 1.3B checkpoint. The information-scale table
+uses three matched 750M Diagonal KDN arms
 with random omega initialization, the main-table $\mu=d_k$ checkpoint, and one
 learned-scale checkpoint initialized at $d_k$; the overwrite appendix additionally
 uses the matched random-gain $\mu=d_k$ arm. The fixed-noise table uses two matched
@@ -72,10 +74,12 @@ The real-world retrieval table uses protocol
 commit `e3bc0bde5c79f658b3f28d427a31884dbf8ba1d3` with source SHA-256
 `21ab5af6e6771b6b2bdcac87dedc0897d22253516b045df49ee0a516e431d9c1`;
 the final aggregation/upload tooling is commit
-`ab797368a53452303c307400fd43680c5117636a` with source SHA-256
-`a897d1843a0c632a6660a3884cc486b81ae298b00a950af88a66a770b83b5023`.
-The checkpoint manifest SHA-256 is
-`23bb51928e123a40725a21279843515b439fcbe57fe26f1ba77ae319ccdce579`
+`5fa0729cd4c845b3a3a6855cfada5b70794b35e9` with source SHA-256
+`91760d9a0faccf7cb3eb90413f8ef63bd9833981914f2e90815ab0fc5d52c387`.
+The primary checkpoint manifest SHA-256 is
+`23bb51928e123a40725a21279843515b439fcbe57fe26f1ba77ae319ccdce579`;
+the supplemental carrier manifest SHA-256 is
+`4d1d2c0edc5b440253670984d6301a3fc8d83dbcef2f1fed9fdd4e11e6dd9cea`;
 and the dataset manifest SHA-256 is
 `2d1f1109561f87dac561e6688a4b1a7a2b6c79109f70120b8f9fea362b5fcd52`.
 Each checkpoint evaluates 12,077 documents in BF16 with fixed batch size 8,
@@ -84,17 +88,24 @@ the selected-token LM head. Full reports are stored as
 `<checkpoint-dir>/retrieval_table4_eval/report.json`.
 
 The main-paper rows are manifest indices 13--18, 20--25, and 27. Reference
-jobs `1818896_16` and `1818896_24` plus sweep array `1820186` produced all 29
-local reports. The sealed aggregate is
-`/storage/home/ngocbh/datasets/retrieval_table4_v1/results/full_1820186_ab79736`:
+jobs `1818896_16` and `1818896_24` plus sweep array `1820186` produced the 29
+primary reports. Supplemental job `1824130_28` evaluated the locally readable,
+superseded Diagonal KDN checkpoint with fixed $\mu=d_k$ and
+$q_{\min}=r_{\min}=0.05$; carrier index 28 is global aggregate index 29. Its
+report SHA-256 is
+`88bd43335e54b7ac8c56518d63a7e707368f19faec94bd908cc4972069f3b1fb`.
+This registry-only result is excluded from main-paper Table 2. The sealed
+30-checkpoint aggregate is
+`/storage/home/ngocbh/datasets/retrieval_table4_v1/results/full_30_1820186_1824130_5fa0729`:
 `summary.json` SHA-256
-`899527ed1962a1d3776f1edfca2d90ce154f52bedcac63314802c452ec9674c5`,
-`table.csv` `bc08aefee71f77aca343df04fd38ba1ccfb2b45aec8c4ed84a69f3508b89208d`,
-`table.md` `71fc04a0f3bf1f7c8dfe779078105cf844f8b8ac7732b253e8416177364ca890`,
-and `table.tex` `69c7213da172ce488bcc49153ae5d00346b29b9bf06dceb1769e86884194c3ab`.
-W&B preflight/upload/verification jobs were `1823498`, `1823510`, and
-`1823541`; the final verification classified all 29 targets as identical-hash
-skips. Metrics use the `eval/retrieval_table4/*` namespace. The Manifold-only
+`6118731acab43cffb3335ff630013a34b99bcf838764cefe4597e177a3771321`,
+`table.csv` `70cdecb022727bf41ed7ea1deb6637bf9cd6d55341bf849841886410fba517ab`,
+`table.md` `92c772a85567ecb7a24ab8a0559635ded9030c475fa27b5b2036e7d3cb1e0dda`,
+and `table.tex` `129418778847925d15c2aaac5193531ea383e5e9442bed03021902258f300c9d`.
+Primary W&B preflight/upload/verification jobs were `1823498`, `1823510`, and
+`1823541`; supplemental jobs were `1825286`, `1825294`, and `1825295`.
+The final verifications classified every target as an identical-hash skip.
+Metrics use the `eval/retrieval_table4/*` namespace. The Manifold-only
 learned-scale recurrent Diagonal KDN checkpoint is explicitly excluded because
 it cannot be read from this cluster; it is not silently replaced by another
 checkpoint.
