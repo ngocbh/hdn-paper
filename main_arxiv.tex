@@ -951,10 +951,12 @@ cloze-formatted tasks released with Just Read Twice (JRT)~\citep{arora2024justre
 SWDE, SQuAD, FDA, TriviaQA, Natural Questions, and DROP.
 
 \paragraph{Model architectures.}
+\vspace{-2mm}
 \begin{wrapfigure}{r}{0.52\textwidth}
   \vspace{-0.5\baselineskip}
   \centering
   \includegraphics[width=0.96\linewidth]{figures/kdn_layer.pdf}
+  \vspace{-2mm}
   \caption{Kalman Delta Network architectures.}
   \label{fig:kdn-layer-architecture}
   \vspace{-1.0\baselineskip}
@@ -990,37 +992,13 @@ $\ve{W}_{\omega}=\ve{0}$ when training Diagonal KDN.
 \label{sec:experimental-results}
 
 \paragraph{Language modeling and commonsense reasoning.}
-Table~\ref{tab:pretrain-lm} reports WikiText and LAMBADA perplexity, zero-shot LAMBADA accuracy,
-and the commonsense suite (PIQA, HellaSwag, WinoGrande, ARC-easy, ARC-challenge). In the
-state-matched $750$M comparison, gains reflect a stronger update rule rather than a larger recurrent
-memory. At $750$M/$50$B, the Diagonal KDN leads LAMBADA perplexity
-and accuracy, WinoGrande, ARC-easy, and the average; Mamba-3 (MIMO) leads HellaSwag and ARC-challenge;
-and the Isotropic KDN leads WikiText, while KDA and both KDN variants tie on PIQA. The Diagonal KDN
-has the best average ($54.97$), followed closely by the Isotropic KDN ($54.41$) and Mamba-3 (MIMO;
-$54.39$), then KDA ($53.87$), Mamba-3 (SISO; $52.93$), and GDN-2 ($51.45$).
-At $1.3$B/$100$B, Mamba-3 (MIMO) improves on its SISO counterpart in every reported column and
-raises average accuracy from $58.20$ to $59.85$, placing just below the three uncertainty-gated
-mixers ($60.28$--$60.45$); it leads HellaSwag and ranks second on ARC-easy. All three
-uncertainty-gated mixers beat GDN-2 on \emph{every} column --- average
-accuracy rises from $58.51$ to $60.28$--$60.45$ and WikiText perplexity falls from $16.15$ to
-$15.04$--$15.40$ --- but they remain statistically tied: the three averages span only
-$0.17$ points ($60.28$ / $60.35$ / $60.45$) against per-task standard errors of $0.5$--$1.4$ points.
-The fixed-$\mu=d_k$ Diagonal KDN is numerically best overall and leads WikiText, LAMBADA perplexity
-and accuracy, and PIQA, but its $0.10$-point edge over the Isotropic KDN remains well inside this
-noise scale. Thus Kalman gating remains consistently beneficial over GDN-2, while the distinction
-between scalar and diagonal uncertainty is not resolved by this suite.
-
-In the final block, the fixed-$\mu=d_k$ Diagonal KDN $+$ SWA obtains the highest observed average
-($60.11$) and leads LAMBADA perplexity and accuracy, PIQA, HellaSwag, ARC-easy, and ARC-challenge.
-KDA $+$ SWA ranks second overall ($59.94$) and leads WinoGrande, while the Isotropic KDN $+$ SWA
-leads WikiText. The Diagonal KDN's $0.17$-point edge over KDA and $0.73$-point edge over the
-Isotropic KDN are modest relative to the per-task standard errors and should not be read as a stable
-architectural ordering. Mamba-3 (SISO) and Mamba-3 (MIMO) $+$ SWA reach $59.16$ and $59.28$;
-MIMO's $0.12$-point advantage is likewise within evaluation noise. The attention-only 2K-window
-Transformer reaches $56.23$, below every recurrent--attention hybrid in the block. The Mamba-3 (MIMO),
-KDA, GDN-2, Isotropic KDN, and Diagonal KDN hybrid averages are $0.34$--$0.97$ points below their
-recurrent-only counterparts at the same scale and token budget, whereas the Mamba-3 (SISO) hybrid
-average is $0.96$ points higher.
+Table~\ref{tab:pretrain-lm} shows that, in the state-matched recurrent-only comparisons, the KDN
+variants achieve the two highest average accuracies at both scales while also improving perplexity
+over all baselines. Diagonal KDN ranks first at both scales, with Isotropic KDN close behind. In the
+hybrid setting, Diagonal KDN $+$ SWA again has the highest average, ahead of KDA $+$ SWA, and every
+recurrent--attention hybrid outperforms the attention-only Transformer. The small gaps among the
+leading methods are within evaluation noise; the robust signal is the benefit of Kalman gating
+rather than a resolved advantage for diagonal over isotropic uncertainty.
 
 \begin{table}[t]
 \centering
@@ -1065,128 +1043,18 @@ Isotropic KDN (ours) $+$ SWA & \textbf{14.98} & 10.90 & 50.49 & \underline{72.85
 Diagonal KDN (ours) $+$ SWA  & 15.10 & \textbf{10.41} & \textbf{51.99} & \textbf{72.96} & \textbf{60.57} & \underline{60.38} & \textbf{72.98} & \textbf{41.81} & \textbf{60.11} \\
 \bottomrule
 \end{tabular}
-\caption{Language modeling and zero-shot commonsense reasoning. Perplexity on WikiText and LAMBADA
-(lower is better) and zero-shot accuracy (\%) on LAMBADA and the commonsense suite; \emph{Avg.} is
-the mean of the six accuracies. The upper two blocks are recurrent-only; the final block compares
-an 18-layer $2$K sliding-window Transformer with hybrids that alternate nine recurrent mixer layers
-and nine $2$K sliding-window-attention layers. Models are matched in
-parameter count within each block. Best per column within each block in \textbf{bold}, second best
-\underline{underlined}; light-gray columns highlight perplexity and average accuracy, while
-light-blue rows denote our KDN variants. The recurrent-only $1.3$B Diagonal KDN row uses fixed
-information scale $\mu=d_k$ and learned per-head initial precision.}
+\caption{Language modeling and zero-shot commonsense reasoning. Best per column within each block in \textbf{bold}, second best
+\underline{underlined}; light-blue rows denote our KDN variants.}
 \label{tab:pretrain-lm}
 \end{table}
 
-\paragraph{Real-world retrieval.}
-Table~\ref{tab:real-world-retrieval} reports the six-task real-world retrieval comparison at
-$1.3$B parameters. Among recurrent-only models, the Diagonal KDN achieves the best average
-($34.86$), leading FDA, TriviaQA, and DROP. In the hybrid block, the Isotropic KDN $+$ SWA has
-the best average ($45.94$), while the Diagonal KDN $+$ SWA ranks second ($45.55$) and leads FDA.
-
-\begin{table}[t]
-\centering
-\small
-\setlength{\tabcolsep}{4.5pt}
-\begin{tabular}{@{}l cccccc >{\columncolor{gray!10}}c@{}}
-\toprule
-Model & SWDE & SQD & FDA & TQA & NQ & DROP & Avg. \\
-\midrule
-\multicolumn{8}{@{}l}{\emph{Recurrent 1.3B / 100B}}\\
-Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3}
-  & 26.34 & 36.35 & 22.52 & 60.90 & 21.98 & 20.89 & 31.50 \\
-Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3}
-  & 24.93 & 36.71 & 25.25 & 61.02 & 23.50 & 21.99 & 32.23 \\
-KDA~\citeyearpar{kimiteam2025kimilinear}
-  & 28.77 & \textbf{38.70} & \underline{27.97} & 61.97
-  & \textbf{24.11} & 21.03 & \underline{33.76} \\
-GDN-2~\citeyearpar{hatamizadeh2026gdn2}
-  & 29.90 & 35.64 & 21.16 & 61.49 & 23.34 & 20.99 & 32.09 \\
-\rowcolor{blue!8}
-Isotropic KDN (ours)
-  & \textbf{33.08} & 36.71 & 22.98 & \underline{62.09}
-  & 22.14 & \underline{23.38} & 33.40 \\
-\rowcolor{blue!8}
-Diagonal KDN (ours) ($\mu=d_k$)
-  & \underline{30.18} & \underline{38.09} & \textbf{30.61}
-  & \textbf{62.56} & \underline{23.63} & \textbf{24.10}
-  & \textbf{34.86} \\
-\midrule
-\multicolumn{8}{@{}l}{\emph{Hybrid 1.3B / 100B}}\\
-Transformer~\citeyearpar{vaswani2017attention} (2K SWA)
-  & 36.08 & 42.43 & 52.68 & 62.09 & 25.40 & 21.47 & 40.02 \\
-Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
-  & 36.27 & 43.37 & 58.95 & 64.57 & 26.70 & 22.47 & 42.06 \\
-Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
-  & 42.55 & 43.33 & \underline{64.85} & \textbf{65.88}
-  & \textbf{28.44} & \underline{23.53} & 44.76 \\
-KDA~\citeyearpar{kimiteam2025kimilinear} $+$ SWA
-  & \underline{51.08} & 43.10 & 57.86 & 65.17
-  & \underline{28.22} & \textbf{25.11} & 45.09 \\
-GDN-2~\citeyearpar{hatamizadeh2026gdn2} $+$ SWA
-  & 47.80 & 42.73 & 63.22 & 62.38 & 26.10 & 23.19 & 44.24 \\
-\rowcolor{blue!8}
-Isotropic KDN (ours) $+$ SWA
-  & \textbf{53.98} & \textbf{43.60} & 63.12 & \underline{65.52}
-  & 26.89 & 22.52 & \textbf{45.94} \\
-\rowcolor{blue!8}
-Diagonal KDN (ours) $+$ SWA ($\mu=d_k$, $q_{\min}=10^{-6}$)
-  & 48.08 & \underline{43.50} & \textbf{66.58} & 64.93
-  & 27.72 & 22.52 & \underline{45.55} \\
-\bottomrule
-\end{tabular}
-\caption{Zero-shot accuracy (\%) on real-world retrieval tasks with inputs limited to $2$K tokens.
-SQD denotes SQuAD and TQA denotes TriviaQA; \emph{Avg.} is the unweighted mean across the six
-tasks. Predictions are generated greedily for at most $48$ tokens, stop at a newline, and are
-scored by case-insensitive containment of any reference answer. The final block includes an
-attention-only $2$K-window Transformer and hybrids alternating nine recurrent and nine SWA layers.
-Best per column within each block in \textbf{bold}, second best \underline{underlined}; light-blue
-rows denote our models. The recurrent Diagonal KDN uses $q_{\min}=0$, whereas the hybrid row uses
-$q_{\min}=10^{-6}$; both use fixed information scale $\mu=d_k$, $r_{\min}=0.01$, isotropic
-process-noise initialization, and learned per-head initial precision.}
-\label{tab:real-world-retrieval}
-\end{table}
-
 \paragraph{In-context retrieval.}
-Table~\ref{tab:pretrain-niah} reports RULER single- and multi-key needle-in-a-haystack accuracy
-for recurrent-only and hybrid models across context lengths from 1K to 8K on S-NIAH-1/2 and
-from 1K to 4K on S-NIAH-3/MK-NIAH-1~\citep{hsieh2024ruler}.
-The 8K setting exceeds the 4K training length and tests length extrapolation. We
-correct two issues in the released generator: essay contexts are fitted in
-$25$-word rather than $500$-word increments, and each sample uses a deterministic random window from
-the essay corpus instead of its fixed opening prefix. We also seed all keys, values, and needle depths,
-so every model is evaluated on the same $500$ samples per cell.
-
-At $750$M/$50$B the separation is clear: the Diagonal KDN is best in 11 of 13 nontrivial cells,
-remains perfect on S-NIAH-1 through 8K, and reaches $71.2$ on S-NIAH-2 @ 4K and $71.0$ on
-S-NIAH-3 @ 2K. Mamba-3 (MIMO) leads the remaining two cells, reaching $92.6$ on S-NIAH-2
-@ 2K and $50.2$ on MK-NIAH-1 @ 1K. The
-Diagonal KDN's 14-cell average is $70.3$, versus $62.4$ for the Isotropic KDN, $62.1$ for KDA,
-$60.0$ for Mamba-3 (MIMO), and $52.5$ each (rounded) for GDN-2 and Mamba-3 (SISO).
-This is consistent with an anisotropic gain protecting stored associations under interference.
-
-At $1.3$B/$100$B, the Diagonal KDN has the highest 14-cell aggregate ($76.5$), followed by
-GDN-2 ($71.0$), the Isotropic KDN ($68.7$), KDA ($64.3$), Mamba-3 (SISO) ($63.1$), and
-Mamba-3 (MIMO) ($62.1$). It leads outright on S-NIAH-2 at 4K, all three S-NIAH-3 lengths,
-and all three multi-key lengths, while tying the best score on three S-NIAH-1 cells. GDN-2
-leads S-NIAH-2 at 8K, and Mamba-3 (MIMO) leads S-NIAH-2 at 1K--2K. MIMO's short-context
-wins do not translate to length
-extrapolation: it falls to $15.4$ on both 8K single-key tasks, the lowest scores in those columns.
-KDA again degrades sharply on the easiest S-NIAH-1 probe. The previously observed
-short-context collapse of the previous 1.3B Diagonal KDN disappears under randomized essay windows
-on the same checkpoint (S-NIAH-2 @ 1K: $21.4\to88.0$; S-NIAH-3 @ 1K: $3.6\to82.4$), showing that
-it was an interaction with the fixed opening essay rather than a short-memory failure. The learned-scale
-follow-up reported here reaches $98.6$ and $96.4$ on those cells. These are single checkpoints and one
-window seed, so small differences should be read as directional.
-
-In the final block, the Diagonal KDN has the highest 14-cell mean at $74.39$, ahead of
-Mamba-3 (MIMO; $73.57$) and the Isotropic KDN ($73.49$), followed by KDA ($70.93$), the
-2K-window Transformer ($69.91$), GDN-2 ($67.43$), and Mamba-3 (SISO; $64.73$).
-The Diagonal KDN leads S-NIAH-3 at 2K--4K and
-multi-key recall at 1K--2K, ties the best result on S-NIAH-1 at 1K, S-NIAH-2 at 1K and 4K,
-and S-NIAH-3 at 1K, and ranks second on S-NIAH-1/2 at 8K and multi-key recall at 4K.
-At 8K, GDN-2 and the Isotropic KDN tie at $28.4$ on S-NIAH-1 and $27.6$ on S-NIAH-2;
-the Diagonal KDN reaches $28.0$/$26.0$. The pure Transformer ties the best hybrid results
-through 4K on S-NIAH-1/2, but drops to $22.6$/$19.8$ at 8K.
+Table~\ref{tab:pretrain-niah} shows that Diagonal KDN achieves the highest aggregate among
+recurrent-only models at both scales, with particularly strong S-NIAH-3 and multi-key retrieval.
+This is consistent with channel-wise uncertainty protecting stored associations under interference.
+Diagonal KDN $+$ SWA also leads the hybrid block, narrowly ahead of Mamba-3 (MIMO) $+$ SWA and
+Isotropic KDN $+$ SWA. Because these results use single checkpoints and one randomized-window seed,
+small differences should be viewed as directional.
 
 \begin{table}[t]
 \centering
@@ -1261,18 +1129,72 @@ Diagonal KDN (ours) $+$ SWA
 \end{tabular}%
 }
 \caption{In-context retrieval accuracy (\%) on RULER single- and multi-key needle-in-a-haystack
-tasks~\citep{hsieh2024ruler}. The upper two blocks are recurrent-only; the final block compares an
-18-layer $2$K sliding-window Transformer with hybrids that alternate nine recurrent mixer layers
-and nine $2$K sliding-window-attention layers. S-NIAH-1/2 include
-8K evaluation; S-NIAH-3 and MK-NIAH-1 stop at 4K. Essay contexts use deterministic random corpus
-windows and a 25-word fitting increment; all models receive the same 500 samples per cell. Best per
-column within each block in \textbf{bold}, second best \underline{underlined}; light-blue rows denote
-our KDN variants. The recurrent-only
-$1.3$B Diagonal KDN row uses the targeted learned-scale, learned-initial-precision setting described
-in the text. The hybrid Diagonal KDN row uses the four-node fixed-$\mu=d_k$ follow-up with
-$q_{\min}=10^{-6}$ and $r_{\min}=0.01$; Table~\ref{tab:pretrain-lm} retains the earlier
-$q_{\min}=0$ hybrid checkpoint.}
+tasks~\citep{hsieh2024ruler}. Best per column within each block in \textbf{bold}, second best
+\underline{underlined}.}
 \label{tab:pretrain-niah}
+\end{table}
+
+\paragraph{Real-world retrieval.}
+Table~\ref{tab:real-world-retrieval} reports the six-task real-world retrieval comparison at
+$1.3$B parameters. Among recurrent-only models, the Diagonal KDN achieves the best average
+and leads FDA, TriviaQA, and DROP. In the hybrid block, the Isotropic KDN $+$ SWA has the best
+average, while the Diagonal KDN $+$ SWA ranks second and leads FDA.
+
+\begin{table}[t]
+\centering
+\small
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{@{}l cccccc >{\columncolor{gray!10}}c@{}}
+\toprule
+Model & SWDE & SQuAD & FDA & TriviaQA & NQ & DROP & Avg. \\
+\midrule
+\multicolumn{8}{@{}l}{\emph{Recurrent 1.3B / 100B}}\\
+Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3}
+  & 26.34 & 36.35 & 22.52 & 60.90 & 21.98 & 20.89 & 31.50 \\
+Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3}
+  & 24.93 & 36.71 & 25.25 & 61.02 & 23.50 & 21.99 & 32.23 \\
+KDA~\citeyearpar{kimiteam2025kimilinear}
+  & 28.77 & \textbf{38.70} & \underline{27.97} & 61.97
+  & \textbf{24.11} & 21.03 & \underline{33.76} \\
+GDN-2~\citeyearpar{hatamizadeh2026gdn2}
+  & 29.90 & 35.64 & 21.16 & 61.49 & 23.34 & 20.99 & 32.09 \\
+\rowcolor{blue!8}
+Isotropic KDN (ours)
+  & \textbf{33.08} & 36.71 & 22.98 & \underline{62.09}
+  & 22.14 & \underline{23.38} & 33.40 \\
+\rowcolor{blue!8}
+Diagonal KDN (ours)
+  & \underline{30.18} & \underline{38.09} & \textbf{30.61}
+  & \textbf{62.56} & \underline{23.63} & \textbf{24.10}
+  & \textbf{34.86} \\
+\midrule
+\multicolumn{8}{@{}l}{\emph{Hybrid 1.3B / 100B}}\\
+Transformer~\citeyearpar{vaswani2017attention} (2K SWA)
+  & 36.08 & 42.43 & 52.68 & 62.09 & 25.40 & 21.47 & 40.02 \\
+Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
+  & 36.27 & 43.37 & 58.95 & 64.57 & 26.70 & 22.47 & 42.06 \\
+Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
+  & 42.55 & 43.33 & \underline{64.85} & \textbf{65.88}
+  & \textbf{28.44} & \underline{23.53} & 44.76 \\
+KDA~\citeyearpar{kimiteam2025kimilinear} $+$ SWA
+  & \underline{51.08} & 43.10 & 57.86 & 65.17
+  & \underline{28.22} & \textbf{25.11} & 45.09 \\
+GDN-2~\citeyearpar{hatamizadeh2026gdn2} $+$ SWA
+  & 47.80 & 42.73 & 63.22 & 62.38 & 26.10 & 23.19 & 44.24 \\
+\rowcolor{blue!8}
+Isotropic KDN (ours) $+$ SWA
+  & \textbf{53.98} & \textbf{43.60} & 63.12 & \underline{65.52}
+  & 26.89 & 22.52 & \textbf{45.94} \\
+\rowcolor{blue!8}
+Diagonal KDN (ours) $+$ SWA
+  & 48.08 & \underline{43.50} & \textbf{66.58} & 64.93
+  & 27.72 & 22.52 & \underline{45.55} \\
+\bottomrule
+\end{tabular}
+\caption{Zero-shot accuracy (\%) on real-world retrieval tasks with inputs limited to $2$K tokens.
+\emph{Avg.} is the unweighted six-task mean. Best per column within each block in \textbf{bold},
+second best \underline{underlined}.}
+\label{tab:real-world-retrieval}
 \end{table}
 
 \FloatBarrier

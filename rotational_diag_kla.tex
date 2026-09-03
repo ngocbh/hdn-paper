@@ -8,7 +8,7 @@
 \title{Rotational Diagonal Kalman Linear Attention:\\
 Model, Lessons from Mamba-2/Mamba-3, and Production Implementation}
 \author{}
-\date{August 29, 2026}
+\date{September 3, 2026}
 
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\ve}[1]{\boldsymbol{#1}}
@@ -39,12 +39,14 @@ retaining KLA's diagonal Kalman covariance and innovation write.  It pair-ties r
 and process-noise parameters, uses a detached live radial statistic to set a bounded token/head
 clock, scans phase in a documented negative gauge, and isolates the phase VJP from radial dynamics.
 This note defines the model, the precise finite-precision implementation contract, and the tests
-used for promotion.  The finalized kernel/layer implementation is commit
+used for promotion.  The sealed E2 baseline implementation is commit
 \texttt{c3346feaecae1486cdbc71f82b4edeacc4198950}; its immutable production snapshot passed the
 complete one-H200 correctness and performance gate (117 core RDiag tests plus 54 E2 tests).
 Distributed training-system checks and the multi-node soak/attestation remain before the planned
 750M DiagKLA production submission.  The one-H200 result concerns implementation correctness and
 measured kernel/layer performance, not the eventual language-model quality of a long training run.
+A newer shared-DT investigation, including its unresolved production-qualification status, is
+reported in Section~\ref{sec:shared-dt-status}.
 \end{abstract}
 
 \section{Scope and notation}
@@ -745,17 +747,164 @@ promotion limit.
 
 Thus the optimized E2 implementation is bitwise faithful where exact parity is required, faster
 than the sealed accepted implementation in all three measured geometries, and within roughly
-1--1.4\% of the simpler legacy clock.  This closes the one-H200 kernel/layer gate, but not the full
-production-submission gate.  Final train-smoke, distributed checkpoint/resume, and multi-node
-soak/attestation checks remain; after they pass, the 750M DiagKLA recipe can be submitted, trained
-to natural completion, and evaluated on the full standard-plus-NIAH suite.
+1--1.4\% of the simpler legacy clock.  This closes the E2 one-H200 kernel/layer gate, but not a full
+production-submission gate.  Train-smoke, distributed checkpoint/resume, and multi-node
+soak/attestation remained for that baseline at the time of sealing.  The next section records the
+later shared-DT candidate and its separate, still-open qualification.
+
+\section{Shared-DT engineering status as of September 3, 2026}
+\label{sec:shared-dt-status}
+
+This section records a newer production candidate and does not revise the closed E2 result above.
+The candidate starts from commit
+\texttt{6472a0711eb61177c3ef91845855fffa82202290} and replaces E2's detached bounded clock with a
+shared-DT transition.  Its qualification is \emph{not complete}: four gates passed in the first
+campaign, the gradient gate exposed both a defective acceptance rule and real rotational-gradient
+amplification, the soak was cancelled before allocation, and no aggregate authorization was built.
+
+\subsection{Relation to Mamba-2 and Mamba-3}
+
+The source-level comparison in Sections~\ref{sec:mamba2} and~\ref{sec:mamba3} found no discrepant
+transition equation or kernel sign bug in the shared-DT path.  Its radial factor is the Mamba-2
+form
+\begin{equation}
+  \alpha_{th}=\exp\!\left[-\exp(A_{\log,h})DT_{th}\right],
+\end{equation}
+and its bias-free pair-angle projection follows the installed Mamba-3 construction,
+\begin{equation}
+  \delta_{thj}=\pi\tanh(e_{tj})DT_{th},
+  \qquad
+  \phi_{thj}=\sum_{s\leq t}\delta_{shj},
+  \label{eq:shared-dt-phase}
+\end{equation}
+with one angle value per token/pair broadcast over heads, a headwise $DT$, a cumulative phase scan,
+and the corresponding reverse-suffix backward.  The apparent phase-sign difference is only the
+gauge $W_{\rm angle}\mapsto-W_{\rm angle}$ and therefore cannot explain a gradient-norm change.
+The relevant difference from the E2 model is instead that the angle and $DT$ paths remain live and
+the same shared $DT$ controls radial decay and rotation.
+
+\subsection{Issue, diagnosis, and completed work}
+
+\paragraph{Two distinct problems were found.}
+First, the original per-microbatch global-gradient limit of 10 was not a valid gate: all 24 measured
+model/batch observations exceeded 10, including stock DiagKLA at 14.001--14.232.  Stock DiagKLA and
+the bounded-clock layer were also architecture-mismatched controls.  Second, the shared angle
+projection creates genuine coherent amplification when its output is broadcast over all recurrent
+heads and differentiated through the cumulative rotation.  This is a model-parameterization issue,
+not evidence of a faulty radial or phase kernel.
+
+On the same eight real FineWeb batches, the unmodified shared-DT model produced global norms
+34.596--45.300 (median 38.758), versus a DiagKLA median of 14.096.  Disabling rotation returned the
+median to 14.180, while detaching only the angle path gave 18.035 and zero angle initialization
+still gave 25.593.  A phase-only $DT$ cap of 0.1 was insufficient.  Scaling the effective angle
+preactivation by $1/\sqrt{16}=0.25$ gave median 16.765 and shared/Diag median and 95th-percentile
+nearest-rank ratios 1.191 and 1.261, with live angle and $DT$ gradients.  These interventions isolate
+head-shared cumulative rotation as the amplification source.
+
+\paragraph{Completed engineering work.}
+The Mamba-2/Mamba-3 source audit, exact H200 measurement, rotation/gradient ablations, matched-
+backbone control, and scale/cap sweep are complete.  The replacement design and implementation
+plan received an independent review with no remaining Important findings.  In campaign
+\texttt{9870d362bcbb4ec3b9b3cafb13459ef8}, production-H200 (job 1824028), train-smoke (1824365),
+checkpoint-fault (1824367), and authenticated-resume (1824368) produced recursively valid seals
+with SHA-256 prefixes \texttt{ecc03259}, \texttt{9ca6354e}, \texttt{06c1f60a}, and
+\texttt{656c9412}, respectively.  Gradient job 1824370 failed the invalid absolute-10 rule and
+produced no seal; the soak was cancelled before allocation.  These seals characterize the
+unmodified base commit only and do not qualify the proposed head-scaled change.
+
+\paragraph{Diagnostic evidence.}
+The primary metric artifacts are
+\begin{itemize}[leftmargin=1.8em]
+  \item \pathcode{diagnostic_runs/gradient_norm_6472a071_20260902T170943Z/metrics.json},
+        SHA-256 \texttt{9c6a8a96a297799a};
+  \item \pathcode{diagnostic_runs/gradient_rotation_ablation_6472a071_20260902T183817Z/metrics.json},
+        SHA-256 \texttt{274abd1902e7c7d3};
+  \item \pathcode{diagnostic_runs/gradient_matched_control_6472a071_20260902T185000Z/metrics.json},
+        SHA-256 \texttt{d908637092fdfc3e}; and
+  \item \pathcode{diagnostic_runs/gradient_angle_scale_6472a071_20260902T185100Z/metrics.json},
+        SHA-256 \texttt{e503ab386a9de79d}.
+\end{itemize}
+All are rooted at
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1}.
+
+\subsection{Approved implementation and remaining qualification}
+
+\paragraph{Chosen change.}
+For $H$ recurrent heads, the layer will derive the nonpersistent scalar $H^{-1/2}$ and form
+\begin{equation}
+  e^{\rm eff}_{tj}=H^{-1/2}(W_{\rm angle}x_t)_j,
+  \qquad
+  \delta_{thj}=\pi\tanh(e^{\rm eff}_{tj})DT_{th}.
+  \label{eq:shared-dt-headscale}
+\end{equation}
+The projection remains bias-free and its stored weight is unchanged.  In the BF16 production path,
+the layer performs the multiply on the BF16 projection output before the frontend's FP32 cast and
+FP32 \texttt{tanh}; the frontend must not scale a second time.  The scale is neither a parameter nor
+a buffer, so old state dictionaries remain strictly loadable.  This preserves the transition
+family and both learning paths while normalizing the initial head-summed VJP.
+
+The replacement gradient gate is an exact same-model/same-state two-arm intervention.  The
+\texttt{shared\_dt} arm runs normally; \texttt{shared\_dt\_no\_rotation} replaces only each angle-
+projection output by the connected zero \texttt{output * 0.0}.  Config, full state, parameter
+inventory, and radial shared-DT path must be identical.  Acceptance requires shared/no-rotation
+nearest-rank median $\leq1.25$ and 95th percentile $\leq1.50$, both inclusive.  The microbatch
+runaway sentinel becomes an inclusive 100; the late-training soak limit of 10 is unchanged.  Only
+the gradient sample/result/recipe/seal closure advances to schema v3.  Aggregate-v3 retains its
+schema name but must recursively require the v3 gradient seal.
+
+\paragraph{Active checkout and plans.}
+Implementation is isolated from the main checkout in this worktree:
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/source_worktrees/rdiag_shared_dt_headscale_20260902}.
+\end{quote}
+The observed checkout is branch
+\pathcode{codex/rdiag-shared-dt-angle-headscale-20260902}, based on the commit above.  The reviewed
+documents are
+\begin{itemize}[leftmargin=1.8em]
+  \item \pathcode{docs/plans/2026-09-02-rdiag-shared-dt-angle-headscale-design.md}; and
+  \item \pathcode{docs/plans/2026-09-02-rdiag-shared-dt-angle-headscale-plan.md}.
+\end{itemize}
+The primary implementation and qualification paths are
+\begin{itemize}[leftmargin=1.8em]
+  \item \pathcode{lit_gpt/rdiag_shared_dt_kla.py};
+  \item \pathcode{lit_gpt/kla_ops/rdiag_shared_dt.py} and
+        \pathcode{lit_gpt/kla_ops/rdiag_bounded_phase.py};
+  \item \pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_production_host.py} and
+        \pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_production_h200_v1.py};
+  \item \pathcode{scripts/tests/rdiag/rdiag_shared_dt_gradient_ab.py} and
+        \pathcode{scripts/tests/rdiag/rdiag_shared_dt_gradient_ab_run.py}; and
+  \item \pathcode{scripts/train/rdiag_kla/rdiag_recipe.py},
+        \pathcode{scripts/tests/rdiag/attest_rdiag_shared_dt_gate.py}, and
+        \pathcode{scripts/train/rdiag_kla/rdiag_shared_dt_qualification.py}.
+\end{itemize}
+
+\paragraph{Remaining work.}
+The head scale and repaired gradient closure are designed but not yet implemented or qualified.
+The remaining sequence is:
+\begin{enumerate}[leftmargin=1.8em]
+  \item add failing host contracts, then implement the exactly-once layer-side scale and unchanged
+        state-schema behavior;
+  \item prove production-layer forward and all VJPs against the literal oracle at H=16, T=4096,
+        BF16 and at H=18, while preserving radial outputs and live angle/$DT$/hidden gradients;
+  \item implement the same-state rotation-off runner, v3 gradient schemas, policy boundaries,
+        readers, catalog digests, stale-schema rejection, and recursive aggregate-v3 validation;
+  \item pass focused and broad host/static gates, freeze a clean exact commit, and obtain separate
+        exact-SHA specification/math and code-quality reviews;
+  \item push that reviewed commit, materialize a fresh immutable snapshot, and rerun all six gates:
+        production-H200, train-smoke, checkpoint-fault, authenticated-resume, the real eight-batch
+        gradient gate, and production soak; and
+  \item build aggregate-v3 only after all six seals validate, then submit the 750M run with the full
+        standard-plus-all-configured-NIAH post-training evaluation tail.
+\end{enumerate}
+Until that sequence closes, neither a production authorization nor a replacement training result
+is claimed.
 
 \appendix
 \section{Reproducibility audit}
 \label{app:sources}
 
 \paragraph{RDiag implementation baseline.}
-The production implementation statements in this note were audited against branch
+The sealed E2 baseline implementation statements in this note were audited against branch
 \texttt{rdiag} at Git commit
 \texttt{c3346feaecae1486cdbc71f82b4edeacc4198950} (tree
 \texttt{88e423d2926d8ae81945c08393a59861d285907c}).  This pin identifies the sealed implementation
