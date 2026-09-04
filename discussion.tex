@@ -3147,6 +3147,149 @@ decision-oriented criterion, but it is not the ELBO of one coherent Gaussian obs
 If $r_t$ is learned, the $\log r_t$ normalizer must be retained; otherwise increasing $r_t$ can
 reduce both quadratic terms without paying the corresponding likelihood cost.
 
+\subsection{A VAE-style auxiliary loss on the latent memory}
+
+The preceding identity also suggests an explicit variational auxiliary loss on the complete
+memory state. Under the columnwise model, define the post-write approximation and pre-write prior
+over the latent memory matrix by
+\begin{equation}
+  q_t(\vct{S}^{\star})
+  =\prod_{j=1}^{d_v}
+    \mathcal{N}(\vct{s}^{\star}_{:,j};\vct{s}_{t,j},\vct{P}_t),
+  \qquad
+  \widehat\pi_t(\vct{S}^{\star})
+  =\prod_{j=1}^{d_v}
+    \mathcal{N}(\vct{s}^{\star}_{:,j};
+      \widehat{\vct{s}}_{t,j},\widehat{\vct{P}}_t).
+  \label{eq:discussion-memory-variational-family}
+\end{equation}
+Here $\vct{S}_t$ is the post-write posterior mean represented by the recurrent memory, whereas
+$\widehat{\vct{S}}_t$ is its exclusive pre-write prediction. With
+\begin{equation}
+  p(\vct{v}_t\mid\vct{S}^{\star},\vct{k}_t)
+  =\mathcal{N}\!\left(
+    \vct{v}_t;(\vct{S}^{\star})^\top\vct{k}_t,
+    r_t\vct{I}_{d_v}
+  \right),
+  \label{eq:discussion-memory-observation-model}
+\end{equation}
+the VAE-style memory loss is the negative one-step ELBO
+\begin{equation}
+  \mathcal{J}_{\mathrm{mem},t}
+  =\underbrace{
+    \mathbb{E}_{q_t}\!\left[
+      -\log p(\vct{v}_t\mid\vct{S}^{\star},\vct{k}_t)
+    \right]
+  }_{\text{memory reconstruction}}
+  +\underbrace{
+    \operatorname{KL}\!\left(q_t\,\|\,\widehat\pi_t\right)
+  }_{\text{regularization to the pre-write memory}}.
+  \label{eq:discussion-memory-vae-loss}
+\end{equation}
+No stochastic memory sample is required. Because both distributions and the observation model are
+Gaussian, the two terms are available in closed form. The reconstruction term is
+\begin{equation}
+  \mathbb{E}_{q_t}\!\left[
+    -\log p(\vct{v}_t\mid\vct{S}^{\star},\vct{k}_t)
+  \right]
+  =\frac{1}{2r_t}\left[
+    \left\|\vct{v}_t-\vct{S}_t^\top\vct{k}_t\right\|_2^2
+    +d_v\vct{k}_t^\top\vct{P}_t\vct{k}_t
+  \right]
+  +\frac{d_v}{2}\log(2\pi r_t),
+  \label{eq:discussion-memory-reconstruction-closed-form}
+\end{equation}
+and the KL term is
+\begin{equation}
+\begin{aligned}
+  \operatorname{KL}(q_t\,\|\,\widehat\pi_t)
+  =\frac12\Bigg\{
+  &\operatorname{tr}\!\left[
+    \widehat{\vct{P}}_t^{-1}
+    (\vct{S}_t-\widehat{\vct{S}}_t)
+    (\vct{S}_t-\widehat{\vct{S}}_t)^\top
+  \right] \\
+  &+d_v\left[
+    \operatorname{tr}(\widehat{\vct{P}}_t^{-1}\vct{P}_t)
+    -d_k
+    +\log\frac{\det\widehat{\vct{P}}_t}{\det\vct{P}_t}
+  \right]
+  \Bigg\}.
+\end{aligned}
+  \label{eq:discussion-memory-kl-closed-form}
+\end{equation}
+For diagonal or isotropic covariances, the traces and log determinants reduce to elementwise sums,
+so this loss has no sampling estimator and does not require materializing a dense covariance.
+The mean-dependent terms also simplify under the rank-one KDN write. With
+$\vct{\delta}_t=\vct{v}_t-\widehat{\vct{S}}_t^\top\vct{k}_t$ and
+$\vct{S}_t-\widehat{\vct{S}}_t=\vct{\kappa}_t\vct{\delta}_t^\top$,
+\begin{equation}
+\begin{aligned}
+  \left\|\vct{v}_t-\vct{S}_t^\top\vct{k}_t\right\|_2^2
+  &=\left(1-\vct{k}_t^\top\vct{\kappa}_t\right)^2
+    \|\vct{\delta}_t\|_2^2, \\
+  \operatorname{tr}\!\left[
+    \widehat{\vct{P}}_t^{-1}
+    (\vct{S}_t-\widehat{\vct{S}}_t)
+    (\vct{S}_t-\widehat{\vct{S}}_t)^\top
+  \right]
+  &=\|\vct{\delta}_t\|_2^2
+    \vct{\kappa}_t^\top
+    \widehat{\vct{P}}_t^{-1}\vct{\kappa}_t.
+\end{aligned}
+  \label{eq:discussion-memory-rank-one-loss}
+\end{equation}
+Diagonal and Isotropic KDN can therefore evaluate the auxiliary using their existing states and
+token-local reductions.
+
+The two terms have the same roles as in a VAE. The reconstruction term makes the post-write memory
+explain the current value and penalizes posterior uncertainty along the observed key. The KL term
+limits how far the posterior mean and covariance can move from their pre-write predictions.
+Because the posterior is allowed to depend on the current value, the reconstruction term alone can
+reward copying that value into memory; the KL term is what turns the complete objective into a
+valid variational bound.
+
+Summing Equation~\eqref{eq:discussion-predictive-nll-variational-identity} over value coordinates
+gives
+\begin{equation}
+  \mathcal{J}_{\mathrm{mem},t}
+  =\mathcal{L}_{\mathrm{pred},t}
+  +\sum_{j=1}^{d_v}
+    \operatorname{KL}\!\left(
+      q_{t,j}\,\|\,
+      p(\vct{s}_{t,j}^{\star}\mid
+        v_{t,j},\mathcal{F}_{t-1},\vct{k}_t)
+    \right).
+  \label{eq:discussion-memory-elbo-identity}
+\end{equation}
+Thus this is not an independent copy of the predictive calibration loss. It reduces to the
+predictive NLL when the retained posterior is exact; for Diagonal or Isotropic KDN it additionally
+penalizes the full posterior-approximation gap. Under the ordinary ELBO projection, this gap is
+the reverse-KL error imposed by the restricted covariance family. Under a split
+$(s_{\mathrm{write}},s_{\mathrm{protect}})$ update with $s_{\mathrm{protect}}\ne
+s_{\mathrm{write}}$, it also penalizes the deliberate deviation from the ordinary Gaussian
+posterior and may therefore weaken the intended protection against future overwrites. The
+predictive NLL is the more direct choice when the goal is only to calibrate the pre-write
+innovation variance, whereas $\mathcal{J}_{\mathrm{mem},t}$ is appropriate when the goal also
+includes regularizing the post-write memory approximation toward the coherent Gaussian posterior.
+
+A dimension-normalized auxiliary objective can be added to language-model training as
+\begin{equation}
+  \mathcal{L}
+  =\mathcal{L}_{\mathrm{LM}}
+  +\lambda_{\mathrm{mem}}
+    \mathbb{E}_{t,h}\!\left[
+      \frac{1}{d_v}\mathcal{J}_{\mathrm{mem},t,h}
+    \right].
+  \label{eq:discussion-lm-plus-memory-elbo}
+\end{equation}
+This term should initially be tested with a small $\lambda_{\mathrm{mem}}$, a fixed covariance
+gauge, and all Gaussian normalizers retained. Full gradients can also change the scale and geometry
+of the learned keys and values rather than only calibrating uncertainty, so they should be compared
+with a route that treats the innovation and key geometry as fixed targets. Because
+$\mathcal{J}_{\mathrm{mem},t}$ already contains $\mathcal{L}_{\mathrm{pred},t}$, the two auxiliary
+losses should normally be evaluated separately rather than summed without explicit reweighting.
+
 \subsection{Calibration diagnostics and optimization caveat}
 
 Under a correctly specified predictive model, the normalized innovation squared
@@ -3190,6 +3333,186 @@ also by language-modeling loss, write strength, covariance quantiles, and downst
 lower internal NLL is evidence that the noise heads predict their own innovation statistics more
 consistently; it is not by itself evidence of a better language model or a more faithful full
 covariance approximation.
+
+\section{Causal Associative Replay as a Direct Overwrite Objective}
+\label{sec:discussion-associative-replay}
+
+The predictive NLL evaluates whether pre-write uncertainty matches the current innovation, and the
+memory ELBO additionally evaluates the quality of the post-write posterior approximation. Neither
+objective directly states that an association written in the past should remain recoverable after
+intervening writes. A causal replay objective can provide this missing behavioral signal: at time
+$t$, sample an earlier token $\tau<t$, query the current memory with its key $\vct{k}_\tau$, and
+compare the result with a detached target from time $\tau$.
+
+\subsection{Raw replay mixes writing and retention}
+
+The most direct construction uses the old value itself,
+\begin{equation}
+  \widetilde{\vct{v}}_{\tau\mid t}
+  =\vct{S}_t^\top\vct{k}_\tau,
+  \qquad
+  \mathcal{L}_{\mathrm{raw-replay}}
+  =\mathbb{E}_{t,\tau\sim\mathcal{Q}_t}\!\left[
+    \frac{1}{d_v}
+    \left\|
+      \widetilde{\vct{v}}_{\tau\mid t}
+      -\operatorname{sg}(\vct{v}_\tau)
+    \right\|_2^2
+  \right],
+  \label{eq:discussion-raw-replay-loss}
+\end{equation}
+where $\mathcal{Q}_t$ is a causal distribution over past indices and
+$\operatorname{sg}(\cdot)$ denotes stop-gradient. This objective is causal and adds no inference
+cost, but it conflates three effects: whether the association was written accurately at $\tau$,
+whether the transition intentionally decayed it, and whether later writes interfered with it.
+
+To see the first issue, define the post-write read and effective gain at the original token by
+\begin{equation}
+  \vct{y}_\tau^+
+  =\vct{S}_\tau^\top\vct{k}_\tau,
+  \qquad
+  g_\tau=\vct{k}_\tau^\top\vct{\kappa}_\tau.
+  \label{eq:discussion-replay-post-write-target}
+\end{equation}
+The KDN update gives
+\begin{equation}
+  \vct{y}_\tau^+
+  =\widehat{\vct{S}}_\tau^\top\vct{k}_\tau
+   +g_\tau\vct{\delta}_\tau,
+  \qquad
+  \vct{v}_\tau-\vct{y}_\tau^+
+  =(1-g_\tau)\vct{\delta}_\tau.
+  \label{eq:discussion-replay-immediate-residual}
+\end{equation}
+Consequently, raw replay pressure can increase $g_\tau$ toward one in order to make the initial
+write reproduce $\vct{v}_\tau$ more exactly. This may strengthen the very current-token overwrite
+that the experiment is intended to diagnose. It also asks a finite-capacity memory to preserve
+every sampled internal value, including associations that the language-modeling objective may
+prefer to forget.
+
+\subsection{Post-write retention consistency}
+
+A cleaner overwrite target preserves what was actually stored rather than requiring perfect
+initial reconstruction. Define
+\begin{equation}
+  \mathcal{L}_{\mathrm{retain}}
+  =\mathbb{E}_{t,\tau\sim\mathcal{Q}_t}\!\left[
+    w_{t,\tau}
+    \frac{
+      \left\|
+        \vct{S}_t^\top\operatorname{sg}(\vct{k}_\tau)
+        -\operatorname{sg}(\vct{y}_\tau^+)
+      \right\|_2^2
+    }{
+      \|\operatorname{sg}(\vct{y}_\tau^+)\|_2^2+\epsilon
+    }
+  \right].
+  \label{eq:discussion-retention-consistency-loss}
+\end{equation}
+This loss does not change the target when the model later changes its key or value representation,
+and the normalization prevents the scale of the internal value space from dominating the loss.
+The weight $w_{t,\tau}$ may prioritize associations that were actually written, for example using
+a detached function of $g_\tau$ or of the original write magnitude. Compared with
+Equation~\eqref{eq:discussion-raw-replay-loss}, this construction separates initial write quality
+from subsequent retention. It can still oppose intentional transition decay, because its target is
+the undiminished post-write read.
+
+If the goal is to isolate interference from later writes while preserving the model's chosen
+decay, define the transition product
+\begin{equation}
+  \vct{\Phi}_{t\leftarrow\tau}
+  =\vct{D}_t\vct{D}_{t-1}\cdots\vct{D}_{\tau+1}
+  \label{eq:discussion-replay-transition-product}
+\end{equation}
+and the decay-only counterfactual
+\begin{equation}
+  \vct{y}^{\mathrm{decay}}_{\tau\to t}
+  =\left(
+    \vct{\Phi}_{t\leftarrow\tau}\vct{S}_\tau
+  \right)^\top\vct{k}_\tau.
+  \label{eq:discussion-replay-decay-only-target}
+\end{equation}
+Replacing $\vct{y}_\tau^+$ in
+Equation~\eqref{eq:discussion-retention-consistency-loss} with a stopped-gradient copy of
+$\vct{y}^{\mathrm{decay}}_{\tau\to t}$ penalizes only the deviation caused by intervening writes.
+This is the most specific test of overwrite, but it requires retaining or recomputing the anchor
+state and its decay-only trajectory. The simpler post-write target requires storing only
+$(\vct{k}_\tau,\vct{y}_\tau^+)$ and is therefore a cheaper first experiment.
+
+\subsection{A local interference surrogate}
+
+An even cheaper objective measures the disturbance produced by the current write at a sampled
+past address. Since
+\begin{equation}
+  \vct{S}_t-\widehat{\vct{S}}_t
+  =\vct{\kappa}_t\vct{\delta}_t^\top,
+\end{equation}
+the instantaneous change in the read at $\vct{k}_\tau$ is exactly
+\begin{equation}
+  (\vct{S}_t-\widehat{\vct{S}}_t)^\top\vct{k}_\tau
+  =\vct{\delta}_t
+    (\vct{\kappa}_t^\top\vct{k}_\tau).
+  \label{eq:discussion-instantaneous-interference}
+\end{equation}
+This yields the sampled penalty
+\begin{equation}
+  \mathcal{L}_{\mathrm{interfere}}
+  =\mathbb{E}_{t,\tau\sim\mathcal{Q}_t}\!\left[
+    w_{t,\tau}
+    \frac{
+      (\vct{k}_\tau^\top\vct{\kappa}_t)^2
+      \|\vct{\delta}_t\|_2^2
+    }{
+      \|\operatorname{sg}(\vct{y}_\tau^+)\|_2^2+\epsilon
+    }
+  \right].
+  \label{eq:discussion-instantaneous-interference-loss}
+\end{equation}
+Only the past key and a normalization statistic need to be cached. This surrogate directly
+penalizes overlap between the current write direction and past addresses, but it treats every
+change as harmful. Repeated keys can legitimately revise an old association, so the sampling or
+weighting rule must identify associations intended to persist.
+
+\subsection{Sampling, optimization, and relation to calibration}
+
+Evaluating all pairs $(\tau,t)$ would be quadratic. A practical implementation can retain a small
+number of detached anchors per chunk and evaluate them at later chunk boundaries, turning the
+additional reads into a small batched matrix multiplication. A log-uniform lag distribution covers
+both local and long-range retention. Mixing these samples with hard candidates selected from a
+small pool by key similarity concentrates supervision on pairs most likely to interfere without
+forming the full pairwise similarity matrix.
+
+The recommended first experiment is the post-write consistency loss in
+Equation~\eqref{eq:discussion-retention-consistency-loss}, with one or a few anchors per chunk,
+detached keys and targets, a small loss weight, and explicit reporting by recall distance. The raw
+value loss should be kept as an ablation because it combines stronger initial writing with
+retention. The local interference loss is useful as a low-cost diagnostic or regularizer, but it
+does not measure accumulated corruption from several individually small writes. To isolate changes
+after $\tau$, the auxiliary gradient should also be truncated at the anchor state; otherwise the
+loss is an end-to-end retention objective that may change how the original association is stored.
+Likewise, an uncertainty-only version of
+Equation~\eqref{eq:discussion-instantaneous-interference-loss} should detach
+$\vct{\delta}_t$ and both keys, routing gradients only through $\vct{\kappa}_t$, so that the model
+cannot reduce the penalty merely by shrinking values or rotating the key representation.
+
+With a fixed information scale of one, replay supplies a decision-oriented retention signal that
+the coherent Gaussian ELBO does not contain. It does not calibrate $\vct{P}_t$; instead, it states
+which past associations should remain useful. The two goals can be combined as
+\begin{equation}
+  \mathcal{L}
+  =\mathcal{L}_{\mathrm{LM}}
+  +\lambda_{\mathrm{pred}}\mathcal{L}_{\mathrm{pred}}
+  +\lambda_{\mathrm{retain}}\mathcal{L}_{\mathrm{retain}},
+  \label{eq:discussion-lm-calibration-retention-loss}
+\end{equation}
+but the losses should first be ablated separately. Predictive NLL rewards uncertainty that matches
+one-step errors, whereas replay rewards memory that survives interference. If a diagonal model
+cannot improve both simultaneously, that conflict is evidence that one covariance state is being
+asked to serve incompatible calibration and protection roles. In that case, separating a
+calibrated covariance from a protection state is more principled than forcing either loss to absorb
+the mismatch. A clean factorial experiment should compare unit and $d_k$-scaled protection with
+replay disabled and enabled, reporting predictive NLL or NIS, replay error by lag, effective-write
+strength, language-modeling loss, and downstream recall.
 
 \section{Conclusion}
 

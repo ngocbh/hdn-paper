@@ -2798,7 +2798,10 @@ Scheduler stdout contains exactly one completion marker; its SHA-256 is
 \end{quote}
 Scheduler stderr is empty.  Fresh-node independent validator job \pathcode{1840069}, submitted from
 retained runner SHA-256
-\pathcode{9e602deac9319a7e12d1d71fbcba75bd6d52da5cdbfcfafd77d34661ff3e7c84}, ran on
+\begin{quote}
+{\ttfamily\scriptsize 9e602deac9319a7e12d1d71fbcba75bd6d52da5cdbfcfafd77d34661ff3e7c84},
+\end{quote}
+ran on
 \pathcode{h200-021-171} from 18:30:14 through 18:39:40 UTC and completed \pathcode{0:0}.  It
 reconstructed both invocation-bound source paths, validated all 4,257 matched-source and 4,253
 trigger-source files before and after use, independently returned \pathcode{VALID}, rederived the
@@ -2842,19 +2845,30 @@ It selects the checkpoint-compatible, rotation-preserving effective angle scale
 $0.5H^{-1/2}=0.125$ at $H=16$, while retaining direct $H^{-1/2}=0.25$ and
 connected-zero controls.  It does not alter \pathcode{shared_dt_v1}.  The executable plan is
 \begin{quote}
-\pathcode{docs/plans/2026-09-04-rdiag-shared-dt-late-angle-scale-implementation-plan-final.md}.
+\pathcode{docs/plans/}\\
+\pathcode{2026-09-04-rdiag-shared-dt-late-angle-scale-implementation-plan-final.md}.
 \end{quote}
-It is published at commit
-\pathcode{f5c7f558108fb5c5b8ccc21febc98022624f8384} (tree
-\pathcode{80b3444c7e94957370243c33cfd21ddf3d159674}) with file SHA-256
-\pathcode{ebe18b35516e12f3e998fe6908b126f361967c9adbafd9edb6f8d2ee7cad71b7}.
+It is published with commit, tree, and file SHA-256 respectively
+\begin{quote}
+{\ttfamily\scriptsize 17d86199a0eccf91a4ad8c4e0a256d063efc1d85},\\
+{\ttfamily\scriptsize 65bd0d9d3c3f3d24b9eb51e4fd42ad327c60e942},\\
+{\ttfamily\scriptsize 8497caef38ea1fc4811b629704ac97604e3daea8da46830a2865329365ce20e5}.
+\end{quote}
 Two formal adversarial plan-review rounds found and drove fixes for exact H=16 oracle coverage, a
 distinct candidate-above-10 terminal, real-anchor FSDP preflight, complete later-boundary liveness,
 fail-closed outcome mapping, immutable H200 provenance, prospective scheduler-step counts, and four
 final CLI/snapshot/validator interfaces.  The final plan contains those last repairs and requires
 their named red/green tests during implementation; the second formal review predated those repairs
-and therefore remained \pathcode{NEEDS_REVISION}.  Implementation has begun, but no candidate code,
-preflight, or result-bearing job has yet been accepted from this worktree.
+and therefore remained \pathcode{NEEDS_REVISION}.  Implementation seed commit
+\pathcode{68932d5aed62f717b91f8a5c46b38679b70805bb} added only the seven preregistered helper, host,
+H200, preflight, runner, and validator paths.  The reversible H=16 angle-scale override was then
+implemented and hardened through commits \pathcode{a14168a...}, \pathcode{5253faf...}, and
+\pathcode{11e7d37...}.  Fresh specification and quality reviews accepted that slice after it made
+rollback best-effort and fail-closed, detected mid-arm scale drift, validated exact per-rank
+topology evidence, and preserved RNG and state-dict identity.  Its focused host contract passes 33
+tests; the complete new host file passes 135 tests while nine deliberately red assertions remain
+for later implementation slices.  The matched-prerequisite closure is the current in-progress
+slice.  No numerical or result-bearing GPU job has yet been accepted from this worktree.
 
 The completed prerequisites and diagnostics are the forward localization in job \pathcode{1836996}, the reviewed
 shared-DT-only warp-8 RMSNorm-forward control, its passing bounded smoke in job
