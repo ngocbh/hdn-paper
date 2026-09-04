@@ -11,6 +11,7 @@
 \runningtitle{Kalman Delta Networks}
 
 \usepackage{fontawesome5}
+\usepackage{colortbl}
 
 \definecolor{yaleblue}{RGB}{0,58,112}
 \newcommand{\yale}{%
@@ -18,6 +19,8 @@
     {\usefont{T1}{pbk}{m}{n}\textcolor{yaleblue}{\textbf{Y}}}%
   }%
 }
+
+\newcommand{\htl}[1]{\textcolor{green}{(HTL: #1)}}
 
 \author{Ngoc Bui\yale, Tinglin Huang\yale, Rex Ying\yale\\
 \yale Department of Computer Science, Yale University\\
@@ -48,7 +51,7 @@ substitutes a token-wise isotropic surrogate for predictive covariance and omits
 Exact tracking, however, entails a dense,
 state-dependent Riccati recursion that is poorly suited to GPU-parallel linear-attention scans.
 To address this issue, we derive a \textit{Diagonal KDN} by projecting each one-step posterior onto the
-diagonal Gaussian family through online mean-field variational inference. The resulting
+diagonal Gaussian family through online mean-field variational inference\htl{it seems to be different from what the implementation does since $\mu=128$}. The resulting
 per-channel covariance recurrences are M\"obius maps, enabling an associative scan with
 $O(d_k)$ auxiliary state and logarithmic parallel depth. Across controlled pretraining at
 750M and 1.3B parameters, KDN variants consistently improve perplexity and mean downstream
@@ -280,7 +283,9 @@ the predicted memory and yields a principled gain for incorporating new evidence
   \mbox{approximation} of Diagonal KDN. Prediction preserves diagonality; the exact update yields a
   dense posterior; reverse-KL projection restores diagonality without changing its mean. The
   starred pair $(\ve{S}_t^\star,\ve{P}_t^\star)$ is the optimal posterior of
-  Proposition~\ref{prop:kalman-associative-memory}.}
+  Proposition~\ref{prop:kalman-associative-memory}.
+  \htl{should the starred pairs be related to equ28? }
+  }
   \label{fig:kdn-variational-approximation}
 \end{figure}
 
@@ -377,7 +382,9 @@ Tracking $\ve{P}_t$ is necessary because each token observes the associative map
 direction $\ve{k}_t$, and the value $\ve{v}_t$ is noisy. After many tokens, some key directions are
 well supported by past measurements, while others remain uncertain or have become stale
 because of drift. High uncertainty means the current token should be allowed to edit the
-memory strongly; low uncertainty means the prior memory should resist a noisy measurement.
+memory strongly; 
+\htl{but smaller $\alpha$ will get smaller $\hat{p}$, which seems to contradict this statement, especially given that $\alpha_t$ and $w_t$ are independent (equ38). Not sure if I understand correctly}
+low uncertainty means the prior memory should resist a noisy measurement.
 
 \paragraph{Predict.}
 At step $t-1$, the filter has posterior mean $\ve{S}_{t-1}$ and covariance $\ve{P}_{t-1}$.
@@ -784,7 +791,7 @@ empirical analyses.
 
 Combining this calibrated covariance scan with the Kalman residual write yields the Diagonal
 Kalman Delta Network, summarized in Proposition~\ref{prop:kalman-linear-attention}.
-
+\htl{$\hat{p}_t$ has been defined twice in both equ39 and 41}
 \refstepcounter{definition}\label{prop:kalman-linear-attention}
 \begin{tcolorbox}[
   title={Proposition~\thedefinition: Diagonal Kalman Delta Network},
@@ -919,6 +926,7 @@ prediction, uncertainty-derived gain, and memory update are
 \end{aligned}
   \label{eq:main-iso-kdn-gain}
 \end{equation}
+\htl{bt is not introduced anywhere except in the appendix}
 This retains the scalar-gated form used by DeltaNet, Gated DeltaNet, and KDA, but $\beta_t$ now
 depends on the transition, process uncertainty, and evidence accumulated from previous tokens
 through $\widehat b_t$. It therefore replaces the independent token gate
