@@ -1,0 +1,1914 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,mathtools,amsthm,booktabs,microtype,xcolor}
+\usepackage{array,enumitem}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+
+\title{Kalman Delta Networks 2:\\
+Two-Axis Factorized Uncertainty}
+\author{}
+\date{August 28, 2026}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\ve}[1]{\boldsymbol{#1}}
+\newcommand{\tr}{\mathsf{T}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\KL}{\operatorname{KL}}
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Normal}{\mathcal{N}}
+
+\newtheorem{proposition}{Proposition}
+\newtheorem{remark}{Remark}
+
+\setlist{itemsep=2pt,topsep=4pt}
+\setlength{\emergencystretch}{3em}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Kalman Delta Networks treat a recurrent key--value memory as the posterior mean of a latent
+linear map.  Existing variants retain uncertainty along only one axis.  Diagonal KDN uses a
+key-space covariance shared by every value coordinate,
+$\ve{I}_{d_v}\otimes\ve{P}_t$, whereas a complementary value-wise isotropic model uses
+$\ve{B}_t\otimes\ve{I}_{d_k}$.  This note first derives the value-wise model and its independent
+scalar information scans.  It then introduces KDN-2, whose retained covariance is the
+two-axis separable family
+\[
+  \ve{\Sigma}_t=\ve{B}_t\otimes\ve{P}_t,
+\]
+with both factors positive diagonal.  The exact conditional mean has a simple rank-one form: a
+key-wise uncertainty direction multiplies value-wise uncertainty gates.  The exact posterior
+covariance, however, is generally not another single Kronecker product.  We derive the exact
+posterior, characterize the exceptional closure condition, and obtain the joint reverse-KL
+projection back to the separable family.  That projection is a positive matrix-scaling problem,
+unique only up to an intrinsic factor gauge.  Consequently, KDN-2 is a principled two-axis
+uncertainty model, but it does not inherit the independent M\"obius scans or the single shared
+compact-WY memory system of one-axis KDN without an additional approximation.  We also connect
+KDN-2 to Gated DeltaNet-2: both expose key- and value-axis modulation, but KDN-2 ties erasure and
+writing through one innovation, and their generic algebraic intersection is the scalar KDA rule.
+\end{abstract}
+
+\section{Scope and notation}
+\label{sec:scope}
+
+Let $K=d_k$ and $V=d_v$.  The recurrent memory
+$\ve{S}_t\in\R^{K\times V}$ maps a key to a value.  Its $j$th value column is
+$\ve{s}_{t,j}\in\R^K$, and column-major vectorization is
+\begin{equation}
+  \ve{x}_t=\operatorname{vec}(\widetilde{\ve{S}}_t)
+  =\begin{bmatrix}
+    \widetilde{\ve{s}}_{t,1}^{\tr}&\cdots&
+    \widetilde{\ve{s}}_{t,V}^{\tr}
+  \end{bmatrix}^{\tr}.
+  \label{eq:vec-memory}
+\end{equation}
+A tilde denotes the latent random memory, a bare symbol denotes its retained mean, and a hat
+denotes the exclusive one-step prediction before the current observation is assimilated.  The
+observation model is
+\begin{equation}
+  \ve{v}_t
+  =\widetilde{\ve{S}}_t^{\tr}\ve{k}_t+\ve{e}_t
+  =\ve{H}_t\ve{x}_t+\ve{e}_t,
+  \qquad
+  \ve{H}_t=\ve{I}_V\otimes\ve{k}_t^{\tr},
+  \qquad
+  \ve{e}_t\sim\Normal(\ve{0},\ve{R}_t).
+  \label{eq:observation-model}
+\end{equation}
+Unless stated otherwise,
+$\ve{R}_t=\diag(r_{t,1},\ldots,r_{t,V})\succ0$.  Diagonal observation noise preserves
+cross-value independence while allowing different value coordinates to have different
+reliability.
+
+The two one-axis uncertainty families are
+\begin{equation}
+  \underbrace{\ve{I}_V\otimes\ve{P}_t}_{\text{shared key-space uncertainty}}
+  \qquad\text{and}\qquad
+  \underbrace{\ve{B}_t\otimes\ve{I}_K}_{\text{value-wise isotropic uncertainty}},
+  \label{eq:one-axis-families}
+\end{equation}
+where $\ve{P}_t\in\R^{K\times K}$ and
+$\ve{B}_t=\diag(b_{t,1},\ldots,b_{t,V})$.  The first is the family used by Diagonal KDN; the
+second is derived next.
+
+\section{Value-wise isotropic uncertainty}
+\label{sec:value-isotropic}
+
+\subsection{Retained family and state-space model}
+
+The value-wise isotropic family assigns one scalar key-space variance to every value coordinate:
+\begin{equation}
+  \widetilde{\ve{s}}_{t,j}\mid\mathcal{F}_t
+  \sim\Normal(\ve{s}_{t,j},b_{t,j}\ve{I}_K),
+  \qquad
+  \Cov\!\left(\operatorname{vec}(\widetilde{\ve{S}}_t)\mid\mathcal{F}_t\right)
+  =\ve{B}_t\otimes\ve{I}_K.
+  \label{eq:value-family}
+\end{equation}
+The columns remain conditionally independent, but their uncertainty need not be equal.  Consider
+the columnwise process and observation model
+\begin{equation}
+\begin{aligned}
+  \widetilde{\ve{s}}_{t,j}
+  &=\ve{D}_t\widetilde{\ve{s}}_{t-1,j}+\ve{w}_{t,j},
+  &
+  \ve{w}_{t,j}&\sim\Normal(\ve{0},\omega_{t,j}\ve{I}_K),
+  \\
+  v_{t,j}
+  &=\ve{k}_t^{\tr}\widetilde{\ve{s}}_{t,j}+e_{t,j},
+  &
+  e_{t,j}&\sim\Normal(0,r_{t,j}),
+  \qquad
+  \ve{D}_t=\diag(\ve{\alpha}_t).
+\end{aligned}
+  \label{eq:value-state-space}
+\end{equation}
+The noises are independent across value coordinates and time.  The current shared-noise model is
+recovered by tying $\omega_{t,j}=\omega_t$ and $r_{t,j}=r_t$.
+
+The mean prediction is
+\begin{equation}
+  \widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1}.
+  \label{eq:value-mean-prediction}
+\end{equation}
+The channel-wise transition generally makes the exact predictive covariance anisotropic even
+when the retained covariance is isotropic.  Define its average squared transition
+\begin{equation}
+  a_t=\frac{1}{K}\Tr(\ve{D}_t\ve{D}_t^{\tr})
+  =\frac{1}{K}\sum_{i=1}^{K}\alpha_{t,i}^2.
+  \label{eq:value-transition-average}
+\end{equation}
+Projecting the predictive covariance to its average marginal variance gives
+\begin{equation}
+  \widehat b_{t,j}=a_tb_{t-1,j}+\omega_{t,j},
+  \qquad
+  \widehat{\ve{P}}_{t,j}=\widehat b_{t,j}\ve{I}_K.
+  \label{eq:value-prediction}
+\end{equation}
+This prediction is exact when
+$\ve{D}_t\ve{D}_t^{\tr}=a_t\ve{I}_K$ and is otherwise the covariance-coordinate trace
+projection used by Isotropic KDN.
+
+\subsection{Exact conditional mean}
+
+Let
+\begin{equation}
+  \delta_{t,j}=v_{t,j}-\ve{k}_t^{\tr}\widehat{\ve{s}}_{t,j}.
+  \label{eq:value-innovation}
+\end{equation}
+The predictive cross-covariance and innovation variance are
+\begin{equation}
+  \Cov(\widetilde{\ve{s}}_{t,j},v_{t,j}\mid\mathcal{F}_{t-1})
+  =\widehat b_{t,j}\ve{k}_t,
+  \qquad
+  \Delta_{t,j}=r_{t,j}+\widehat b_{t,j}\|\ve{k}_t\|_2^2.
+  \label{eq:value-joint-moments}
+\end{equation}
+Therefore column $j$ has scalar gain
+\begin{equation}
+  \beta_{t,j}=\frac{\widehat b_{t,j}}{\Delta_{t,j}},
+  \qquad
+  \ve{s}_{t,j}
+  =\widehat{\ve{s}}_{t,j}+\beta_{t,j}\ve{k}_t\delta_{t,j}.
+  \label{eq:value-gain}
+\end{equation}
+Every value column writes along the same key direction, but each column uses a different
+uncertainty-derived contraction.  In matrix form, with
+$\ve{\beta}_t=(\beta_{t,1},\ldots,\beta_{t,V})^{\tr}$,
+\begin{equation}
+  \ve{S}_t
+  =\widehat{\ve{S}}_t
+  +\ve{k}_t
+   \left[
+     \ve{\beta}_t\odot
+     \left(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\right)
+   \right]^{\tr}.
+  \label{eq:value-memory-update}
+\end{equation}
+Equivalently, grouping the predicted memory columnwise gives
+\begin{equation}
+  \ve{s}_{t,j}
+  =\left(
+     \ve{I}_K-\beta_{t,j}\ve{k}_t\ve{k}_t^{\tr}
+   \right)\widehat{\ve{s}}_{t,j}
+   +\beta_{t,j}\ve{k}_tv_{t,j},
+  \qquad j=1,\ldots,V.
+  \label{eq:value-memory-column-factorized}
+\end{equation}
+
+\subsection{Reverse-KL projection and information scan}
+
+The exact posterior precision for column $j$ is
+\begin{equation}
+  \ve{C}_{t,j}^{\star}
+  =\widehat c_{t,j}\ve{I}_K
+   +\frac{1}{r_{t,j}}\ve{k}_t\ve{k}_t^{\tr},
+  \qquad
+  \widehat c_{t,j}=\widehat b_{t,j}^{-1}.
+  \label{eq:value-exact-precision}
+\end{equation}
+It is dense for a dense key, so it must be projected before the next token.
+
+\begin{proposition}[Value-wise isotropic reverse-KL projection]
+Let $\pi_{t,j}$ be the exact Gaussian posterior defined by
+Equations~\eqref{eq:value-state-space}--\eqref{eq:value-exact-precision}.  Over
+\begin{equation*}
+  q_{t,j}=\Normal(\ve{m}_{t,j},b_{t,j}\ve{I}_K),
+\end{equation*}
+the unique minimizer of $\KL(q_{t,j}\,\|\,\pi_{t,j})$ is
+\begin{equation}
+  \ve{m}_{t,j}=\ve{s}_{t,j},
+  \qquad
+  b_{t,j}
+  =\frac{K}{\Tr(\ve{C}_{t,j}^{\star})}
+  =\left(
+    \widehat c_{t,j}
+    +\frac{\|\ve{k}_t\|_2^2}{K r_{t,j}}
+  \right)^{-1}.
+  \label{eq:value-reverse-kl}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+For a Gaussian target with precision $\ve{C}_{t,j}^{\star}$, the covariance-dependent part of
+the reverse KL is
+$\tfrac12\{b_{t,j}\Tr(\ve{C}_{t,j}^{\star})-K\log b_{t,j}\}$.  Its derivative vanishes only at
+$b_{t,j}=K/\Tr(\ve{C}_{t,j}^{\star})$.  The mean-dependent quadratic is uniquely minimized by
+the exact posterior mean in Equation~\eqref{eq:value-gain}.
+\end{proof}
+
+Equation~\eqref{eq:value-reverse-kl} is the literal variational update.  As in Isotropic KDN, an
+information scale $\mu>0$ can instead be introduced only in the retained post-write precision:
+\begin{equation}
+  \widehat c_{t,j}
+  =\frac{c_{t-1,j}}{a_t+\omega_{t,j}c_{t-1,j}},
+  \qquad
+  u_{t,j}=\mu\frac{\|\ve{k}_t\|_2^2}{K r_{t,j}},
+  \qquad
+  c_{t,j}=\widehat c_{t,j}+u_{t,j}.
+  \label{eq:value-information-update}
+\end{equation}
+Here $\mu=1$ is the reverse-KL optimum.  Values $\mu\ne1$ calibrate future protection while
+leaving the current gain in Equation~\eqref{eq:value-gain} unchanged.
+
+Substitution gives a scalar M\"obius recurrence for every value coordinate:
+\begin{equation}
+  c_{t,j}
+  =\frac{(1+u_{t,j}\omega_{t,j})c_{t-1,j}+u_{t,j}a_t}
+    {\omega_{t,j}c_{t-1,j}+a_t},
+  \qquad
+  \ve{M}_{t,j}
+  =\begin{bmatrix}
+    1+u_{t,j}\omega_{t,j} & u_{t,j}a_t\\
+    \omega_{t,j} & a_t
+  \end{bmatrix}.
+  \label{eq:value-mobius}
+\end{equation}
+Thus the uncertainty stage is $V$ independent associative scalar scans.
+
+\subsection{When the model is genuinely different}
+
+If $b_{0,j}$, $\omega_{t,j}$, and $r_{t,j}$ are tied across $j$, then induction through
+Equations~\eqref{eq:value-prediction} and \eqref{eq:value-information-update} keeps every
+$b_{t,j}$ and $\beta_{t,j}$ equal.  Realized values cannot break this symmetry because Gaussian
+covariance updates do not depend on the realized observation.  At least one value-wise initial
+variance, process uncertainty, or observation noise must vary for the model to differ from
+Isotropic KDN.
+
+The sequential mean update still costs $O(KV)$, but the transition applied to column $j$ is
+\begin{equation}
+  \ve{A}_{t,j}
+  =(\ve{I}_K-\beta_{t,j}\ve{k}_t\ve{k}_t^{\tr})\ve{D}_t.
+  \label{eq:value-column-transition}
+\end{equation}
+Because $\ve{A}_{t,j}$ varies with $j$, the single compact-WY system shared by all value columns
+in current KDN kernels no longer applies.  An exact parallel implementation needs value-batched
+systems or a grouped-value approximation.
+
+\section{KDN-2: combined key--value factorized uncertainty}
+\label{sec:kdn2}
+
+\subsection{Separable diagonal family}
+
+KDN-2 combines the two one-axis families by retaining
+\begin{equation}
+\begin{aligned}
+  \ve{P}_t&=\diag(p_{t,1},\ldots,p_{t,K})\succ0,
+  &
+  \ve{B}_t&=\diag(b_{t,1},\ldots,b_{t,V})\succ0,
+  \\
+  \ve{\Sigma}_t
+  &=\ve{B}_t\otimes\ve{P}_t
+   =(\ve{B}_t\otimes\ve{I}_K)
+    (\ve{I}_V\otimes\ve{P}_t),
+  &
+  \ve{J}_t
+  &=\ve{\Sigma}_t^{-1}
+   =\ve{G}_t\otimes\ve{C}_t,
+\end{aligned}
+  \label{eq:kdn2-family}
+\end{equation}
+where $\ve{G}_t=\ve{B}_t^{-1}$ and $\ve{C}_t=\ve{P}_t^{-1}$.  Hence the covariance and
+information forms are the same family: inversion simply inverts both diagonal factors.  Entry
+$(i,j)$ of the latent memory has variance
+\begin{equation}
+  \operatorname{Var}(\widetilde S_{t,ij}\mid\mathcal{F}_t)=p_{t,i}b_{t,j}.
+  \label{eq:kdn2-entry-variance}
+\end{equation}
+The model has $K+V-1$ covariance degrees of freedom, not $KV$, because
+\begin{equation}
+  \ve{B}_t\otimes\ve{P}_t
+  =(\lambda\ve{B}_t)\otimes(\ve{P}_t/\lambda)
+  \qquad\text{for every }\lambda>0.
+  \label{eq:kdn2-factor-gauge}
+\end{equation}
+We fix this internal factor gauge by imposing
+\begin{equation}
+  \frac{1}{V}\sum_{j=1}^{V}\log b_{t,j}=0
+  \qquad\Longleftrightarrow\qquad
+  \det(\ve{B}_t)=1,
+  \label{eq:kdn2-gauge-fix}
+\end{equation}
+and compensating $\ve{P}_t$ so that $\ve{B}_t\otimes\ve{P}_t$ is unchanged.
+
+At the covariance-family level, the nested special cases are
+\begin{equation}
+\begin{array}{ccl}
+  \ve{B}_t=\bar b_t\ve{I}_V,\ \ve{R}_t=r_t\ve{I}_V
+  &\Longrightarrow& \text{Diagonal KDN},\\
+  \ve{P}_t=\bar p_t\ve{I}_K
+  &\Longrightarrow& \text{value-wise isotropic KDN},\\
+  \ve{B}_t=\bar b_t\ve{I}_V,\ \ve{P}_t=\bar p_t\ve{I}_K,\ \ve{R}_t=r_t\ve{I}_V
+  &\Longrightarrow& \text{Isotropic KDN}.
+\end{array}
+  \label{eq:kdn2-special-cases}
+\end{equation}
+The scalar factor in each row can be absorbed into the other covariance factor before applying
+the gauge in Equation~\eqref{eq:kdn2-gauge-fix}.  These are one-step covariance-family limits.
+Recovering the complete one-axis recurrences additionally requires constraining the corresponding
+factor and using its one-axis predictive projection; in particular, the channel-wise transition
+in Equation~\eqref{eq:kdn2-factor-prediction} does not preserve
+$\ve{P}_t\propto\ve{I}_K$ without the trace projection in
+Equation~\eqref{eq:value-prediction}.
+
+\subsection{Factor-preserving prediction}
+
+The key-space mean transition remains
+\begin{equation}
+  \widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1},
+  \qquad
+  \ve{D}_t=\diag(\ve{\alpha}_t).
+  \label{eq:kdn2-mean-prediction}
+\end{equation}
+A simple retained prediction updates the two covariance factors by
+\begin{equation}
+  \widehat{\ve{P}}_t
+  =\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}^{(k)}_t,
+  \qquad
+  \widehat{\ve{B}}_t
+  =\ve{B}_{t-1}+\ve{\Omega}^{(v)}_t,
+  \label{eq:kdn2-factor-prediction}
+\end{equation}
+with positive diagonal process factors.  This equation should be read as a factor-preserving
+predictive parameterization.  It corresponds to the positive-semidefinite full process
+covariance
+\begin{equation}
+\begin{aligned}
+  \ve{Q}_t
+  ={}&\ve{B}_{t-1}\otimes\ve{\Omega}^{(k)}_t
+  +\ve{\Omega}^{(v)}_t\otimes
+    (\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr})
+  +\ve{\Omega}^{(v)}_t\otimes\ve{\Omega}^{(k)}_t,
+\end{aligned}
+  \label{eq:kdn2-implied-process-noise}
+\end{equation}
+because adding Equation~\eqref{eq:kdn2-implied-process-noise} to the transitioned prior gives
+$\widehat{\ve{B}}_t\otimes\widehat{\ve{P}}_t$.  A generic additive separable process covariance
+would instead produce a sum of Kronecker products and leave the retained family.
+
+After prediction, apply the gauge normalization in Equation~\eqref{eq:kdn2-gauge-fix}.  This
+normalization leaves the full predictive covariance and the full Kalman gain unchanged.  It does
+rescale the factors used below: under
+$(\widehat{\ve{B}}_t,\widehat{\ve{P}}_t)\mapsto
+(\lambda\widehat{\ve{B}}_t,\widehat{\ve{P}}_t/\lambda)$,
+$\ve{g}_t\mapsto\ve{g}_t/\lambda$ and
+$\ve{\beta}_t\mapsto\lambda\ve{\beta}_t$, so their product is invariant.
+
+\subsection{Exact innovation and conditional mean}
+
+Define
+\begin{equation}
+  \ve{g}_t=\widehat{\ve{P}}_t\ve{k}_t,
+  \qquad
+  z_t=\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t,
+  \qquad
+  \ve{\delta}_t=\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t.
+  \label{eq:kdn2-key-statistics}
+\end{equation}
+The innovation covariance and state--observation cross-covariance are
+\begin{equation}
+  \ve{\Delta}_t
+  =z_t\widehat{\ve{B}}_t+\ve{R}_t,
+  \qquad
+  \Cov(\ve{x}_t,\ve{v}_t\mid\mathcal{F}_{t-1})
+  =\widehat{\ve{B}}_t\otimes\ve{g}_t.
+  \label{eq:kdn2-joint-moments}
+\end{equation}
+The exact vectorized Kalman gain is therefore
+\begin{equation}
+  \ve{K}_t
+  =(\widehat{\ve{B}}_t\otimes\ve{g}_t)\ve{\Delta}_t^{-1}.
+  \label{eq:kdn2-vector-gain}
+\end{equation}
+When $\ve{R}_t=\diag(r_{t,1},\ldots,r_{t,V})$, define
+\begin{equation}
+  \beta_{t,j}
+  =\frac{\widehat b_{t,j}}
+    {r_{t,j}+\widehat b_{t,j}z_t},
+  \qquad
+  \ve{\beta}_t
+  =(\beta_{t,1},\ldots,\beta_{t,V})^{\tr}.
+  \label{eq:kdn2-value-gates}
+\end{equation}
+The exact posterior mean has the rank-one matrix update
+\begin{equation}
+  \ve{S}_t^{\star}
+  =\widehat{\ve{S}}_t
+   +\ve{g}_t(\ve{\beta}_t\odot\ve{\delta}_t)^{\tr}.
+  \label{eq:kdn2-mean-update}
+\end{equation}
+Equivalently, grouping the predicted memory columnwise gives
+\begin{equation}
+\begin{aligned}
+  \ve{s}_{t,j}^{\star}
+  &=\left(
+      \ve{I}_K-\beta_{t,j}\ve{g}_t\ve{k}_t^{\tr}
+    \right)\widehat{\ve{s}}_{t,j}
+    +\beta_{t,j}\ve{g}_tv_{t,j}
+  \\
+  &=\left(
+      \ve{I}_K-\beta_{t,j}\ve{g}_t\ve{k}_t^{\tr}
+    \right)\ve{D}_t\ve{s}_{t-1,j}
+    +\beta_{t,j}\ve{g}_tv_{t,j},
+  \qquad j=1,\ldots,V.
+\end{aligned}
+  \label{eq:kdn2-mean-column-factorized}
+\end{equation}
+This equation is the central behavioral generalization.  The key factor
+$\widehat{\ve{P}}_t$ rotates and rescales the write direction through $\ve{g}_t$, while the value
+factor $\widehat{\ve{B}}_t$ produces relative write strengths across value coordinates.  Their
+absolute scales are gauge-dependent; only $\ve{g}_t\beta_{t,j}$ and ratios among the
+$\beta_{t,j}$ are identifiable.  Setting
+$\widehat{\ve{B}}_t=\ve{I}_V$ and $\ve{R}_t=r_t\ve{I}_V$ recovers the Diagonal-KDN gain;
+setting $\widehat{\ve{P}}_t=\ve{I}_K$ recovers
+Equation~\eqref{eq:value-memory-update}.
+
+The one-step predictive negative log likelihood, up to the additive Gaussian constant, is
+\begin{equation}
+  \mathcal{L}_{\mathrm{pred},t}
+  =\frac12\sum_{j=1}^{V}
+    \left[
+      \frac{\delta_{t,j}^2}{r_{t,j}+\widehat b_{t,j}z_t}
+      +\log(r_{t,j}+\widehat b_{t,j}z_t)
+    \right].
+  \label{eq:kdn2-predictive-nll}
+\end{equation}
+Both the residual and its variance use the exclusive pre-write state.
+
+\subsection{Exact posterior and failure of Kronecker closure}
+
+The exact posterior covariance and precision are
+\begin{equation}
+\begin{aligned}
+  \ve{\Sigma}_t^{\star}
+  &={}
+    \widehat{\ve{B}}_t\otimes\widehat{\ve{P}}_t
+    -(\widehat{\ve{B}}_t\ve{\Delta}_t^{-1}\widehat{\ve{B}}_t)
+      \otimes(\ve{g}_t\ve{g}_t^{\tr}),
+  \\
+  \ve{J}_t^{\star}
+  &={}
+    \widehat{\ve{B}}_t^{-1}\otimes\widehat{\ve{P}}_t^{-1}
+    +\ve{R}_t^{-1}\otimes\ve{k}_t\ve{k}_t^{\tr}.
+\end{aligned}
+  \label{eq:kdn2-exact-posterior}
+\end{equation}
+For diagonal $\ve{R}_t$, column $j$ has covariance block
+\begin{equation}
+  \ve{\Sigma}_{t,j}^{\star}
+  =\widehat b_{t,j}
+   \left(
+     \widehat{\ve{P}}_t
+     -\beta_{t,j}\ve{g}_t\ve{g}_t^{\tr}
+   \right).
+  \label{eq:kdn2-posterior-block}
+\end{equation}
+Different $\beta_{t,j}$ values therefore produce differently shaped key-space covariance blocks,
+not merely differently scaled copies of one common matrix.
+
+\begin{proposition}[Exact separable closure]
+Assume $K>1$, $\widehat{\ve{P}}_t\succ0$, and
+$\ve{g}_t\ve{g}_t^{\tr}\ne\ve{0}$.  The blocks in
+Equation~\eqref{eq:kdn2-posterior-block} can be written as
+$b_{t,j}^{+}\ve{P}_t^{+}$ with one common, possibly dense, matrix $\ve{P}_t^{+}$ if and only if
+all $\beta_{t,j}$ are equal.  For diagonal observation noise, this is equivalent to
+\begin{equation}
+  \frac{r_{t,j}}{\widehat b_{t,j}}=\rho_t
+  \quad\text{for every }j,
+  \qquad\text{or equivalently}\qquad
+  \ve{R}_t=\rho_t\widehat{\ve{B}}_t.
+  \label{eq:kdn2-compatible-noise}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+If $\beta_{t,j}=\beta_t$, then
+$\ve{\Sigma}_{t,j}^{\star}=\widehat b_{t,j}
+(\widehat{\ve{P}}_t-\beta_t\ve{g}_t\ve{g}_t^{\tr})$, which is separable.  Conversely, suppose
+two blocks with coefficients $\beta_a\ne\beta_b$ are proportional.  Then for some $c>0$,
+\[
+  \widehat{\ve{P}}_t-\beta_a\ve{g}_t\ve{g}_t^{\tr}
+  =c(\widehat{\ve{P}}_t-\beta_b\ve{g}_t\ve{g}_t^{\tr}).
+\]
+If $c\ne1$, the left rearrangement contains the full-rank matrix
+$(1-c)\widehat{\ve{P}}_t$ while the other side has rank at most one, a contradiction.  Thus
+$c=1$ and $\beta_a=\beta_b$.  Finally,
+$\beta_{t,j}=1/(r_{t,j}/\widehat b_{t,j}+z_t)$, so equality of the gains is equivalent to
+Equation~\eqref{eq:kdn2-compatible-noise}.
+\end{proof}
+
+The compatible choice $\ve{R}_t=\rho_t\widehat{\ve{B}}_t$ is mathematically closed in the value
+factor, but it makes that factor cancel from the gain:
+\begin{equation}
+  \ve{S}_t^{\star}
+  =\widehat{\ve{S}}_t
+   +\frac{\ve{g}_t\ve{\delta}_t^{\tr}}{\rho_t+z_t}.
+  \label{eq:kdn2-compatible-mean}
+\end{equation}
+The value uncertainty then has no effect on the posterior mean.  Moreover, the common key-space
+posterior remains dense for a dense key, so the diagonal $\ve{P}_t$ restriction still requires
+the usual KDN projection.  Useful value-dependent gains and exact Kronecker closure therefore
+cannot generally be obtained simultaneously.
+
+\subsection{Joint reverse-KL projection}
+
+We retain the exact mean in Equation~\eqref{eq:kdn2-mean-update} and project only its covariance.
+Let
+\begin{equation}
+  q_t
+  =\Normal\!\left(
+    \operatorname{vec}(\ve{S}_t^{\star}),
+    \ve{B}_t\otimes\ve{P}_t
+  \right),
+  \qquad
+  \ve{B}_t=\diag(\ve{b}_t),
+  \quad
+  \ve{P}_t=\diag(\ve{p}_t).
+  \label{eq:kdn2-variational-family}
+\end{equation}
+Define four candidate-factor summaries
+\begin{equation}
+\begin{aligned}
+  A_B&=\sum_{j=1}^{V}\frac{b_{t,j}}{\widehat b_{t,j}},
+  &
+  T_B&=\sum_{j=1}^{V}\frac{b_{t,j}}{r_{t,j}},
+  \\
+  A_P&=\sum_{i=1}^{K}\frac{p_{t,i}}{\widehat p_{t,i}},
+  &
+  Z_P&=\sum_{i=1}^{K}p_{t,i}k_{t,i}^2.
+\end{aligned}
+  \label{eq:kdn2-projection-summaries}
+\end{equation}
+
+\begin{proposition}[Joint reverse-KL projection]
+Up to the factor gauge in Equation~\eqref{eq:kdn2-factor-gauge}, the stationary point of
+$\KL(q_t\,\|\,\pi_t^{\star})$, where $\pi_t^{\star}$ has covariance
+Equation~\eqref{eq:kdn2-exact-posterior}, satisfies
+\begin{equation}
+  b_{t,j}
+  =\frac{K}{A_P/\widehat b_{t,j}+Z_P/r_{t,j}},
+  \qquad
+  p_{t,i}
+  =\frac{V}{A_B/\widehat p_{t,i}+T_B k_{t,i}^2}.
+  \label{eq:kdn2-reverse-kl-fixed-point}
+\end{equation}
+Equivalently, with
+\begin{equation}
+  L_{t,ij}
+  =\frac{1}{\widehat p_{t,i}\widehat b_{t,j}}
+   +\frac{k_{t,i}^2}{r_{t,j}},
+  \qquad
+  W_{t,ij}=p_{t,i}b_{t,j}L_{t,ij},
+  \label{eq:kdn2-balancing-matrix}
+\end{equation}
+the positive matrix $\ve{W}_t$ has row sums $V$ and column sums $K$.
+\end{proposition}
+
+\begin{proof}
+Using the precision in Equation~\eqref{eq:kdn2-exact-posterior}, the covariance-dependent part of
+twice the reverse KL is
+\begin{equation}
+  A_BA_P+T_BZ_P-K\log\det\ve{B}_t-V\log\det\ve{P}_t
+  +\mathrm{const}.
+  \label{eq:kdn2-reverse-kl-objective}
+\end{equation}
+Differentiating with respect to $b_{t,j}$ and $p_{t,i}$ yields
+Equation~\eqref{eq:kdn2-reverse-kl-fixed-point}.  Equivalently,
+$\partial/\partial p_{t,i}=0$ gives
+$\sum_jW_{t,ij}=V$, and $\partial/\partial b_{t,j}=0$ gives
+$\sum_iW_{t,ij}=K$.  Multiplying every $b_{t,j}$ by $\lambda$ and dividing every $p_{t,i}$ by
+$\lambda$ leaves both the objective and the full covariance unchanged, which is exactly the
+factor gauge.
+\end{proof}
+
+In log-factor coordinates, Equation~\eqref{eq:kdn2-reverse-kl-objective} is convex and is strictly
+convex after the gauge in Equation~\eqref{eq:kdn2-gauge-fix} is fixed.  The positive fixed point is
+therefore unique in that gauge.  It is a matrix-scaling problem, and alternating updates
+\begin{equation}
+\begin{aligned}
+  b_{t,j}&\leftarrow
+  \frac{K}{A_P/\widehat b_{t,j}+Z_P/r_{t,j}},
+  \\
+  p_{t,i}&\leftarrow
+  \frac{V}{A_B/\widehat p_{t,i}+T_Bk_{t,i}^2},
+\end{aligned}
+  \label{eq:kdn2-alternating-projection}
+\end{equation}
+followed by gauge normalization solve it without constructing a $K\times V$ matrix.  These are
+the standard alternating matrix-scaling updates and converge to the unique gauge-equivalence
+class because $L_{t,ij}>0$.  Each sweep costs $O(K+V)$ because $L_{t,ij}$ is the sum of two
+rank-one terms, one strictly positive and one nonnegative.  The projection is nevertheless
+coupled and iterative at every token.  It is not two independent M\"obius scans over time.
+
+The one-sided boundaries recover the previous models.  Holding
+$\ve{B}_t=\widehat{\ve{B}}_t$ fixed gives
+\begin{equation}
+  p_{t,i}
+  =\left[
+    \widehat p_{t,i}^{-1}
+    +\left(\frac{1}{V}\sum_{j=1}^{V}\frac{\widehat b_{t,j}}{r_{t,j}}\right)k_{t,i}^2
+  \right]^{-1}.
+  \label{eq:kdn2-fixed-b-boundary}
+\end{equation}
+For $\widehat{\ve{B}}_t=\ve{I}_V$ and $\ve{R}_t=r_t\ve{I}_V$, this is the ordinary
+Diagonal-KDN reverse-KL update.  Holding
+$\ve{P}_t=\widehat{\ve{P}}_t$ fixed gives
+\begin{equation}
+  b_{t,j}
+  =\left[
+    \widehat b_{t,j}^{-1}
+    +\frac{z_t}{K r_{t,j}}
+  \right]^{-1},
+  \label{eq:kdn2-fixed-p-boundary}
+\end{equation}
+which is the value-wise isotropic update when
+$\widehat{\ve{P}}_t=\ve{I}_K$.  These equations describe one posterior projection.  Recovering
+the full value-wise isotropic recurrence also requires the trace-projected prediction in
+Equation~\eqref{eq:value-prediction}.  Applying both one-sided full-information updates
+independently would double-count the same observation; the coupled projection is what allocates
+the information between factors.
+
+An optional protection scale may multiply the measurement term $k_{t,i}^2/r_{t,j}$ in
+Equation~\eqref{eq:kdn2-balancing-matrix}.  If the same scale also tempers the likelihood and
+changes the current gain, it defines a different Gaussian observation model.  If the exact gain
+in Equation~\eqref{eq:kdn2-mean-update} is kept fixed, the scaled projection is instead a retained
+future-protection calibration, as in the one-axis KDN variants; it is not the reverse-KL optimum
+for Equation~\eqref{eq:observation-model}.
+
+\subsection{A practical reference recurrence}
+
+A sequential KDN-2 reference implementation can use the following token step:
+\begin{enumerate}
+  \item Predict $\widehat{\ve{S}}_t$, $\widehat{\ve{P}}_t$, and
+    $\widehat{\ve{B}}_t$ with Equations~\eqref{eq:kdn2-mean-prediction} and
+    \eqref{eq:kdn2-factor-prediction}.
+  \item Fix the internal factor gauge by Equation~\eqref{eq:kdn2-gauge-fix}.
+  \item Compute $\ve{g}_t$, $z_t$, $\ve{\beta}_t$, and the exact posterior mean
+    $\ve{S}_t^{\star}$ from Equations~\eqref{eq:kdn2-key-statistics}--\eqref{eq:kdn2-mean-update}.
+  \item Initialize the covariance projection at the predictive factors and run a fixed number of
+    alternating updates in Equation~\eqref{eq:kdn2-alternating-projection}.
+  \item Reapply the gauge normalization and carry the projected factors to token $t+1$.
+\end{enumerate}
+With $N_{\mathrm{proj}}$ alternating sweeps, uncertainty work is
+$O(N_{\mathrm{proj}}(K+V))$ per token and the memory update is $O(KV)$.  This is suitable as a
+correctness oracle and as a small-scale experiment.  It is not yet a drop-in replacement for the
+current scan-parallel KDN kernel.
+
+\section{Connection to Gated DeltaNet-2}
+\label{sec:gdn2-connection}
+
+\subsection{The two updates side by side}
+
+Use the same predicted memory
+$\widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1}$.  Gated DeltaNet-2 (GDN-2) can be written as
+\begin{equation}
+\begin{aligned}
+  \ve{S}_t^{\mathrm{GDN2}}
+  &={}
+    \widehat{\ve{S}}_t
+    -\ve{k}_t
+      (\ve{b}_t^{\mathrm{erase}}\odot\ve{k}_t)^{\tr}\widehat{\ve{S}}_t
+    +\ve{k}_t(\ve{w}_t\odot\ve{v}_t)^{\tr},
+  \\
+  \ve{b}_t^{\mathrm{erase}}&\in\R^K,
+  \qquad
+  \ve{w}_t\in\R^V,
+\end{aligned}
+  \label{eq:gdn2-update}
+\end{equation}
+where $\ve{b}_t^{\mathrm{erase}}$ is a key-channel erase gate and $\ve{w}_t$ is a value-channel
+write gate.  Both are predicted directly from the current token and are sigmoid-valued in the
+default implementation; an optional GDN-2 variant expands only the erase-gate range.  The keys are
+$\ell_2$-normalized in both model families.  Defining the pseudo-key and pseudo-value
+\begin{equation}
+  \widetilde{\ve{k}}_t=\ve{b}_t^{\mathrm{erase}}\odot\ve{k}_t,
+  \qquad
+  \widetilde{\ve{v}}_t=\ve{w}_t\odot\ve{v}_t,
+  \label{eq:gdn2-pseudo-observation}
+\end{equation}
+gives the residual-like form
+\begin{equation}
+  \ve{S}_t^{\mathrm{GDN2}}
+  =\widehat{\ve{S}}_t
+   +\ve{k}_t
+    \left(
+      \widetilde{\ve{v}}_t
+      -\widehat{\ve{S}}_t^{\tr}\widetilde{\ve{k}}_t
+    \right)^{\tr}.
+  \label{eq:gdn2-pseudo-residual}
+\end{equation}
+This resembles a Kalman residual update algebraically, but its erased read uses
+$\widetilde{\ve{k}}_t$ while its injected target is $\widetilde{\ve{v}}_t$.  In general it is not
+the posterior mean for the original observation
+$\ve{v}_t=\widetilde{\ve{S}}_t^{\tr}\ve{k}_t+\ve{e}^{\mathrm{obs}}_t$.
+
+Expanding the KDN-2 mean update in Equation~\eqref{eq:kdn2-mean-update} gives
+\begin{equation}
+  \ve{S}_t^{\mathrm{KDN2}}
+  =\widehat{\ve{S}}_t
+   -\ve{g}_t\ve{k}_t^{\tr}\widehat{\ve{S}}_t\diag(\ve{\beta}_t)
+   +\ve{g}_t(\ve{\beta}_t\odot\ve{v}_t)^{\tr},
+  \qquad
+  \ve{g}_t=\widehat{\ve{P}}_t\ve{k}_t.
+  \label{eq:kdn2-expanded-gdn2-comparison}
+\end{equation}
+Both models therefore use an $O(KV)$ low-rank correction, and both can modulate the incoming value
+coordinatewise.  Their factorizations differ:
+\begin{center}
+\begin{tabular}{@{}llll@{}}
+  \toprule
+  Model & outer write direction & erased read direction & value multiplier \\
+  \midrule
+  GDN-2 & $\ve{k}_t$ & $\ve{b}_t^{\mathrm{erase}}\odot\ve{k}_t$ & $\ve{w}_t$ \\
+  KDN-2 & $\ve{g}_t=\widehat{\ve{P}}_t\ve{k}_t$ & $\ve{k}_t$ & $\ve{\beta}_t$ \\
+  \bottomrule
+\end{tabular}
+\end{center}
+For KDN-2, the same $\beta_{t,j}$ multiplies the observation write and the erasure of the predicted
+value in column $j$.  This tie is forced by the Kalman innovation.  GDN-2 instead predicts
+$\ve{b}_t^{\mathrm{erase}}$ and $\ve{w}_t$ independently, deliberately decoupling how much old
+content is erased from how much new value is injected.
+
+The two covariance factors explain the two visible parts of the KDN-2 update.  The key factor
+$\widehat{\ve{P}}_t$ changes the outer write direction from $\ve{k}_t$ to $\ve{g}_t$, while the
+value factor $\widehat{\ve{B}}_t$ and observation noise determine the relative entries of
+$\ve{\beta}_t$.  These gates are functions of the carried uncertainty state and therefore depend
+on the history, not only on the current token representation.
+
+\subsection{Exact intersection of the update families}
+
+The similarity between Equations~\eqref{eq:gdn2-update} and
+\eqref{eq:kdn2-expanded-gdn2-comparison} does not imply that either family contains the other.
+Their common intersection is much smaller.
+
+\begin{proposition}[Algebraic GDN-2--KDN-2 intersection]
+At the level of the memory-update equations, assume a nondegenerate update with
+$\ve{k}_t\ne\ve{0}$ and require
+Equations~\eqref{eq:gdn2-update} and \eqref{eq:kdn2-expanded-gdn2-comparison} to agree for arbitrary
+$\widehat{\ve{S}}_t$ and $\ve{v}_t$.  Then there must be scalars $\lambda_t>0$ and
+$\beta_t>0$ such that
+\begin{equation}
+\begin{aligned}
+  \ve{g}_t&=\lambda_t\ve{k}_t,
+  &
+  \ve{\beta}_t&=\beta_t\ve{1}_V,
+  \\
+  \ve{w}_t&=\lambda_t\beta_t\ve{1}_V,
+  &
+  \ve{b}_t^{\mathrm{erase}}\odot\ve{k}_t
+  &=\lambda_t\beta_t\ve{k}_t.
+\end{aligned}
+  \label{eq:gdn2-kdn2-intersection}
+\end{equation}
+Conversely, these conditions make the two updates identical.
+\end{proposition}
+
+\begin{proof}
+Equality of the coefficients multiplying each arbitrary $v_{t,j}$ requires
+\begin{equation}
+  \beta_{t,j}\ve{g}_t=w_{t,j}\ve{k}_t.
+  \label{eq:gdn2-kdn2-write-condition}
+\end{equation}
+For a nonzero write this forces $\ve{g}_t=\lambda_t\ve{k}_t$ and
+$w_{t,j}=\lambda_t\beta_{t,j}$.  Equality of the linear maps applied to each arbitrary memory
+column then requires
+\begin{equation}
+  \lambda_t\beta_{t,j}\ve{k}_t\ve{k}_t^{\tr}
+  =\ve{k}_t(\ve{b}_t^{\mathrm{erase}}\odot\ve{k}_t)^{\tr}
+  \qquad\text{for every }j.
+  \label{eq:gdn2-kdn2-erase-condition}
+\end{equation}
+The right-hand side is shared across value columns, so every $\beta_{t,j}$ must equal one scalar
+$\beta_t$, and
+$\ve{b}_t^{\mathrm{erase}}\odot\ve{k}_t
+=\lambda_t\beta_t\ve{k}_t$.  Substitution proves sufficiency.
+\end{proof}
+
+For the implemented default GDN-2 parameterization, the converse additionally requires
+$\lambda_t\beta_t\in(0,1)$ so that both gates lie in their sigmoid ranges.  The optional
+negative-eigenvalue variant permits an erase coefficient up to two but leaves the write gate in
+$(0,1)$.
+
+For a dense key and diagonal $\widehat{\ve{P}}_t$, the condition
+$\ve{g}_t=\lambda_t\ve{k}_t$ requires
+$\widehat p_{t,i}=\lambda_t$ on the support of $\ve{k}_t$.  The intersection therefore reduces to
+the scalar-gated delta update
+\begin{equation}
+  \ve{S}_t
+  =\widehat{\ve{S}}_t
+   +\gamma_t\ve{k}_t
+    (\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t)^{\tr},
+  \qquad
+  \gamma_t=\lambda_t\beta_t,
+  \label{eq:gdn2-kdn2-scalar-intersection}
+\end{equation}
+which is the KDA form.  Away from this intersection, KDN-2 can rotate the write direction through
+key-space uncertainty, which GDN-2 cannot express with its fixed outer direction $\ve{k}_t$;
+GDN-2 can independently choose erase and write gates, which a coherent KDN-2 innovation cannot
+express.
+
+The one-axis boundaries expose the two separate mismatches.  When
+$\widehat{\ve{P}}_t\propto\ve{I}_K$ but $\ve{\beta}_t$ remains value dependent, KDN-2 reduces to
+the value-wise isotropic update: it shares GDN-2's outer direction and value-wise write scaling,
+but still uses the same $\beta_{t,j}$ for both halves of each column's innovation.  When
+$\widehat{\ve{B}}_t\propto\ve{I}_V$ and $\ve{R}_t\propto\ve{I}_V$, KDN-2 reduces to Diagonal KDN:
+its value gate becomes common, but the anisotropic direction
+$\widehat{\ve{P}}_t\ve{k}_t$ generally cannot be represented by GDN-2.
+
+\subsection{Interpretation and controlled comparisons}
+
+GDN-2 may be viewed as a discriminative relaxation of an uncertainty-gated delta rule.  It
+predicts the two sides of the update directly and gains token-local flexibility, but it does not
+carry a covariance whose predictive variance or posterior contraction constrains those gates.
+KDN-2 instead derives its update from the separable predictive covariance and diagonal observation
+noise.  Its restrictions provide a calibrated predictive distribution and a causal notion of
+future protection, at the cost of the coupled covariance projection derived above.
+
+The connection suggests four controlled ablations:
+\begin{enumerate}
+  \item \textbf{Native scalar innovation tying.}  Within the existing GDN-2 operator, constrain
+    $\ve{b}_t^{\mathrm{erase}}=\gamma_t\ve{1}_K$ and
+    $\ve{w}_t=\gamma_t\ve{1}_V$.  This tests the benefit of decoupling while retaining the native
+    shared erase system.
+  \item \textbf{Value-wise tied innovation.}  Replace the shared erase operator by
+    $-\ve{k}_t\ve{k}_t^{\tr}\widehat{\ve{S}}_t\diag(\ve{\beta}_t)$ and use the same
+    $\ve{\beta}_t$ on the incoming value.  This is a structural recurrence ablation, not merely a
+    gate constraint on GDN-2.
+  \item \textbf{Gain direction.}  Replace $\ve{g}_t=\widehat{\ve{P}}_t\ve{k}_t$ by a collinear
+    direction
+    \begin{equation*}
+      \ve{g}_{t,\parallel}
+      =\frac{\ve{k}_t^{\tr}\ve{g}_t}{\|\ve{k}_t\|_2^2}\ve{k}_t,
+    \end{equation*}
+    which preserves $\ve{k}_t^{\tr}\ve{g}_t$ and hence the current-key contraction while
+    removing the off-key component.
+  \item \textbf{Stateful versus direct gates.}  Match instantaneous write strengths while
+    comparing uncertainty-derived gates with gates predicted only from the current token.
+\end{enumerate}
+Useful diagnostics are the cosine between $\ve{g}_t$ and $\ve{k}_t$, dispersion across
+$\beta_{t,j}$, disagreement between GDN-2 erase and write strengths, predictive innovation NLL,
+and repeated-key protection.
+
+\section{Parallelism and approximation choices}
+\label{sec:parallelism}
+
+The value-wise model in Section~\ref{sec:value-isotropic} has independent scalar information
+recurrences, but its value-dependent gains require separate memory systems.  KDN-2 adds a second
+difficulty: its covariance projection couples all key and value factors at every token.  Three
+implementation levels should be distinguished:
+\begin{enumerate}
+  \item \textbf{Sequential joint projection.}  Run the exact gain and several alternating
+    reverse-KL sweeps per token.  This is the reference semantics.
+  \item \textbf{Grouped values.}  Share one $b$ and one gain across a small value group.  This
+    reduces the number of memory systems while retaining coarse value reliability.
+  \item \textbf{Chunk-frozen factors.}  Freeze or lag one factor within a chunk, use the
+    corresponding one-sided update, and commit a joint projection at the boundary.  This may
+    recover useful matrix operations, but it is an approximation whose error must be measured
+    against the sequential reference.
+\end{enumerate}
+The compatible-noise construction in Equation~\eqref{eq:kdn2-compatible-noise} restores a shared
+gain, but it also removes the value factor from the mean and is therefore a control rather than a
+full KDN-2 implementation.
+Appendix~\ref{app:value-wise-chunkwise} derives the exact value-batched compact-WY system for the
+value-wise model and makes explicit where its computation ceases to be shared across value
+coordinates.
+Appendix~\ref{app:kdn2-chunkwise} then derives an exact two-stage implementation of two-axis
+KDN-2: a causal coupled-factor prepass followed by a value-batched chunkwise mean pass.
+
+\section{Parameterization, gauges, and validation}
+\label{sec:validation}
+
+\paragraph{Positive factors.}
+Let $\ve{h}_t$ denote the observed token representation supplied to the uncertainty heads.
+Predict diagonal process increments and observation noise through positive floors, for example
+\begin{equation}
+  \ve{\omega}^{(k)}_t
+  =\omega_{k,\min}+\operatorname{softplus}(f_k(\ve{h}_t)),
+  \quad
+  \ve{\omega}^{(v)}_t
+  =\omega_{v,\min}+\operatorname{softplus}(f_v(\ve{h}_t)),
+  \quad
+  \ve{r}_t=r_{\min}+\operatorname{softplus}(f_r(\ve{h}_t)).
+  \label{eq:kdn2-positive-parameterization}
+\end{equation}
+Fixing $\ve{r}_t=r\ve{1}_V$ while learning value-specific
+$\ve{\omega}^{(v)}_t$ is a useful first experiment: it breaks value symmetry without learning the
+most direct $b_{t,j}/r_{t,j}$ confound.  In addition to the exact internal factor gauge in
+Equation~\eqref{eq:kdn2-factor-gauge}, jointly scaling the full covariance and observation noise
+produces the usual Kalman covariance-scale gauge.
+
+\paragraph{Symmetry breaking.}
+Initialize $\ve{B}_0=\ve{I}_V$ and $\ve{P}_0=\ve{I}_K$ for a neutral gauge.  Value uncertainty
+remains tied unless the initial value factor, value-process uncertainty, or observation noise
+varies across value coordinates.  Realized values alone cannot change covariance symmetry.
+
+\paragraph{Required tests.}
+A KDN-2 implementation should pass the following checks before language-model training:
+\begin{enumerate}
+  \item Compare the exact mean and covariance in
+    Equations~\eqref{eq:kdn2-mean-update} and \eqref{eq:kdn2-exact-posterior} against a dense
+    Kalman update on small random systems.
+  \item Verify the Diagonal-KDN and value-wise isotropic limits in
+    Equations~\eqref{eq:kdn2-fixed-b-boundary} and \eqref{eq:kdn2-fixed-p-boundary}.
+  \item Check factor-gauge invariance numerically under
+    $(\ve{B},\ve{P})\mapsto(\lambda\ve{B},\ve{P}/\lambda)$.
+  \item Confirm that the alternating projection satisfies the row- and column-sum conditions in
+    Equation~\eqref{eq:kdn2-balancing-matrix} and decreases the reverse-KL objective.
+  \item Compare zero, one, two, and converged projection sweeps; report covariance error, gain
+    error at later tokens, throughput, and peak memory.
+  \item Test repeated keys, orthogonal keys with identical elementwise squares, value-specific
+    corruption, and value-basis rotations.  The last test exposes the basis dependence of a
+    diagonal value factor.
+\end{enumerate}
+
+\section{Limitations and experimental contract}
+\label{sec:limitations}
+
+KDN-2 represents a rank-one factorization of the $K\times V$ table of entrywise variances.  It is
+strictly richer than either one-axis family but much smaller than a fully independent diagonal
+covariance with $KV$ states.  It still assumes no cross-key or cross-value posterior covariance,
+depends on the learned key and value bases, and introduces both an exact factor gauge and strong
+confounding between value variance and observation noise.
+
+The most important limitation is computational rather than notational.  The exact posterior mean
+is inexpensive, but the joint covariance projection is coupled and the value-dependent gains
+break the shared memory transition.  A claimed KDN-2 kernel must therefore specify which
+projection it implements, how many alternating sweeps it uses, how the gauge is fixed, and whether
+the memory system is value-wise, grouped, or chunk-approximated.  Results should be compared with
+the two one-sided boundaries at matched parameter count and effective write strength.
+
+The decisive initial experiment is a small synthetic ablation with four arms:
+\begin{equation}
+\begin{aligned}
+  &\text{Diagonal KDN},
+  &&\text{value-wise isotropic KDN},\\
+  &\text{KDN-2 with one projection sweep},
+  &&\text{KDN-2 with a converged projection}.
+\end{aligned}
+  \label{eq:kdn2-initial-ablation}
+\end{equation}
+This separates the benefit of two-axis uncertainty from the cost and approximation error of the
+joint projection before committing to a production kernel.
+
+\section{Conclusion}
+
+Value-wise isotropic uncertainty and Diagonal KDN allocate the same kind of scalar uncertainty
+budget to opposite axes of the memory matrix.  KDN-2 combines them through the separable
+covariance $\ve{B}_t\otimes\ve{P}_t$.  Its exact mean update cleanly factors into a key-wise
+uncertainty direction and value-wise uncertainty gates.  Its covariance update does not factor
+cleanly: useful value-dependent gains destroy Kronecker closure, and the principled reverse-KL
+projection is a coupled matrix-balancing problem.  This distinction is the central design
+constraint.  KDN-2 is mathematically well defined as a sequential filter and a useful research
+model, but a scan-parallel approximation must be stated and validated separately.
+
+\appendix
+
+\section{Chunkwise implementation of value-wise isotropic KDN}
+\label{app:value-wise-chunkwise}
+
+This appendix derives an exact chunkwise evaluation of the value-wise isotropic model in
+Section~\ref{sec:value-isotropic}.  The derivation follows the compact-WY construction for the
+delta rule: first remove the diagonal decay, then expose the causal residuals as a unit-lower
+triangular system, and finally express all reads and the outgoing state as matrix products.  The
+only structural change is important: every value coordinate has its own gain sequence, so the
+triangular system is value batched rather than shared.
+
+\subsection{Two-stage scan}
+\label{app:value-wise-two-stage}
+
+The uncertainty state does not depend on the realized values or on the retained memory.  Hence it
+can be evaluated before the memory recurrence.  For each value coordinate $j$, write the
+information state homogeneously as
+\begin{equation}
+  \ve{z}^{(c)}_{t,j}
+  =\begin{bmatrix}n_{t,j}\\d_{t,j}\end{bmatrix},
+  \qquad
+  c_{t,j}=\frac{n_{t,j}}{d_{t,j}},
+  \qquad
+  \ve{z}^{(c)}_{t,j}=\ve{M}_{t,j}\ve{z}^{(c)}_{t-1,j},
+  \label{eq:value-chunk-homogeneous-information}
+\end{equation}
+where $\ve{M}_{t,j}$ is the $2\times2$ matrix in
+Equation~\eqref{eq:value-mobius}.  Products of these matrices are associative.  A chunked
+reduce--scan--replay pass therefore produces every exclusive $c_{t-1,j}$ and hence every
+$\widehat b_{t,j}$ and $\beta_{t,j}$ before the memory pass.  Explicitly, the exclusive state
+starts from $\ve{z}^{(c)}_{0,j}=[c_{0,j},1]^{\tr}$ and emits
+\begin{equation}
+  \widehat c_{t,j}
+  =\frac{c_{t-1,j}}{a_t+\omega_{t,j}c_{t-1,j}},
+  \qquad
+  \beta_{t,j}
+  =\frac{1}{r_{t,j}\widehat c_{t,j}+\|\ve{k}_t\|_2^2},
+  \label{eq:value-chunk-exclusive-gain}
+\end{equation}
+before $\ve{M}_{t,j}$ incorporates token $t$.  In homogeneous coordinates, the same emission can
+avoid intermediate divisions: with
+$\chi_{t,j}=a_td_{t-1,j}+\omega_{t,j}n_{t-1,j}$,
+\begin{equation}
+  \widehat c_{t,j}=\frac{n_{t-1,j}}{\chi_{t,j}},
+  \qquad
+  \beta_{t,j}
+  =\frac{\chi_{t,j}}
+   {r_{t,j}n_{t-1,j}+\|\ve{k}_t\|_2^2\chi_{t,j}}.
+  \label{eq:value-chunk-homogeneous-gain}
+\end{equation}
+Homogeneous vectors and chunk summaries may be rescaled after multiplication without changing
+their represented precision.  The gain and memory chunk lengths need not be the same.  What
+follows conditions on these precomputed gains.
+
+Consider one memory chunk of length $C$, use local indices $r=1,\ldots,C$, and suppress its global
+chunk index.  Let $\ve{S}^{\mathrm{in}}=\ve{S}_0$ be the incoming memory.  Substituting
+$\widehat{\ve{S}}_r=\ve{D}_r\ve{S}_{r-1}$ into
+Equation~\eqref{eq:value-memory-update} gives
+\begin{equation}
+  \ve{S}_r
+  =\ve{D}_r\ve{S}_{r-1}
+   +\ve{k}_r
+    \left[
+      \ve{\beta}_r\odot
+      \left(
+        \ve{v}_r-(\ve{D}_r\ve{S}_{r-1})^{\tr}\ve{k}_r
+      \right)
+    \right]^{\tr}.
+  \label{eq:value-chunk-original-recurrence}
+\end{equation}
+
+\subsection{Removing the diagonal decay}
+\label{app:value-wise-decay-normalization}
+
+Assume the gated transition has $\alpha_{r,i}>0$.  Define the within-chunk cumulative decay
+\begin{equation}
+  \ve{\gamma}_r=\prod_{\ell=1}^{r}\ve{\alpha}_\ell,
+  \qquad
+  \ve{\Gamma}_r=\diag(\ve{\gamma}_r),
+  \qquad
+  \ve{\gamma}_0=\ve{1},
+  \label{eq:value-chunk-cumulative-decay}
+\end{equation}
+where the product is elementwise.  Since
+$\ve{D}_r\ve{\Gamma}_{r-1}=\ve{\Gamma}_r$, write
+\begin{equation}
+  \ve{S}_r=\ve{\Gamma}_r\ve{Y}_r,
+  \qquad
+  \overline{\ve{k}}_r=\ve{\Gamma}_r\ve{k}_r
+  =\ve{\gamma}_r\odot\ve{k}_r,
+  \qquad
+  \overline{\ve{p}}_r=\ve{\Gamma}_r^{-1}\ve{k}_r
+  =\ve{k}_r\oslash\ve{\gamma}_r.
+  \label{eq:value-chunk-normalized-keys}
+\end{equation}
+The incoming normalized state is $\ve{Y}_0=\ve{S}^{\mathrm{in}}$.  Multiplying
+Equation~\eqref{eq:value-chunk-original-recurrence} by $\ve{\Gamma}_r^{-1}$ gives the undecayed
+two-key delta rule
+\begin{equation}
+  \ve{Y}_r
+  =\ve{Y}_{r-1}
+   +\overline{\ve{p}}_r
+    \left[
+      \ve{\beta}_r\odot
+      \left(
+        \ve{v}_r-\ve{Y}_{r-1}^{\tr}\overline{\ve{k}}_r
+      \right)
+    \right]^{\tr}.
+  \label{eq:value-chunk-normalized-recurrence}
+\end{equation}
+Thus $\overline{\ve{k}}_r$ is the read key and
+$\beta_{r,j}\overline{\ve{p}}_r$ is the write key for value coordinate $j$.  Implementations
+should form the required decay ratios from cumulative log decays rather than explicitly dividing
+by a potentially small $\ve{\gamma}_r$.
+
+\subsection{Causal innovations as value-batched triangular systems}
+\label{app:value-wise-triangular-system}
+
+Stack the normalized read and base-write keys by row,
+\begin{equation}
+  [\overline{\ve{K}}]_{r,:}=\overline{\ve{k}}_r^{\tr},
+  \qquad
+  [\overline{\ve{P}}]_{r,:}=\overline{\ve{p}}_r^{\tr},
+  \qquad
+  \ve{L}=\operatorname{tril}
+  \left(\overline{\ve{K}}\overline{\ve{P}}^{\tr},-1\right).
+  \label{eq:value-chunk-shared-score}
+\end{equation}
+The strictly lower matrix $\ve{L}\in\R^{C\times C}$ is shared by all value coordinates.  For
+coordinate $j$, define
+\begin{equation}
+\begin{aligned}
+  \ve{v}_j&=(v_{1,j},\ldots,v_{C,j})^{\tr},
+  &
+  \ve{\Lambda}^{(\beta)}_j
+  &=\diag(\beta_{1,j},\ldots,\beta_{C,j}),
+  \\
+  \varepsilon_{r,j}
+  &=v_{r,j}-\overline{\ve{k}}_r^{\tr}\ve{y}_{r-1,j},
+  &
+  \ve{\varepsilon}_j
+  &=(\varepsilon_{1,j},\ldots,\varepsilon_{C,j})^{\tr},
+  \\
+  \ve{\xi}_j&=\ve{\Lambda}^{(\beta)}_j\ve{\varepsilon}_j.
+\end{aligned}
+  \label{eq:value-chunk-innovation-definitions}
+\end{equation}
+Unrolling only the preceding writes in
+Equation~\eqref{eq:value-chunk-normalized-recurrence} yields
+\begin{equation}
+  \ve{\varepsilon}_j
+  =\ve{v}_j-\overline{\ve{K}}\ve{s}^{\mathrm{in}}_j-\ve{L}\ve{\xi}_j,
+  \qquad
+  \ve{\xi}_j=\ve{\Lambda}^{(\beta)}_j\ve{\varepsilon}_j.
+  \label{eq:value-chunk-causal-unrolling}
+\end{equation}
+Consequently, the complete set of causal innovations in the chunk is the unique solution of either
+equivalent unit-lower system
+\begin{equation}
+\begin{aligned}
+  (\ve{I}_C+\ve{L}\ve{\Lambda}^{(\beta)}_j)\ve{\varepsilon}_j
+  &=\ve{v}_j-\overline{\ve{K}}\ve{s}^{\mathrm{in}}_j,
+  \\
+  (\ve{I}_C+\ve{\Lambda}^{(\beta)}_j\ve{L})\ve{\xi}_j
+  &=\ve{\Lambda}^{(\beta)}_j
+    (\ve{v}_j-\overline{\ve{K}}\ve{s}^{\mathrm{in}}_j).
+\end{aligned}
+  \label{eq:value-chunk-two-triangular-forms}
+\end{equation}
+The first form remains well defined when a gain is zero and is preferable to writing a system
+with $(\ve{\Lambda}^{(\beta)}_j)^{-1}$.
+Let $\ve{\Xi}=[\ve{\xi}_1,\ldots,\ve{\xi}_V]\in\R^{C\times V}$, with
+$\ve{\xi}_r^{\tr}$ denoting row $r$.  Equivalently, all value coordinates can be advanced together
+by the fused forward substitution
+\begin{equation}
+  \ve{\xi}_r
+  =\ve{\beta}_r\odot
+   \left(
+     \ve{v}_r-(\ve{S}^{\mathrm{in}})^{\tr}\overline{\ve{k}}_r
+     -\sum_{i<r}L_{ri}\ve{\xi}_i
+   \right),
+  \qquad
+  \ve{\xi}_r\in\R^V.
+  \label{eq:value-chunk-fused-substitution}
+\end{equation}
+This form makes the reusable geometry $\ve{L}$ and the elementwise value-axis gain explicit.
+
+To recover the usual compact-WY notation, define
+\begin{equation}
+  \ve{A}_j=(\ve{I}_C+\ve{L}\ve{\Lambda}^{(\beta)}_j)^{-1},
+  \qquad
+  \ve{\eta}_j=\ve{A}_j\ve{v}_j,
+  \qquad
+  \ve{W}_j=\ve{A}_j\overline{\ve{K}}.
+  \label{eq:value-chunk-wy-factors}
+\end{equation}
+Then
+\begin{equation}
+  \ve{\varepsilon}_j
+  =\ve{\eta}_j-\ve{W}_j\ve{s}^{\mathrm{in}}_j,
+  \qquad
+  \ve{\xi}_j
+  =\ve{\Lambda}^{(\beta)}_j
+   (\ve{\eta}_j-\ve{W}_j\ve{s}^{\mathrm{in}}_j).
+  \label{eq:value-chunk-wy-residual}
+\end{equation}
+The inverse in Equation~\eqref{eq:value-chunk-wy-factors} is notation: an implementation uses a
+unit-lower-triangular solve.  The factors $\ve{\eta}_j$ and $\ve{W}_j$ depend only on inputs from the
+current chunk and may therefore be prepared for all chunks in parallel, before the incoming chunk
+states are known.
+
+The connection to the compact-WY product is explicit.  Define the normalized rank-one transition
+\begin{equation}
+  \ve{E}_{r,j}
+  =\ve{I}_K
+   -\beta_{r,j}\overline{\ve{p}}_r\overline{\ve{k}}_r^{\tr}.
+  \label{eq:value-chunk-rank-one-transition}
+\end{equation}
+Then the product of all within-chunk transitions is
+\begin{equation}
+  \ve{E}_{C,j}\ve{E}_{C-1,j}\cdots\ve{E}_{1,j}
+  =\ve{I}_K
+   -\overline{\ve{P}}^{\tr}
+    \ve{\Lambda}^{(\beta)}_j\ve{W}_j.
+  \label{eq:value-chunk-compact-wy-identity}
+\end{equation}
+The same transformed residuals also collect all forced writes, so
+\begin{equation}
+  \ve{y}_{C,j}
+  =\left(
+     \ve{I}_K
+     -\overline{\ve{P}}^{\tr}
+      \ve{\Lambda}^{(\beta)}_j\ve{W}_j
+   \right)\ve{s}^{\mathrm{in}}_j
+   +\overline{\ve{P}}^{\tr}
+    \ve{\Lambda}^{(\beta)}_j\ve{\eta}_j
+  =\ve{s}^{\mathrm{in}}_j+\overline{\ve{P}}^{\tr}\ve{\xi}_j.
+  \label{eq:value-chunk-compact-wy-state}
+\end{equation}
+
+\subsection{Parallel reads and the outgoing state}
+\label{app:value-wise-chunk-output}
+
+The normalized state after any local prefix $r$ is
+\begin{equation}
+  \ve{Y}_r
+  =\ve{S}^{\mathrm{in}}
+   +\sum_{i=1}^{r}\overline{\ve{p}}_i\ve{\xi}_i^{\tr},
+  \label{eq:value-chunk-prefix-state}
+\end{equation}
+where $\ve{\xi}_i^{\tr}$ is row $i$ of $\ve{\Xi}$.  In particular, the outgoing physical memory is
+\begin{equation}
+  \ve{S}^{\mathrm{out}}
+  =\ve{\Gamma}_C
+   \left(
+     \ve{S}^{\mathrm{in}}+\overline{\ve{P}}^{\tr}\ve{\Xi}
+   \right).
+  \label{eq:value-chunk-outgoing-state}
+\end{equation}
+
+For completeness, suppose the mixer reads after the current write with queries
+$\ve{q}_r\in\R^K$ and outputs $\ve{o}_r=\ve{S}_r^{\tr}\ve{q}_r$.  Define
+\begin{equation}
+  [\overline{\ve{Q}}]_{r,:}
+  =(\ve{\Gamma}_r\ve{q}_r)^{\tr},
+  \qquad
+  \ve{L}_{qp}
+  =\operatorname{tril}
+   (\overline{\ve{Q}}\overline{\ve{P}}^{\tr}).
+  \label{eq:value-chunk-query-scores}
+\end{equation}
+The diagonal is retained because the read is post-write.  All outputs in the chunk are
+\begin{equation}
+  \ve{O}
+  =\overline{\ve{Q}}\ve{S}^{\mathrm{in}}
+   +\ve{L}_{qp}\ve{\Xi}.
+  \label{eq:value-chunk-outputs}
+\end{equation}
+A pre-write read instead uses the strictly lower part of the same score matrix.
+
+The inverse cumulative decay in $\overline{\ve{P}}$ need not be materialized.  The entries used in
+the shared score matrices are
+\begin{equation}
+\begin{aligned}
+  L_{ri}
+  &=\ve{k}_r^{\tr}
+    \diag(\ve{\gamma}_r\oslash\ve{\gamma}_i)\ve{k}_i,
+    \qquad i<r,
+  \\
+  (L_{qp})_{ri}
+  &=\ve{q}_r^{\tr}
+    \diag(\ve{\gamma}_r\oslash\ve{\gamma}_i)\ve{k}_i,
+    \qquad i\le r.
+\end{aligned}
+  \label{eq:value-chunk-decay-ratio-scores}
+\end{equation}
+Likewise, define the tail-adjusted write matrix by
+\begin{equation}
+  [\ve{K}_{\mathrm{tail}}]_{r,:}
+  =\left[
+    (\ve{\gamma}_C\oslash\ve{\gamma}_r)\odot\ve{k}_r
+   \right]^{\tr}.
+  \label{eq:value-chunk-tail-key}
+\end{equation}
+Equation~\eqref{eq:value-chunk-outgoing-state} can then be evaluated as
+\begin{equation}
+  \ve{S}^{\mathrm{out}}
+  =\ve{\Gamma}_C\ve{S}^{\mathrm{in}}
+   +\ve{K}_{\mathrm{tail}}^{\tr}\ve{\Xi}.
+  \label{eq:value-chunk-stable-outgoing-state}
+\end{equation}
+The ratios in Equations~\eqref{eq:value-chunk-decay-ratio-scores} and
+\eqref{eq:value-chunk-tail-key} contain only the decay between the write and the read or chunk
+boundary.  They should be computed from cumulative log-decay differences.  This remains stable
+even when the individual cumulative products underflow.
+
+\begin{proposition}[Exactness of the value-batched chunk form]
+For fixed gains $\{\ve{\beta}_r\}_{r=1}^{C}$ and positive diagonal decays, the solutions of
+Equation~\eqref{eq:value-chunk-two-triangular-forms} and the prefix reconstruction in
+Equation~\eqref{eq:value-chunk-prefix-state} equal the token-by-token recurrence in
+Equation~\eqref{eq:value-chunk-original-recurrence}.  Consequently,
+Equations~\eqref{eq:value-chunk-outgoing-state} and \eqref{eq:value-chunk-outputs} give its exact
+chunk boundary and post-write outputs.
+\end{proposition}
+
+\begin{proof}
+Equation~\eqref{eq:value-chunk-normalized-recurrence} implies
+$\ve{y}_{r-1,j}=\ve{s}^{\mathrm{in}}_j+
+\sum_{i<r}\overline{\ve{p}}_i\xi_{i,j}$.  Substitution into the definition of
+$\varepsilon_{r,j}$ gives row $r$ of Equation~\eqref{eq:value-chunk-causal-unrolling}.  Its
+coefficient matrix is unit lower triangular, so its solution is unique and equals the sequential
+innovations.  Substituting those innovations back into the normalized recurrence gives
+Equation~\eqref{eq:value-chunk-prefix-state}; rescaling and applying the queries gives
+Equations~\eqref{eq:value-chunk-outgoing-state} and \eqref{eq:value-chunk-outputs}.
+\end{proof}
+
+\subsection{Parallel schedule, cost, and sharing limit}
+\label{app:value-wise-chunk-cost}
+
+An exact implementation has the following schedule:
+\begin{enumerate}
+  \item Compute all $\beta_{t,j}$ with the independent M\"obius scans in
+    Section~\ref{app:value-wise-two-stage}.
+  \item For every memory chunk in parallel, form the cumulative decay, the normalized keys, and
+    the shared score matrices $\ve{L}$ and $\ve{L}_{qp}$.
+  \item Solve Equation~\eqref{eq:value-chunk-two-triangular-forms} batched over value coordinates,
+    then evaluate Equations~\eqref{eq:value-chunk-outputs} and
+    \eqref{eq:value-chunk-outgoing-state}.  Only the $K\times V$ memory is carried between chunks.
+\end{enumerate}
+
+There are two useful scheduling choices.  Precomputing $\ve{\eta}_j$ and $\ve{W}_j$ exposes the same
+short inter-chunk spine as the conventional compact-WY algorithm, but requires a distinct
+$C\times K$ factor $\ve{W}_j$ for every value coordinate.  Forming these factors costs
+$O(VC^2K)$ work and storing them costs $O(VCK)$ per chunk.  Alternatively, a kernel can retain
+the shared $\ve{L}$ and perform the one-right-hand-side solves only after
+$\ve{S}^{\mathrm{in}}$ arrives.  This avoids the value-wise $\ve{W}_j$ tensors and costs
+\begin{equation}
+  O(C^2K+C^2V+CKV)
+  \label{eq:value-chunk-direct-cost}
+\end{equation}
+work per chunk, but moves the triangular solve onto the inter-chunk dependency path.  A practical
+kernel can tile the value dimension, reuse each tile of $\ve{L}$, and use matrix products for the
+off-diagonal block updates.
+The reverse pass uses the corresponding value-batched unit-upper-triangular solves and has the
+same asymptotic work; chunk-local factors may be recomputed rather than saved.
+
+The matrices $\ve{L}$ and $\ve{L}_{qp}$ are shared, but the actual WY operator is not:
+\begin{equation}
+  \ve{A}_j=(\ve{I}_C+\ve{L}\ve{\Lambda}^{(\beta)}_j)^{-1}.
+  \label{eq:value-chunk-sharing-limit}
+\end{equation}
+Thus arbitrary value-dependent gains require $V$ batched triangular systems.  If
+$\beta_{r,j}=\beta_r$ for every $j$, all $\ve{\Lambda}^{(\beta)}_j$ coincide and one shared WY
+solve with $V$ right-hand sides recovers the standard KDA/DeltaNet implementation.  Sharing a gain
+within each
+of $G$ value groups similarly requires only $G$ systems; it is exact for the grouped model and an
+approximation to the fully value-wise model.
+
+Finally, this appendix parallelizes the value-wise isotropic boundary, for which the gain stage is
+itself a collection of scalar M\"obius scans.  Conditional on known $\ve{g}_t$ and
+$\ve{\beta}_t$, the KDN-2 mean admits the same two-key derivation after replacing
+$\overline{\ve{p}}_t$ by $\ve{\Gamma}_t^{-1}\ve{g}_t$.  The joint KDN-2 covariance projection,
+however, still couples the key and value factors from one token to the next, so this conditional
+WY construction does not by itself make the full KDN-2 filter scan parallel.  Here ``exact'' means
+exact evaluation of the retained value-wise recurrence, including the trace-projected covariance
+prediction in Equation~\eqref{eq:value-prediction}; it does not turn that projected family into the
+unrestricted dense Kalman filter.
+
+\section{Two-stage chunkwise implementation of two-axis KDN-2}
+\label{app:kdn2-chunkwise}
+
+This appendix derives an exact two-stage implementation of the retained two-axis KDN-2 recurrence
+in Section~\ref{sec:kdn2}.  The first stage advances the coupled key--value uncertainty factors and
+emits the coefficients required by the mean update.  The second stage conditions on those
+coefficients and applies the two-key compact-WY construction.  The distinction is essential: the
+mean pass is chunkwise, whereas the joint reverse-KL factor pass remains causal and sequential.
+
+Here ``exact'' means equality with the token-by-token retained KDN-2 recurrence under the same
+prediction, factor gauge, and reverse-KL projection---not equality with the unrestricted dense
+Kalman filter.
+
+\subsection{Stage 1: causal coupled-factor prepass}
+\label{app:kdn2-factor-pass}
+
+The covariance dynamics do not depend on the realized values or on the memory mean.  They may
+therefore be evaluated before the $K\times V$ mean recurrence.  Starting from the projected
+factors $(\ve{P}_{t-1},\ve{B}_{t-1})$, compute
+\begin{equation}
+\begin{aligned}
+  \widehat{\ve{P}}_t
+  &=\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}
+    +\ve{\Omega}^{(k)}_t,
+  &
+  \widehat{\ve{B}}_t
+  &=\ve{B}_{t-1}+\ve{\Omega}^{(v)}_t.
+\end{aligned}
+  \label{eq:kdn2-chunk-factor-prediction}
+\end{equation}
+Fix the predictive factor gauge, for example by enforcing
+$\det(\widehat{\ve{B}}_t)=1$ and applying the compensating inverse scale to
+$\widehat{\ve{P}}_t$.  The exclusive predictive factors emit
+\begin{equation}
+\begin{aligned}
+  \ve{g}_t
+  &=\widehat{\ve{P}}_t\ve{k}_t,
+  &
+  z_t
+  &=\ve{k}_t^{\tr}\ve{g}_t,
+  \\
+  \Delta_{t,j}
+  &=r_{t,j}+\widehat b_{t,j}z_t,
+  &
+  \beta_{t,j}
+  &=\frac{\widehat b_{t,j}}{\Delta_{t,j}}.
+\end{aligned}
+  \label{eq:kdn2-chunk-factor-emissions}
+\end{equation}
+These quantities are emitted before projecting the current posterior: the current mean update
+uses the exclusive factors $\widehat{\ve{P}}_t$ and $\widehat{\ve{B}}_t$, not the post-write
+factors.
+
+After this emission, initialize the candidate posterior at the predictive factors and solve the
+coupled reverse-KL projection.  One alternating sweep computes
+\begin{equation}
+\begin{aligned}
+  A_P&=\sum_{i=1}^{K}\frac{p_{t,i}}{\widehat p_{t,i}},
+  &
+  Z_P&=\sum_{i=1}^{K}p_{t,i}k_{t,i}^{2},
+  &
+  b_{t,j}
+  &\leftarrow
+  \frac{K}{A_P/\widehat b_{t,j}+Z_P/r_{t,j}},
+  \\
+  A_B&=\sum_{j=1}^{V}\frac{b_{t,j}}{\widehat b_{t,j}},
+  &
+  T_B&=\sum_{j=1}^{V}\frac{b_{t,j}}{r_{t,j}},
+  &
+  p_{t,i}
+  &\leftarrow
+  \frac{V}{A_B/\widehat p_{t,i}+T_Bk_{t,i}^{2}}.
+\end{aligned}
+  \label{eq:kdn2-chunk-factor-projection}
+\end{equation}
+Gauge normalization follows each complete sweep.  Iteration to convergence gives the unique
+reverse-KL optimum in the fixed gauge.  Alternatively, a fixed number
+$N_{\mathrm{proj}}$ of sweeps defines a truncated-projection KDN-2 recurrence.  In either case,
+the resulting $(\ve{P}_t,\ve{B}_t)$ are carried to token $t+1$, while
+$\ve{g}_t$, $\ve{\beta}_t$, and optionally $\ve{\Delta}_t$ are stored for Stage~2.
+
+\paragraph{Exact scalarization of the coupled projection.}
+The apparent $(K+V)$-dimensional fixed point has a one-dimensional representation because the
+balancing matrix in Equation~\eqref{eq:kdn2-balancing-matrix} is the sum of two rank-one terms.
+Define the predictive axis statistics and factor-summary ratios
+\begin{equation}
+  \zeta^{(k)}_{t,i}=\widehat p_{t,i}k_{t,i}^{2},
+  \qquad
+  \zeta^{(v)}_{t,j}=\frac{\widehat b_{t,j}}{r_{t,j}},
+  \qquad
+  \tau^{(k)}_t=\frac{Z_P}{A_P},
+  \qquad
+  \tau^{(v)}_t=\frac{T_B}{A_B}.
+  \label{eq:kdn2-chunk-scalar-statistics}
+\end{equation}
+Let $\ve{\zeta}^{(k)}_t\in\R_+^K$ and
+$\ve{\zeta}^{(v)}_t\in\R_+^V$ collect the corresponding axis statistics.
+For a nonnegative vector $\ve{a}\in\R_+^m$, introduce
+\begin{equation}
+\begin{aligned}
+  D_{\ve{a}}(s)&=\sum_{\ell=1}^{m}\frac{1}{1+s a_\ell},
+  &
+  N_{\ve{a}}(s)&=\sum_{\ell=1}^{m}\frac{a_\ell}{1+s a_\ell},
+  &
+  F_{\ve{a}}(s)&=\frac{N_{\ve{a}}(s)}{D_{\ve{a}}(s)}.
+\end{aligned}
+  \label{eq:kdn2-chunk-weighted-map}
+\end{equation}
+The stationary equations in Equation~\eqref{eq:kdn2-chunk-factor-projection} imply
+\begin{equation}
+  \frac{b_{t,j}}{\widehat b_{t,j}}
+  =\frac{K/A_P}{1+\tau^{(k)}_t\zeta^{(v)}_{t,j}},
+  \qquad
+  \frac{p_{t,i}}{\widehat p_{t,i}}
+  =\frac{V/A_B}{1+\tau^{(v)}_t\zeta^{(k)}_{t,i}}.
+  \label{eq:kdn2-chunk-factor-ratio-form}
+\end{equation}
+Taking the defining ratios reduces the joint projection to
+\begin{equation}
+  \tau^{(v)}_t=F_{\ve{\zeta}^{(v)}_t}(\tau^{(k)}_t),
+  \qquad
+  \tau^{(k)}_t=F_{\ve{\zeta}^{(k)}_t}(\tau^{(v)}_t),
+  \qquad\Longleftrightarrow\qquad
+  \tau^{(k)}_t=F_{\ve{\zeta}^{(k)}_t}\!\left(
+    F_{\ve{\zeta}^{(v)}_t}(\tau^{(k)}_t)
+  \right).
+  \label{eq:kdn2-chunk-scalar-root}
+\end{equation}
+Thus the converged reverse-KL projection requires one scalar root rather than alternating writes
+of all $K+V$ candidate factors.  Define
+$G_t(s)=F_{\ve{\zeta}^{(k)}_t}(F_{\ve{\zeta}^{(v)}_t}(s))$ and
+$\mathcal{R}_t(s)=G_t(s)-s$.  Since $G_t$ is a weighted mean of the entries of
+$\ve{\zeta}^{(k)}_t$,
+\begin{equation}
+  \mathcal{R}_t\!\left(\min_i\zeta^{(k)}_{t,i}\right)\ge0,
+  \qquad
+  \mathcal{R}_t\!\left(\max_i\zeta^{(k)}_{t,i}\right)\le0.
+  \label{eq:kdn2-chunk-scalar-bracket}
+\end{equation}
+Uniqueness follows from the strict convexity of the gauge-fixed reverse-KL objective.  If all
+$\zeta^{(k)}_{t,i}$ equal one constant, that constant is the root directly; otherwise safeguarded
+Newton or bisection applies on the bracket above.  For deterministic GPU execution, use a fixed
+maximum iteration count and the gauge-invariant relative residual
+$|G_t(s)-s|/(G_t(s)+s)\le\epsilon_{\mathrm{root}}$, with the all-zero case handled directly.
+
+After solving for $\tau^{(k)}_t$ and setting
+$\tau^{(v)}_t=F_{\ve{\zeta}^{(v)}_t}(\tau^{(k)}_t)$, one convenient raw gauge is
+\begin{equation}
+  p_{t,i}^{(0)}
+  =\frac{\widehat p_{t,i}}{1+\tau^{(v)}_t\zeta^{(k)}_{t,i}},
+  \qquad
+  b_{t,j}^{(0)}
+  =\frac{(1+\tau^{(k)}_t\tau^{(v)}_t)\widehat b_{t,j}}
+  {1+\tau^{(k)}_t\zeta^{(v)}_{t,j}}.
+  \label{eq:kdn2-chunk-scalar-reconstruction}
+\end{equation}
+Every gauge-equivalent solution is
+$p_{t,i}=p_{t,i}^{(0)}/\lambda_t$ and
+$b_{t,j}=\lambda_t b_{t,j}^{(0)}$.  For the determinant gauge in
+Equation~\eqref{eq:kdn2-gauge-fix}, choose
+\begin{equation}
+  \lambda_t
+  =\exp\!\left(-\frac{1}{V}\sum_{j=1}^{V}\log b_{t,j}^{(0)}\right).
+  \label{eq:kdn2-chunk-scalar-gauge}
+\end{equation}
+The gauge-free entry variances are
+\begin{equation}
+  p_{t,i}b_{t,j}
+  =\frac{(1+\tau^{(k)}_t\tau^{(v)}_t)\widehat p_{t,i}\widehat b_{t,j}}
+  {(1+\tau^{(v)}_t\zeta^{(k)}_{t,i})
+   (1+\tau^{(k)}_t\zeta^{(v)}_{t,j})}.
+  \label{eq:kdn2-chunk-scalar-entry-variance}
+\end{equation}
+The identity $D_{\ve{a}}(s)+sN_{\ve{a}}(s)=m$ verifies the fixed-point form of
+Equation~\eqref{eq:kdn2-chunk-factor-projection} by direct substitution.
+
+The scalar form also preserves a deliberately truncated projection.  Predictive initialization
+gives
+\begin{equation}
+  \tau_t^{(k,0)}=\frac{1}{K}\sum_{i=1}^{K}\zeta^{(k)}_{t,i},
+  \qquad
+  \tau_t^{(v,n)}=F_{\ve{\zeta}^{(v)}_t}(\tau_t^{(k,n)}),
+  \qquad
+  \tau_t^{(k,n+1)}=F_{\ve{\zeta}^{(k)}_t}(\tau_t^{(v,n)}).
+  \label{eq:kdn2-chunk-truncated-scalar-iteration}
+\end{equation}
+Here $\tau_t^{(k,n)}$ is the incoming $p$-summary used by the $b$ update in sweep $n$, whereas
+$\tau_t^{(k,n+1)}$ is the outgoing $p$-summary.  For $N_{\mathrm{proj}}\ge1$, the last outgoing
+summary need not be evaluated: use the lagged pair
+$(\tau_t^{(k,N_{\mathrm{proj}}-1)},\tau_t^{(v,N_{\mathrm{proj}}-1)})$ in
+Equation~\eqref{eq:kdn2-chunk-scalar-reconstruction}.  Indeed,
+$D_{\ve{\zeta}^{(v)}_t}(s)+sN_{\ve{\zeta}^{(v)}_t}(s)=V$ and
+$\tau^{(v)}=N_{\ve{\zeta}^{(v)}_t}(s)/D_{\ve{\zeta}^{(v)}_t}(s)$ imply
+$V/D_{\ve{\zeta}^{(v)}_t}(s)=1+s\tau^{(v)}$, precisely the reconstruction prefactor.  The result
+is therefore the same posterior covariance, up to gauge, as $N_{\mathrm{proj}}$ complete
+$b$-then-$p$ sweeps, not a new approximation.  The case $N_{\mathrm{proj}}=0$ simply returns the
+predictive factors.
+
+On a GPU, $\ve{\zeta}^{(k)}_t$ and $\ve{\zeta}^{(v)}_t$ can remain on chip while each scalar
+iteration performs one reduction along each axis.  The vectors $\ve{p}_t$ and $\ve{b}_t$ are
+reconstructed and gauge-normalized only once per token.  A persistent block for each independent
+batch--head pair can fuse prediction, gain emission, scalar projection, reconstruction, and gauge
+normalization.  For a converged root, implicit differentiation can avoid saving or unrolling the
+root iterations; a fixed truncated solver should instead be differentiated through to preserve
+its specified recurrence.  These changes can reduce synchronization and do reduce factor-vector
+traffic inside a token, but they do not remove the causal dependence between tokens.
+
+\paragraph{Why Stage 1 is not an associative scan.}
+The map
+\begin{equation}
+  (\ve{P}_{t-1},\ve{B}_{t-1})
+  \longmapsto
+  (\ve{P}_t,\ve{B}_t)
+  \label{eq:kdn2-chunk-factor-map}
+\end{equation}
+contains a joint nonlinear matrix-scaling solve whose summaries depend on both candidate factors.
+Unlike the $2\times2$ M\"obius matrices of the one-axis recurrence, composing token maps does not
+produce another token-local map in the same $O(K+V)$-parameter family.  Stage~1 chunks must
+therefore be traversed in causal order; chunking provides tiling and checkpointing, not time
+parallelism.
+
+\subsection{Stage 2: conditional two-key mean recurrence}
+\label{app:kdn2-conditional-mean}
+
+Once Stage~1 has produced $\ve{g}_t$ and $\ve{\beta}_t$, the memory recurrence is
+\begin{equation}
+  \ve{S}_t
+  =\ve{D}_t\ve{S}_{t-1}
+   +\ve{g}_t
+    \left[
+      \ve{\beta}_t\odot
+      \left(
+        \ve{v}_t-(\ve{D}_t\ve{S}_{t-1})^{\tr}\ve{k}_t
+      \right)
+    \right]^{\tr}.
+  \label{eq:kdn2-chunk-original-mean}
+\end{equation}
+Consider one chunk of length $C$, relabel its tokens by $r=1,\ldots,C$, and let
+$\ve{S}^{\mathrm{in}}=\ve{S}_0$ denote its incoming physical memory.  Assume positive diagonal
+decays and define
+\begin{equation}
+  \ve{\Gamma}_r
+  =\ve{D}_r\ve{D}_{r-1}\cdots\ve{D}_1,
+  \qquad
+  \ve{\Gamma}_0=\ve{I}_K,
+  \qquad
+  \ve{S}_r=\ve{\Gamma}_r\ve{Y}_r.
+  \label{eq:kdn2-chunk-cumulative-decay}
+\end{equation}
+The decay-scaled read and base-write directions are
+\begin{equation}
+  \ve{k}^{+}_r=\ve{\Gamma}_r^{\tr}\ve{k}_r,
+  \qquad
+  \ve{g}^{-}_r=\ve{\Gamma}_r^{-1}\ve{g}_r.
+  \label{eq:kdn2-chunk-two-keys}
+\end{equation}
+Since $\ve{D}_r\ve{\Gamma}_{r-1}=\ve{\Gamma}_r$, multiplying
+Equation~\eqref{eq:kdn2-chunk-original-mean} by $\ve{\Gamma}_r^{-1}$ gives
+\begin{equation}
+  \ve{Y}_r
+  =\ve{Y}_{r-1}
+   +\ve{g}^{-}_r
+    \left[
+      \ve{\beta}_r\odot
+      \left(
+        \ve{v}_r-\ve{Y}_{r-1}^{\tr}\ve{k}^{+}_r
+      \right)
+    \right]^{\tr},
+  \qquad
+  \ve{Y}_0=\ve{S}^{\mathrm{in}}.
+  \label{eq:kdn2-chunk-normalized-mean}
+\end{equation}
+Thus normalized KDN-2 is a two-key delta rule: $\ve{k}^{+}_r$ reads, while
+$\beta_{r,j}\ve{g}^{-}_r$ writes value coordinate $j$.
+
+\subsection{Value-batched causal systems and compact-WY form}
+\label{app:kdn2-triangular-systems}
+
+Stack the scaled directions by row,
+\begin{equation}
+  [\ve{K}_{+}]_{r,:}=(\ve{k}^{+}_r)^{\tr},
+  \qquad
+  [\ve{G}_{-}]_{r,:}=(\ve{g}^{-}_r)^{\tr},
+  \qquad
+  \ve{L}
+  =\operatorname{tril}(\ve{K}_{+}\ve{G}_{-}^{\tr},-1).
+  \label{eq:kdn2-chunk-shared-interaction}
+\end{equation}
+The strictly lower interaction matrix $\ve{L}\in\R^{C\times C}$ is shared across value
+coordinates.  For column $j$, define
+\begin{equation}
+\begin{aligned}
+  \ve{v}_j
+  &=(v_{1,j},\ldots,v_{C,j})^{\tr},
+  &
+  \ve{\Lambda}_j
+  &=\diag(\beta_{1,j},\ldots,\beta_{C,j}),
+  \\
+  \varepsilon_{r,j}
+  &=v_{r,j}-(\ve{k}^{+}_r)^{\tr}\ve{y}_{r-1,j},
+  &
+  \ve{\xi}_j
+  &=\ve{\Lambda}_j\ve{\varepsilon}_j.
+\end{aligned}
+  \label{eq:kdn2-chunk-innovation-variables}
+\end{equation}
+Unrolling only writes from earlier positions gives
+\begin{equation}
+  \ve{\varepsilon}_j
+  =\ve{v}_j-\ve{K}_{+}\ve{s}^{\mathrm{in}}_j-\ve{L}\ve{\xi}_j,
+  \qquad
+  \ve{\xi}_j=\ve{\Lambda}_j\ve{\varepsilon}_j.
+  \label{eq:kdn2-chunk-causal-unrolling}
+\end{equation}
+Therefore the causal innovations are the unique solutions of either equivalent unit-lower system
+\begin{equation}
+\begin{aligned}
+  (\ve{I}_C+\ve{L}\ve{\Lambda}_j)\ve{\varepsilon}_j
+  &=\ve{v}_j-\ve{K}_{+}\ve{s}^{\mathrm{in}}_j,
+  \\
+  (\ve{I}_C+\ve{\Lambda}_j\ve{L})\ve{\xi}_j
+  &=\ve{\Lambda}_j
+    (\ve{v}_j-\ve{K}_{+}\ve{s}^{\mathrm{in}}_j).
+\end{aligned}
+  \label{eq:kdn2-chunk-triangular-systems}
+\end{equation}
+The first form remains well defined when some gains are zero.  Let
+$\ve{\Xi}=[\ve{\xi}_1,\ldots,\ve{\xi}_V]\in\R^{C\times V}$ and let
+$\ve{\xi}_r^{\tr}$ denote its $r$th row.  The value-batched forward substitution is
+\begin{equation}
+  \ve{\xi}_r
+  =\ve{\beta}_r\odot
+   \left[
+     \ve{v}_r
+     -(\ve{S}^{\mathrm{in}})^{\tr}\ve{k}^{+}_r
+     -\sum_{i<r}L_{ri}\ve{\xi}_i
+   \right].
+  \label{eq:kdn2-chunk-fused-substitution}
+\end{equation}
+The geometry $\ve{L}$ is shared, but its effective columns are scaled differently for every value
+coordinate.
+
+To expose the compact-WY factors, define
+\begin{equation}
+  \ve{A}_j
+  =(\ve{I}_C+\ve{L}\ve{\Lambda}_j)^{-1},
+  \qquad
+  \ve{\eta}_j=\ve{A}_j\ve{v}_j,
+  \qquad
+  \ve{W}_j=\ve{A}_j\ve{K}_{+}.
+  \label{eq:kdn2-chunk-wy-factors}
+\end{equation}
+The inverse denotes a unit-lower-triangular solve.  For the normalized rank-one transition
+\begin{equation}
+  \ve{E}_{r,j}
+  =\ve{I}_K
+   -\beta_{r,j}\ve{g}^{-}_r(\ve{k}^{+}_r)^{\tr},
+  \label{eq:kdn2-chunk-rank-one-transition}
+\end{equation}
+the compact-WY identity is
+\begin{equation}
+  \ve{E}_{C,j}\ve{E}_{C-1,j}\cdots\ve{E}_{1,j}
+  =\ve{I}_K-\ve{G}_{-}^{\tr}\ve{\Lambda}_j\ve{W}_j.
+  \label{eq:kdn2-chunk-compact-wy-identity}
+\end{equation}
+The unscaled innovations satisfy
+\begin{equation}
+  \ve{\varepsilon}_j
+  =\ve{\eta}_j-\ve{W}_j\ve{s}^{\mathrm{in}}_j,
+  \qquad
+  \ve{\xi}_j
+  =\ve{\Lambda}_j
+   (\ve{\eta}_j-\ve{W}_j\ve{s}^{\mathrm{in}}_j).
+  \label{eq:kdn2-chunk-wy-innovation}
+\end{equation}
+
+The innovations $\varepsilon_{r,j}$ are exactly the exclusive residuals $\delta_{t,j}$ in
+Equation~\eqref{eq:kdn2-key-statistics}.  Hence the predictive likelihood can be evaluated from
+$\ve{\varepsilon}$ and the variances $\ve{\Delta}$ emitted by Stage~1 without another recurrent
+read.
+
+\subsection{Parallel reads, chunk carry, and stable ratios}
+\label{app:kdn2-chunk-reads}
+
+For a post-write query $\ve{q}_r$, define
+\begin{equation}
+  [\ve{Q}_{+}]_{r,:}
+  =(\ve{\Gamma}_r^{\tr}\ve{q}_r)^{\tr},
+  \qquad
+  \ve{L}_{qg}
+  =\operatorname{tril}(\ve{Q}_{+}\ve{G}_{-}^{\tr}).
+  \label{eq:kdn2-chunk-query-interaction}
+\end{equation}
+The diagonal is retained because the current write is visible to the current query.  All outputs
+and the physical outgoing state are
+\begin{equation}
+\begin{aligned}
+  \ve{O}
+  &=\ve{Q}_{+}\ve{S}^{\mathrm{in}}+\ve{L}_{qg}\ve{\Xi},
+  \\
+  \ve{S}^{\mathrm{out}}
+  &=\ve{\Gamma}_C
+    \left(
+      \ve{S}^{\mathrm{in}}+\ve{G}_{-}^{\tr}\ve{\Xi}
+    \right).
+\end{aligned}
+  \label{eq:kdn2-chunk-outputs-state}
+\end{equation}
+A pre-write read replaces $\operatorname{tril}$ by its strictly lower part.
+
+The inverse cumulative decay in $\ve{g}^{-}_r$ need not be materialized.  Define the physical
+transition from immediately after token $i$ to token $r$ by
+\begin{equation}
+  \ve{\Phi}_{r\leftarrow i}
+  =
+  \begin{cases}
+    \ve{D}_r\ve{D}_{r-1}\cdots\ve{D}_{i+1}, & r>i,\\
+    \ve{I}_K, & r=i.
+  \end{cases}
+  \label{eq:kdn2-chunk-decay-ratio}
+\end{equation}
+Then all required interactions have the stable form
+\begin{equation}
+\begin{aligned}
+  L_{ri}
+  &=\ve{k}_r^{\tr}\ve{\Phi}_{r\leftarrow i}\ve{g}_i,
+  && i<r,
+  \\
+  (L_{qg})_{ri}
+  &=\ve{q}_r^{\tr}\ve{\Phi}_{r\leftarrow i}\ve{g}_i,
+  && i\le r,
+  \\
+  \ve{S}^{\mathrm{out}}
+  &=\ve{\Gamma}_C\ve{S}^{\mathrm{in}}
+    +\sum_{i=1}^{C}
+      \ve{\Phi}_{C\leftarrow i}\ve{g}_i\ve{\xi}_i^{\tr}.
+\end{aligned}
+  \label{eq:kdn2-chunk-stable-ratios}
+\end{equation}
+For positive diagonal decays, $\ve{\Phi}_{r\leftarrow i}$ should be formed from differences of
+cumulative log decays.  The decay applied to a write at token $i$ begins at token $i+1$;
+$\ve{D}_i$ acts before that write.
+
+Under a time-local gauge transformation
+\begin{equation}
+  \widehat{\ve{B}}_i\mapsto\lambda_i\widehat{\ve{B}}_i,
+  \qquad
+  \widehat{\ve{P}}_i\mapsto\widehat{\ve{P}}_i/\lambda_i,
+  \label{eq:kdn2-chunk-local-gauge}
+\end{equation}
+we have $\ve{g}_i\mapsto\ve{g}_i/\lambda_i$ and
+$\ve{\beta}_i\mapsto\lambda_i\ve{\beta}_i$.  Hence
+$L_{ri}\beta_{i,j}$, $\ve{g}_i\xi_{i,j}$, and all physical outputs in
+Equations~\eqref{eq:kdn2-chunk-triangular-systems}--\eqref{eq:kdn2-chunk-stable-ratios} are gauge
+invariant.
+
+\subsection{Two-stage schedule, cost, and exactness}
+\label{app:kdn2-chunk-schedule}
+
+The complete forward schedule is:
+\begin{enumerate}
+  \item \textbf{Coupled-factor stage.} Traverse tokens causally with
+    Equations~\eqref{eq:kdn2-chunk-factor-prediction}--\eqref{eq:kdn2-chunk-factor-emissions},
+    and evaluate the projection either by alternating
+    Equation~\eqref{eq:kdn2-chunk-factor-projection} or by the scalar form in
+    Equations~\eqref{eq:kdn2-chunk-scalar-root}--\eqref{eq:kdn2-chunk-truncated-scalar-iteration}.
+    Emit $\ve{g}_t$ and $\ve{\beta}_t$, optionally retain $\ve{\Delta}_t$ for the predictive
+    likelihood, and carry the projected factors.
+  \item \textbf{Conditional-mean stage.} For each memory chunk, form the two-key interactions in
+    Equation~\eqref{eq:kdn2-chunk-shared-interaction}, solve
+    Equation~\eqref{eq:kdn2-chunk-triangular-systems} batched over value coordinates, evaluate
+    Equation~\eqref{eq:kdn2-chunk-outputs-state}, and carry $\ve{S}^{\mathrm{out}}$ to the next
+    chunk.
+\end{enumerate}
+
+With $N_{\mathrm{proj}}$ reverse-KL sweeps per token, Stage~1 costs
+\begin{equation}
+  O\!\left(T(N_{\mathrm{proj}}+1)(K+V)\right)
+  \label{eq:kdn2-chunk-factor-cost}
+\end{equation}
+work and has sequential depth proportional to $T(N_{\mathrm{proj}}+1)$.  Storing the factored gain
+sequence costs $O(T(K+V))$; checkpointing may instead recompute it during backpropagation.
+The scalar evaluation has the same asymptotic reduction work, with $N_{\mathrm{proj}}$ scalar
+sweep steps but only $N_{\mathrm{proj}}-1$ required key-ratio updates, and reconstructs the factor
+vectors once per token.  For a converged solve, replace $N_{\mathrm{proj}}$ by the number
+$N_{\mathrm{root}}$ of safeguarded scalar root iterations.  In either case the token-to-token
+depth remains linear in $T$.
+
+For one Stage~2 chunk, constructing the shared interactions costs $O(C^2K)$, the value-batched
+triangular systems cost $O(C^2V)$, and multiplication by the carried memory costs $O(CKV)$.
+Across the sequence, the direct implementation costs
+\begin{equation}
+  O\!\left(TC(K+V)+TKV\right)
+  \label{eq:kdn2-chunk-mean-cost}
+\end{equation}
+with $O(KV+C^2+CV)$ working storage beyond inputs and outputs.  In the direct schedule, each
+chunk's $C$-row solve waits for $\ve{S}^{\mathrm{in}}$, so the per-trajectory critical path remains
+$\Theta(T)$, vectorized over values.  As in Appendix~\ref{app:value-wise-chunkwise}, precomputing
+distinct $\ve{W}_j$ factors moves those local solves off the critical path and leaves $T/C$ chunk
+carries, but costs $O(VC^2K)$ work and $O(VCK)$ storage per chunk.  If
+$\beta_{r,j}=\beta_r$ for every $j$, Stage~2 reduces to one shared DeltaNet/KDA triangular system
+with $V$ right-hand sides.  Tying gains within $G$ value groups requires $G$ systems and is exact
+only for the corresponding grouped uncertainty model.
+
+\paragraph{Exactness.}
+Assume positive diagonal decays and let Stage~1 use the same prediction, gauge, and reverse-KL
+solution as the sequential KDN-2 reference.  Covariance updates are independent of the realized
+observation, so Stage~1 may run ahead of the mean recurrence and emits the same $\ve{g}_t$ and
+$\ve{\beta}_t$ by causal induction.  For fixed gains,
+Equation~\eqref{eq:kdn2-chunk-normalized-mean} gives
+$\ve{y}_{r-1,j}=\ve{s}^{\mathrm{in}}_j+
+\sum_{i<r}\ve{g}^{-}_i\xi_{i,j}$.  Substitution into $\varepsilon_{r,j}$ yields the unit-lower
+system in Equation~\eqref{eq:kdn2-chunk-causal-unrolling}, whose unique solution equals the
+sequential innovations.  Substituting back gives the same prefix and outgoing states; applying
+the queries gives Equation~\eqref{eq:kdn2-chunk-outputs-state}.  Induction over chunk boundaries
+therefore proves equality of posterior means, predictive residuals, outputs, and boundary states.
+
+\end{document}

@@ -51,7 +51,7 @@ substitutes a token-wise isotropic surrogate for predictive covariance and omits
 Exact tracking, however, entails a dense,
 state-dependent Riccati recursion that is poorly suited to GPU-parallel linear-attention scans.
 To address this issue, we derive a \textit{Diagonal KDN} by projecting each one-step posterior onto the
-diagonal Gaussian family through online mean-field variational inference\htl{it seems to be different from what the implementation does since $\mu=128$}. The resulting
+diagonal Gaussian family through online mean-field variational inference. The resulting
 per-channel covariance recurrences are M\"obius maps, enabling an associative scan with
 $O(d_k)$ auxiliary state and logarithmic parallel depth. Across controlled pretraining at
 750M and 1.3B parameters, KDN variants consistently improve perplexity and mean downstream
@@ -92,7 +92,7 @@ large residual should
 revise a tentative association or be discounted because the existing association has been
 repeatedly confirmed.
 
-We argue that uncertainty is the missing state variable. The recurrent memory can be viewed as an
+We argue that uncertainty is the missing state variable in this model. The recurrent memory can be viewed as an
 estimate of a latent, non-stationary key--value map. Each token supplies a noisy observation of
 that map at one key, while the learned transition describes how the map persists or drifts between
 observations. This is precisely an online filtering problem, where, under linear--Gaussian
@@ -641,6 +641,8 @@ Under the diagonal predictive state, the one-step model remains columnwise Gauss
 The exact one-step posterior is
 $p(\widetilde{\ve{S}}_t\mid\ve{v}_t,\mathcal{F}_{t-1},\ve{k}_t,r_t)
 =\N_{\mathrm{col}}(\ve{S}_t^\star,\ve{P}_t^\star)$.
+Here $\ve{S}_t^\star$ and $\ve{P}_t^\star$ are the exact Bayes-optimal one-step posterior mean
+and covariance given by Proposition~\ref{prop:kalman-associative-memory}.
 Its columns remain conditionally independent, but their shared
 key-space covariance is generally dense by \eqref{eq:diag-exact-info-update}. We instead project
 this posterior after each token onto the diagonal mean-field family
@@ -749,7 +751,7 @@ $d_k$ scalars and replaces the sequential Riccati recursion with an associative 
 logarithmic parallel depth.
 
 \paragraph{Information scaling.}
-Parallelizability is not free. The online variational approximation discards cross-channel
+The online variational approximation discards cross-channel
 correlations when it projects each dense posterior back to a product Gaussian, inheriting the
 familiar coordinatewise overconfidence of reverse-KL mean field~\citep{blei2017variational}.
 Those correlations record that a \emph{joint} key direction has already been observed. Their loss
@@ -791,7 +793,6 @@ empirical analyses.
 
 Combining this calibrated covariance scan with the Kalman residual write yields the Diagonal
 Kalman Delta Network, summarized in Proposition~\ref{prop:kalman-linear-attention}.
-\htl{$\hat{p}_t$ has been defined twice in both equ39 and 41}
 \refstepcounter{definition}\label{prop:kalman-linear-attention}
 \begin{tcolorbox}[
   title={Proposition~\thedefinition: Diagonal Kalman Delta Network},
@@ -861,17 +862,12 @@ The covariance states are computed by the per-channel M\"obius scan
   \begin{bmatrix}1\\ 1\end{bmatrix}.
   \label{eq:kla-box-mobius}
 \end{equation}
-The adaptive gain at token $t$ uses the exclusive prefix covariance $\ve{p}_{t-1}$:
+The adaptive gain at token $t$ uses the pre-write predictive covariance $\widehat{\ve{p}}_t$:
 \begin{equation}
-\begin{aligned}
-  \widehat{\ve{p}}_t
-  &=\ve{\alpha}_t^2\odot\ve{p}_{t-1}+\ve{\omega}_t,
-  &
   \ve{\kappa}_t
-  &=
+  =
   \frac{\widehat{\ve{p}}_t\odot\ve{k}_t}
   {r_t+\sum_i \widehat{\ve{p}}_{t,i}\ve{k}_{t,i}^2}.
-\end{aligned}
 \label{eq:kla-box-gain}
 \end{equation}
 With $\ve{\kappa}_t$ available before the memory scan, the memory update is an affine scan:
@@ -926,19 +922,206 @@ prediction, uncertainty-derived gain, and memory update are
 \end{aligned}
   \label{eq:main-iso-kdn-gain}
 \end{equation}
-\htl{bt is not introduced anywhere except in the appendix}
 This retains the scalar-gated form used by DeltaNet, Gated DeltaNet, and KDA, but $\beta_t$ now
 depends on the transition, process uncertainty, and evidence accumulated from previous tokens
 through $\widehat b_t$. It therefore replaces the independent token gate
 $\sigma(\ve{w}_{\beta}^{\tr}\ve{x}_t+b_{\beta})$ with an uncertainty-derived write strength.
 Appendix~\ref{app:iso-kla} derives the two isotropic projections and the posterior update.
 
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{@{}l >{\columncolor{gray!10}}c >{\columncolor{gray!10}}c cccccc >{\columncolor{gray!10}}c@{}}
+\toprule
+& \multicolumn{2}{>{\columncolor{gray!10}}c}{Perplexity $\downarrow$}
+& \multicolumn{6}{c}{Zero-shot accuracy (\%) $\uparrow$} & \cellcolor{gray!10}\\
+\cmidrule(lr){2-3}\cmidrule(lr){4-9}
+Model & Wiki. & LMB. & LMB. & PIQA & Hella. & Wino. & ARC-e & ARC-c & Avg. \\
+\midrule
+\multicolumn{10}{@{}l}{\emph{Recurrent-only, 750M parameters, 50B tokens}}\\
+DeltaNet~\citeyearpar{yang2024parallelizing}         & 19.78 & 20.17 & 38.77 & 69.10 & 48.04 & 51.93 & 65.49 & 33.28 & 51.10 \\
+Gated DeltaNet~\citeyearpar{yang2024gdn}             & 19.50 & 18.08 & 40.23 & 69.91 & 50.22 & 55.64 & \textbf{68.10} & 32.17 & 52.71 \\
+KDA~\citeyearpar{kimiteam2025kimilinear}             & 18.85 & 15.06 & \underline{44.34} & \textbf{70.95} & 51.23 & 54.93 & 67.72 & 34.04 & 53.87 \\
+Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3}  & 19.68 & 17.61 & 40.33 & \underline{70.57} & 50.87 & 53.83 & 67.51 & 34.47 & 52.93 \\
+Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3}  & 18.99 & 15.67 & 43.24 & 69.86 & \textbf{52.24} & \underline{56.75} & 67.72 & \textbf{36.52} & 54.39 \\
+GDN-2~\citeyearpar{hatamizadeh2026gdn2}           & 21.20 & 17.88 & 41.18 & 70.08 & 46.90 & 54.54 & 64.27 & 31.74 & 51.45 \\
+\rowcolor{blue!8}
+Isotropic KDN   & \textbf{18.42} & \underline{14.68} & 44.05 & \textbf{70.95} & \underline{52.12} & 56.12 & \underline{68.01} & 35.24 & \underline{54.41} \\
+\rowcolor{blue!8}
+Diagonal KDN    & \underline{18.64} & \textbf{14.15} & \textbf{45.66} & \textbf{70.95} & 51.91 & \textbf{57.70} & \textbf{68.10} & \underline{35.49} & \textbf{54.97} \\
+\midrule
+\multicolumn{10}{@{}l}{\emph{Recurrent-only, 1.3B parameters, 100B tokens}}\\
+KDA~\citeyearpar{kimiteam2025kimilinear}             & 15.40 & 10.09 & \underline{51.15} & \underline{74.16} & 60.61 & 60.54 & 73.48 & \textbf{41.72} & 60.28 \\
+Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3}  & 15.94 & 11.98 & 47.45 & 73.61 & 59.39 & 57.77 & 72.64 & 38.31 & 58.20 \\
+Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3}  & 15.63 & 10.49 & 50.20 & 73.94 & \textbf{60.79} & 59.19 & \underline{73.91} & 41.04 & 59.85 \\
+GDN-2~\citeyearpar{hatamizadeh2026gdn2}           & 16.15 & 11.29 & 49.45 & 72.63 & 57.80 & 59.19 & 72.73 & 39.25 & 58.51 \\
+\rowcolor{blue!8}
+Isotropic KDN   & \underline{15.30} & \underline{9.98} & 50.96 & 73.23 & 60.23 & \textbf{61.33} & \textbf{74.71} & \underline{41.64} & \underline{60.35} \\
+\rowcolor{blue!8}
+Diagonal KDN    & \textbf{15.04} & \textbf{9.75} & \textbf{51.87} & \textbf{74.21} & \underline{60.68} & \underline{60.62} & 73.70 & \underline{41.64} & \textbf{60.45} \\
+\midrule
+\multicolumn{10}{@{}l}{\emph{Hybrid and attention-only, 1.3B parameters, 100B tokens}}\\
+Transformer~\citeyearpar{vaswani2017attention} (2K SWA)       & 16.67 & 13.10 & 48.38 & 71.22 & 56.62 & 56.75 & 68.56 & 35.84 & 56.23 \\
+KDA~\citeyearpar{kimiteam2025kimilinear} $+$ SWA           & \underline{15.08} & \underline{10.81} & \underline{51.23} & 72.14 & \underline{60.33} & \textbf{61.64} & 72.77 & \underline{41.55} & \underline{59.94} \\
+Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3} $+$ SWA & 15.87 & 11.38 & 50.46 & 72.80 & 59.59 & 59.27 & 72.73 & 40.10 & 59.16 \\
+Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3} $+$ SWA & 15.33 & 10.96 & 50.44 & 72.69 & 60.00 & 58.56 & \underline{72.81} & 41.21 & 59.28 \\
+GDN-2~\citeyearpar{hatamizadeh2026gdn2} $+$ SWA         & 16.06 & 11.12 & 49.54 & 71.82 & 58.44 & 57.77 & 71.42 & 37.63 & 57.77 \\
+\rowcolor{blue!8}
+Isotropic KDN $+$ SWA & \textbf{14.98} & 10.90 & 50.49 & \underline{72.85} & 60.31 & 59.12 & 72.64 & 40.87 & 59.38 \\
+\rowcolor{blue!8}
+Diagonal KDN $+$ SWA  & 15.10 & \textbf{10.41} & \textbf{51.99} & \textbf{72.96} & \textbf{60.57} & \underline{60.38} & \textbf{72.98} & \textbf{41.81} & \textbf{60.11} \\
+\bottomrule
+\end{tabular}
+\caption{Language modeling and zero-shot commonsense reasoning. Best per column within each block in \textbf{bold}, second best
+\underline{underlined}; light-blue rows denote our KDN variants.}
+\label{tab:pretrain-lm}
+\end{table}
+
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}l cccc cccc ccc ccc@{}}
+\toprule
+& \multicolumn{4}{c}{S-NIAH-1} & \multicolumn{4}{c}{S-NIAH-2} & \multicolumn{3}{c}{S-NIAH-3} & \multicolumn{3}{c}{MK-NIAH-1} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-9}\cmidrule(lr){10-12}\cmidrule(lr){13-15}
+Model & 1K & 2K & 4K & 8K & 1K & 2K & 4K & 8K & 1K & 2K & 4K & 1K & 2K & 4K \\
+\midrule
+\multicolumn{15}{@{}l}{\emph{Recurrent-only, 750M parameters, 50B tokens}}\\
+DeltaNet~\citeyearpar{yang2024parallelizing}       & \textbf{100.0} & \textbf{100.0} & \underline{99.6} & \underline{99.6} & 97.0 & 87.0 & 45.4 & 15.4 & 72.0 & 49.2 & 17.6 & 27.2 & 27.4 & 22.6 \\
+Gated DeltaNet~\citeyearpar{yang2024gdn}           & \textbf{100.0} & \underline{99.8} & 99.2 & 87.8 & 93.2 & 56.2 & 27.2 & 13.8 & 71.8 & 23.8 & 6.6 & 29.8 & 25.4 & 20.2 \\
+KDA~\citeyearpar{kimiteam2025kimilinear}           & \textbf{100.0} & \underline{99.8} & 99.2 & 82.6 & 96.4 & 89.8 & \underline{63.2} & \underline{26.0} & 68.8 & 43.6 & 13.6 & 32.6 & 29.8 & 24.2 \\
+Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3} & \textbf{100.0} & 98.8 & 73.8 & 33.2 & 95.4 & 82.2 & 43.0 & 17.6 & 65.6 & 26.4 & 9.0 & \underline{42.4} & 27.6 & 19.6 \\
+Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3} & \textbf{100.0} & 99.0 & 79.2 & 39.6 & \underline{98.4} & \textbf{92.6} & 57.6 & 21.6 & 77.4 & 49.0 & 14.2 & \textbf{50.2} & \underline{36.0} & \underline{25.0} \\
+GDN-2~\citeyearpar{hatamizadeh2026gdn2}         & \textbf{100.0} & \underline{99.8} & 90.2 & 47.2 & 95.0 & 74.6 & 36.0 & 12.6 & 64.6 & 31.0 & 9.2 & 27.8 & 25.6 & 22.0 \\
+\rowcolor{blue!8}
+Isotropic KDN & \textbf{100.0} & \textbf{100.0} & 98.2 & 89.4 & 96.0 & 86.0 & 47.8 & 16.2 & \underline{80.4} & \underline{58.4} & \underline{22.6} & 30.4 & 25.4 & 22.2 \\
+\rowcolor{blue!8}
+Diagonal KDN  & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{98.6} & \underline{91.4} & \textbf{71.2} & \textbf{29.0} & \textbf{84.2} & \textbf{71.0} & \textbf{32.2} & 41.0 & \textbf{36.4} & \textbf{29.6} \\
+\midrule
+\multicolumn{15}{@{}l}{\emph{Recurrent-only, 1.3B parameters, 100B tokens}}\\
+KDA~\citeyearpar{kimiteam2025kimilinear}           & \underline{99.8} & 99.2 & 66.6 & 30.2 & 98.0 & 95.0 & 62.2 & 23.6 & \underline{92.6} & \underline{77.2} & \underline{43.2} & 47.4 & 38.8 & 26.6 \\
+Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3} & \textbf{100.0} & \underline{99.8} & 98.2 & 62.6 & \underline{98.6} & 93.6 & 62.6 & 20.6 & 69.0 & 50.2 & 16.6 & 46.6 & 38.4 & 27.2 \\
+Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3} & \underline{99.8} & 99.4 & 75.2 & 15.4 & \textbf{99.6} & \textbf{96.0} & 64.8 & 15.4 & 85.8 & 63.6 & 29.8 & \underline{51.6} & 42.4 & 30.4 \\
+GDN-2~\citeyearpar{hatamizadeh2026gdn2}         & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{99.8} & \underline{98.6} & 92.4 & 67.4 & \textbf{28.0} & 88.0 & 64.4 & 29.4 & 50.6 & \underline{44.0} & \underline{31.4} \\
+\rowcolor{blue!8}
+Isotropic KDN & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \underline{94.6} & 98.4 & 91.8 & \underline{68.4} & 24.2 & 86.8 & 67.6 & 34.6 & 41.6 & 29.8 & 23.4 \\
+\rowcolor{blue!8}
+Diagonal KDN  & \textbf{100.0} & \textbf{100.0} & \underline{99.8} & \textbf{99.8} & \underline{98.6} & \underline{95.6} & \textbf{74.6} & \underline{25.8} & \textbf{96.4} & \textbf{88.6} & \textbf{48.6} & \textbf{62.2} & \textbf{47.4} & \textbf{33.8} \\
+\midrule
+\multicolumn{15}{@{}l}{\emph{Hybrid and attention-only, 1.3B parameters, 100B tokens}}\\
+Transformer~\citeyearpar{vaswani2017attention} (2K SWA)
+  & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & 22.6
+  & \textbf{100.0} & \textbf{100.0} & \textbf{53.4} & 19.8
+  & \underline{99.2} & 94.6 & 35.4
+  & 76.6 & 79.4 & 45.4 \\
+KDA~\citeyearpar{kimiteam2025kimilinear} $+$ SWA
+  & \textbf{100.0} & 87.8 & 47.4 & 21.2
+  & \underline{99.8} & \textbf{100.0} & \textbf{53.4} & 25.4
+  & \underline{99.2} & 97.0 & 48.6
+  & 86.0 & 83.0 & 44.2 \\
+Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
+  & \underline{99.4} & 73.8 & 29.4 & 15.0
+  & 99.6 & 99.2 & 52.2 & 21.8
+  & 96.4 & 86.2 & 43.4
+  & 74.8 & 76.0 & 39.0 \\
+Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
+  & \textbf{100.0} & \underline{99.8} & \underline{52.0} & 27.2
+  & \underline{99.8} & \underline{99.8} & \underline{53.2} & 25.6
+  & 97.8 & 95.8 & \underline{50.8}
+  & \underline{92.8} & \underline{89.6} & 45.8 \\
+GDN-2~\citeyearpar{hatamizadeh2026gdn2} $+$ SWA
+  & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & \textbf{28.4}
+  & \textbf{100.0} & \underline{99.8} & \textbf{53.4} & \textbf{27.6}
+  & 83.0 & 67.8 & 25.2
+  & 84.0 & 76.8 & 45.6 \\
+\rowcolor{blue!8}
+Isotropic KDN $+$ SWA
+  & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & \textbf{28.4}
+  & \textbf{100.0} & \textbf{100.0} & \textbf{53.4} & \textbf{27.6}
+  & \textbf{99.8} & \underline{98.4} & 44.6
+  & 85.4 & 89.0 & \textbf{49.8} \\
+\rowcolor{blue!8}
+Diagonal KDN $+$ SWA
+  & \textbf{100.0} & 98.6 & 51.6 & \underline{28.0}
+  & \textbf{100.0} & 98.4 & \textbf{53.4} & \underline{26.0}
+  & \textbf{99.8} & \textbf{99.2} & \textbf{53.0}
+  & \textbf{95.6} & \textbf{90.0} & \underline{47.8} \\
+\bottomrule
+\end{tabular}%
+}
+\caption{In-context retrieval accuracy (\%) on RULER single- and multi-key needle-in-a-haystack
+tasks~\citep{hsieh2024ruler}. Best per column within each block in \textbf{bold}, second best
+\underline{underlined}.}
+\label{tab:pretrain-niah}
+\end{table}
+
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4.5pt}
+\begin{tabular}{@{}l cccccc >{\columncolor{gray!10}}c@{}}
+\toprule
+Model & SWDE & SQuAD & FDA & TriviaQA & NQ & DROP & Avg. \\
+\midrule
+\multicolumn{8}{@{}l}{\emph{Recurrent 1.3B / 100B}}\\
+Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3}
+  & 26.34 & 36.35 & 22.52 & 60.90 & 21.98 & 20.89 & 31.50 \\
+Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3}
+  & 24.93 & 36.71 & 25.25 & 61.02 & 23.50 & 21.99 & 32.23 \\
+KDA~\citeyearpar{kimiteam2025kimilinear}
+  & 28.77 & \textbf{38.70} & \underline{27.97} & 61.97
+  & \textbf{24.11} & 21.03 & \underline{33.76} \\
+GDN-2~\citeyearpar{hatamizadeh2026gdn2}
+  & 29.90 & 35.64 & 21.16 & 61.49 & 23.34 & 20.99 & 32.09 \\
+\rowcolor{blue!8}
+Isotropic KDN
+  & \textbf{33.08} & 36.71 & 22.98 & \underline{62.09}
+  & 22.14 & \underline{23.38} & 33.40 \\
+\rowcolor{blue!8}
+Diagonal KDN
+  & \underline{30.18} & \underline{38.09} & \textbf{30.61}
+  & \textbf{62.56} & \underline{23.63} & \textbf{24.10}
+  & \textbf{34.86} \\
+\midrule
+\multicolumn{8}{@{}l}{\emph{Hybrid 1.3B / 100B}}\\
+Transformer~\citeyearpar{vaswani2017attention} (2K SWA)
+  & 36.08 & 42.43 & 52.68 & 62.09 & 25.40 & 21.47 & 40.02 \\
+Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
+  & 36.27 & 43.37 & 58.95 & 64.57 & 26.70 & 22.47 & 42.06 \\
+Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
+  & 42.55 & 43.33 & \underline{64.85} & \textbf{65.88}
+  & \textbf{28.44} & \underline{23.53} & 44.76 \\
+KDA~\citeyearpar{kimiteam2025kimilinear} $+$ SWA
+  & \underline{51.08} & 43.10 & 57.86 & 65.17
+  & \underline{28.22} & \textbf{25.11} & 45.09 \\
+GDN-2~\citeyearpar{hatamizadeh2026gdn2} $+$ SWA
+  & 47.80 & 42.73 & 63.22 & 62.38 & 26.10 & 23.19 & 44.24 \\
+\rowcolor{blue!8}
+Isotropic KDN $+$ SWA
+  & \textbf{53.98} & \textbf{43.60} & 63.12 & \underline{65.52}
+  & 26.89 & 22.52 & \textbf{45.94} \\
+\rowcolor{blue!8}
+Diagonal KDN $+$ SWA
+  & 48.08 & \underline{43.50} & \textbf{66.58} & 64.93
+  & 27.72 & 22.52 & \underline{45.55} \\
+\bottomrule
+\end{tabular}
+\caption{Zero-shot accuracy (\%) on real-world retrieval tasks with inputs limited to $2$K tokens.
+\emph{Avg.} is the unweighted six-task mean. Best per column within each block in \textbf{bold},
+second best \underline{underlined}.}
+\label{tab:real-world-retrieval}
+\end{table}
+
 
 % =============================================================================
 \section{Experiments}
 \label{sec:experiments}
 
-We compare token mixers under controlled pretraining at $750$M/$50$B and $1.3$B/$100$B. Within
+To evaluate the effectiveness of our proposed KDN mixers, we reproduce the $1.3$B/$100$B training setup of
+GDN-2~\citep{hatamizadeh2026gdn2} and extend the same controlled protocol to $750$M. Within
 each comparison, we hold the data, surrounding backbone, optimization recipe, and evaluation
 protocol fixed while matching model capacity.
 
@@ -969,22 +1152,25 @@ SWDE, SQuAD, FDA, TriviaQA, Natural Questions, and DROP.
   \label{fig:kdn-layer-architecture}
   \vspace{-1.0\baselineskip}
 \end{wrapfigure}
+To isolate mixer effectiveness across recurrent-only and hybrid settings, we use the same
+recurrent-only and hybrid configurations as GDN-2~\citep{hatamizadeh2026gdn2}.
+This controlled choice might not be optimal; determining the best recurrent-to-attention layer
+ratio requires a dedicated ablation, as performed for KDA in Kimi
+Linear~\citep{kimiteam2025kimilinear}.
 Figure~\ref{fig:kdn-layer-architecture} summarizes the recurrent-only and hybrid designs. All
 recurrent-only models use the same backbone, with feed-forward widths adjusted to match non-embedding
 parameter counts within $0.03\%$. The $750$M
-and $1.3$B backbones use 16 and 18 layers with $d_{\mathrm{model}}=2048$ and $2304$, respectively;
-their KDN mixers use 16 and 18 recurrent heads of dimension $128$. The Mamba-3 baselines are also
-configured to match the KDNs' total recurrent-state size at both scales. To isolate mixer effectiveness
-across recurrent-only and hybrid settings, we keep the hybrid architecture fixed to the GDN-2
-design~\citep{hatamizadeh2026gdn2}. At $1.3$B/$100$B, it alternates nine recurrent mixer layers with
-nine sliding-window-attention (SWA) layers using a $2$K window. This controlled choice might not be
-optimal; determining the best recurrent-to-attention layer ratio requires a dedicated
-ablation, as performed for KDA in Kimi Linear~\citep{kimiteam2025kimilinear}.
+and $1.3$B backbones use 16 and 18 layers with $d_{\mathrm{model}}=2048$ and $2304$, respectively,
+corresponding to KDN mixers with 16 and 18 recurrent heads of dimension $128$. The Mamba-3 baselines are also
+configured to match the KDNs' total recurrent-state size at both scales. At $1.3$B/$100$B, the
+hybrid architecture alternates nine recurrent mixer layers with nine sliding-window-attention
+(SWA) layers using a $2$K window.
 
 \paragraph{Baselines.}
-We compare with the SISO and MIMO variants of Mamba-3~\citep{lahoti2026mamba3},
-KDA~\citep{kimiteam2025kimilinear}, and GDN-2~\citep{hatamizadeh2026gdn2}. Our models are the Isotropic and Diagonal Kalman
-Delta Networks developed above. The hybrid block also includes an attention-only Transformer with a
+We compare with DeltaNet~\citep{yang2024parallelizing}, Gated DeltaNet~\citep{yang2024gdn},
+KDA~\citep{kimiteam2025kimilinear}, the SISO and MIMO variants of
+Mamba-3~\citep{lahoti2026mamba3}, and GDN-2~\citep{hatamizadeh2026gdn2}. Our models are the Isotropic
+and Diagonal KDN variants developed above. The hybrid block also includes an attention-only Transformer with a
 $2$K sliding window.
 
 \paragraph{Implementation details.}
@@ -995,6 +1181,7 @@ the two scales). All runs use a global
 batch of $0.5$M tokens, a sequence length of $4$K, and the same data seed within each comparison.
 We set $r_{\min}=0.01$ and initialize the process noise isotropically by setting
 $\ve{W}_{\omega}=\ve{0}$ when training Diagonal KDN.
+Throughout the main experiments, Diagonal KDN uses the fixed information scale $\mu=d_k$.
 % =============================================================================
 \subsection{Experimental Results}
 \label{sec:experimental-results}
@@ -1004,206 +1191,20 @@ Table~\ref{tab:pretrain-lm} shows that, in the state-matched recurrent-only comp
 variants achieve the two highest average accuracies at both scales while also improving perplexity
 over all baselines. Diagonal KDN ranks first at both scales, with Isotropic KDN close behind. In the
 hybrid setting, Diagonal KDN $+$ SWA again has the highest average, ahead of KDA $+$ SWA, and every
-recurrent--attention hybrid outperforms the attention-only Transformer. The small gaps among the
-leading methods are within evaluation noise; the robust signal is the benefit of Kalman gating
-rather than a resolved advantage for diagonal over isotropic uncertainty.
-
-\begin{table}[t]
-\centering
-\small
-\setlength{\tabcolsep}{4.5pt}
-\begin{tabular}{@{}l >{\columncolor{gray!10}}c >{\columncolor{gray!10}}c cccccc >{\columncolor{gray!10}}c@{}}
-\toprule
-& \multicolumn{2}{>{\columncolor{gray!10}}c}{Perplexity $\downarrow$}
-& \multicolumn{6}{c}{Zero-shot accuracy (\%) $\uparrow$} & \cellcolor{gray!10}\\
-\cmidrule(lr){2-3}\cmidrule(lr){4-9}
-Model & Wiki. & LMB. & LMB. & PIQA & Hella. & Wino. & ARC-e & ARC-c & Avg. \\
-\midrule
-\multicolumn{10}{@{}l}{\emph{Recurrent-only, 750M parameters, 50B tokens}}\\
-Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3}  & 19.68 & 17.61 & 40.33 & \underline{70.57} & 50.87 & 53.83 & 67.51 & 34.47 & 52.93 \\
-Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3}  & 18.99 & 15.67 & 43.24 & 69.86 & \textbf{52.24} & \underline{56.75} & 67.72 & \textbf{36.52} & 54.39 \\
-KDA~\citeyearpar{kimiteam2025kimilinear}             & 18.85 & 15.06 & \underline{44.34} & \textbf{70.95} & 51.23 & 54.93 & 67.72 & 34.04 & 53.87 \\
-GDN-2~\citeyearpar{hatamizadeh2026gdn2}           & 21.20 & 17.88 & 41.18 & 70.08 & 46.90 & 54.54 & 64.27 & 31.74 & 51.45 \\
-\rowcolor{blue!8}
-Isotropic KDN (ours)   & \textbf{18.42} & \underline{14.68} & 44.05 & \textbf{70.95} & \underline{52.12} & 56.12 & \underline{68.01} & 35.24 & \underline{54.41} \\
-\rowcolor{blue!8}
-Diagonal KDN (ours)    & \underline{18.64} & \textbf{14.15} & \textbf{45.66} & \textbf{70.95} & 51.91 & \textbf{57.70} & \textbf{68.10} & \underline{35.49} & \textbf{54.97} \\
-\midrule
-\multicolumn{10}{@{}l}{\emph{Recurrent-only, 1.3B parameters, 100B tokens}}\\
-Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3}  & 15.94 & 11.98 & 47.45 & 73.61 & 59.39 & 57.77 & 72.64 & 38.31 & 58.20 \\
-Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3}  & 15.63 & 10.49 & 50.20 & 73.94 & \textbf{60.79} & 59.19 & \underline{73.91} & 41.04 & 59.85 \\
-KDA~\citeyearpar{kimiteam2025kimilinear}             & 15.40 & 10.09 & \underline{51.15} & \underline{74.16} & 60.61 & 60.54 & 73.48 & \textbf{41.72} & 60.28 \\
-GDN-2~\citeyearpar{hatamizadeh2026gdn2}           & 16.15 & 11.29 & 49.45 & 72.63 & 57.80 & 59.19 & 72.73 & 39.25 & 58.51 \\
-\rowcolor{blue!8}
-Isotropic KDN (ours)   & \underline{15.30} & \underline{9.98} & 50.96 & 73.23 & 60.23 & \textbf{61.33} & \textbf{74.71} & \underline{41.64} & \underline{60.35} \\
-\rowcolor{blue!8}
-Diagonal KDN (ours)    & \textbf{15.04} & \textbf{9.75} & \textbf{51.87} & \textbf{74.21} & \underline{60.68} & \underline{60.62} & 73.70 & \underline{41.64} & \textbf{60.45} \\
-\midrule
-\multicolumn{10}{@{}l}{\emph{Hybrid and attention-only, 1.3B parameters, 100B tokens}}\\
-Transformer~\citeyearpar{vaswani2017attention} (2K SWA)       & 16.67 & 13.10 & 48.38 & 71.22 & 56.62 & 56.75 & 68.56 & 35.84 & 56.23 \\
-Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3} $+$ SWA & 15.87 & 11.38 & 50.46 & 72.80 & 59.59 & 59.27 & 72.73 & 40.10 & 59.16 \\
-Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3} $+$ SWA & 15.33 & 10.96 & 50.44 & 72.69 & 60.00 & 58.56 & \underline{72.81} & 41.21 & 59.28 \\
-KDA~\citeyearpar{kimiteam2025kimilinear} $+$ SWA           & \underline{15.08} & \underline{10.81} & \underline{51.23} & 72.14 & \underline{60.33} & \textbf{61.64} & 72.77 & \underline{41.55} & \underline{59.94} \\
-GDN-2~\citeyearpar{hatamizadeh2026gdn2} $+$ SWA         & 16.06 & 11.12 & 49.54 & 71.82 & 58.44 & 57.77 & 71.42 & 37.63 & 57.77 \\
-\rowcolor{blue!8}
-Isotropic KDN (ours) $+$ SWA & \textbf{14.98} & 10.90 & 50.49 & \underline{72.85} & 60.31 & 59.12 & 72.64 & 40.87 & 59.38 \\
-\rowcolor{blue!8}
-Diagonal KDN (ours) $+$ SWA  & 15.10 & \textbf{10.41} & \textbf{51.99} & \textbf{72.96} & \textbf{60.57} & \underline{60.38} & \textbf{72.98} & \textbf{41.81} & \textbf{60.11} \\
-\bottomrule
-\end{tabular}
-\caption{Language modeling and zero-shot commonsense reasoning. Best per column within each block in \textbf{bold}, second best
-\underline{underlined}; light-blue rows denote our KDN variants.}
-\label{tab:pretrain-lm}
-\end{table}
+recurrent--attention hybrid outperforms the attention-only Transformer, consistent with prior
+observations in Mamba-3 and
+GDN-2~\citep{lahoti2026mamba3,hatamizadeh2026gdn2}.
 
 \paragraph{In-context retrieval.}
 Table~\ref{tab:pretrain-niah} shows that Diagonal KDN achieves the highest aggregate among
 recurrent-only models at both scales, with particularly strong S-NIAH-3 and multi-key retrieval.
 This is consistent with channel-wise uncertainty protecting stored associations under interference.
-Diagonal KDN $+$ SWA also leads the hybrid block, narrowly ahead of Mamba-3 (MIMO) $+$ SWA and
-Isotropic KDN $+$ SWA. Because these results use single checkpoints and one randomized-window seed,
-small differences should be viewed as directional.
-
-\begin{table}[t]
-\centering
-\small
-\setlength{\tabcolsep}{3pt}
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{@{}l cccc cccc ccc ccc@{}}
-\toprule
-& \multicolumn{4}{c}{S-NIAH-1} & \multicolumn{4}{c}{S-NIAH-2} & \multicolumn{3}{c}{S-NIAH-3} & \multicolumn{3}{c}{MK-NIAH-1} \\
-\cmidrule(lr){2-5}\cmidrule(lr){6-9}\cmidrule(lr){10-12}\cmidrule(lr){13-15}
-Model & 1K & 2K & 4K & 8K & 1K & 2K & 4K & 8K & 1K & 2K & 4K & 1K & 2K & 4K \\
-\midrule
-\multicolumn{15}{@{}l}{\emph{Recurrent-only, 750M parameters, 50B tokens}}\\
-Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3} & \textbf{100.0} & 98.8 & 73.8 & 33.2 & 95.4 & 82.2 & 43.0 & 17.6 & 65.6 & 26.4 & 9.0 & \underline{42.4} & 27.6 & 19.6 \\
-Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3} & \textbf{100.0} & 99.0 & 79.2 & 39.6 & \underline{98.4} & \textbf{92.6} & 57.6 & 21.6 & 77.4 & 49.0 & 14.2 & \textbf{50.2} & \underline{36.0} & \underline{25.0} \\
-KDA~\citeyearpar{kimiteam2025kimilinear}           & \textbf{100.0} & \underline{99.8} & \underline{99.2} & 82.6 & 96.4 & 89.8 & \underline{63.2} & \underline{26.0} & 68.8 & 43.6 & 13.6 & 32.6 & 29.8 & 24.2 \\
-GDN-2~\citeyearpar{hatamizadeh2026gdn2}         & \textbf{100.0} & \underline{99.8} & 90.2 & 47.2 & 95.0 & 74.6 & 36.0 & 12.6 & 64.6 & 31.0 & 9.2 & 27.8 & 25.6 & 22.0 \\
-\rowcolor{blue!8}
-Isotropic KDN (ours) & \textbf{100.0} & \textbf{100.0} & 98.2 & \underline{89.4} & 96.0 & 86.0 & 47.8 & 16.2 & \underline{80.4} & \underline{58.4} & \underline{22.6} & 30.4 & 25.4 & 22.2 \\
-\rowcolor{blue!8}
-Diagonal KDN (ours)  & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{98.6} & \underline{91.4} & \textbf{71.2} & \textbf{29.0} & \textbf{84.2} & \textbf{71.0} & \textbf{32.2} & 41.0 & \textbf{36.4} & \textbf{29.6} \\
-\midrule
-\multicolumn{15}{@{}l}{\emph{Recurrent-only, 1.3B parameters, 100B tokens}}\\
-Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3} & \textbf{100.0} & \underline{99.8} & 98.2 & 62.6 & \underline{98.6} & 93.6 & 62.6 & 20.6 & 69.0 & 50.2 & 16.6 & 46.6 & 38.4 & 27.2 \\
-Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3} & \underline{99.8} & 99.4 & 75.2 & 15.4 & \textbf{99.6} & \textbf{96.0} & 64.8 & 15.4 & 85.8 & 63.6 & 29.8 & \underline{51.6} & 42.4 & 30.4 \\
-KDA~\citeyearpar{kimiteam2025kimilinear}           & \underline{99.8} & 99.2 & 66.6 & 30.2 & 98.0 & 95.0 & 62.2 & 23.6 & \underline{92.6} & \underline{77.2} & \underline{43.2} & 47.4 & 38.8 & 26.6 \\
-GDN-2~\citeyearpar{hatamizadeh2026gdn2}         & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \textbf{99.8} & \underline{98.6} & 92.4 & 67.4 & \textbf{28.0} & 88.0 & 64.4 & 29.4 & 50.6 & \underline{44.0} & \underline{31.4} \\
-\rowcolor{blue!8}
-Isotropic KDN (ours) & \textbf{100.0} & \textbf{100.0} & \textbf{100.0} & \underline{94.6} & 98.4 & 91.8 & \underline{68.4} & 24.2 & 86.8 & 67.6 & 34.6 & 41.6 & 29.8 & 23.4 \\
-\rowcolor{blue!8}
-Diagonal KDN (ours)  & \textbf{100.0} & \textbf{100.0} & \underline{99.8} & \textbf{99.8} & \underline{98.6} & \underline{95.6} & \textbf{74.6} & \underline{25.8} & \textbf{96.4} & \textbf{88.6} & \textbf{48.6} & \textbf{62.2} & \textbf{47.4} & \textbf{33.8} \\
-\midrule
-\multicolumn{15}{@{}l}{\emph{Hybrid and attention-only, 1.3B parameters, 100B tokens}}\\
-Transformer~\citeyearpar{vaswani2017attention} (2K SWA)
-  & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & 22.6
-  & \textbf{100.0} & \textbf{100.0} & \textbf{53.4} & 19.8
-  & \underline{99.2} & 94.6 & 35.4
-  & 76.6 & 79.4 & 45.4 \\
-Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
-  & \underline{99.4} & 73.8 & 29.4 & 15.0
-  & 99.6 & 99.2 & 52.2 & 21.8
-  & 96.4 & 86.2 & 43.4
-  & 74.8 & 76.0 & 39.0 \\
-Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
-  & \textbf{100.0} & \underline{99.8} & \underline{52.0} & 27.2
-  & \underline{99.8} & \underline{99.8} & \underline{53.2} & 25.6
-  & 97.8 & 95.8 & \underline{50.8}
-  & \underline{92.8} & \underline{89.6} & 45.8 \\
-KDA~\citeyearpar{kimiteam2025kimilinear} $+$ SWA
-  & \textbf{100.0} & 87.8 & 47.4 & 21.2
-  & \underline{99.8} & \textbf{100.0} & \textbf{53.4} & 25.4
-  & \underline{99.2} & 97.0 & 48.6
-  & 86.0 & 83.0 & 44.2 \\
-GDN-2~\citeyearpar{hatamizadeh2026gdn2} $+$ SWA
-  & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & \textbf{28.4}
-  & \textbf{100.0} & \underline{99.8} & \textbf{53.4} & \textbf{27.6}
-  & 83.0 & 67.8 & 25.2
-  & 84.0 & 76.8 & 45.6 \\
-\rowcolor{blue!8}
-Isotropic KDN (ours) $+$ SWA
-  & \textbf{100.0} & \textbf{100.0} & \textbf{52.4} & \textbf{28.4}
-  & \textbf{100.0} & \textbf{100.0} & \textbf{53.4} & \textbf{27.6}
-  & \textbf{99.8} & \underline{98.4} & 44.6
-  & 85.4 & 89.0 & \textbf{49.8} \\
-\rowcolor{blue!8}
-Diagonal KDN (ours) $+$ SWA
-  & \textbf{100.0} & 98.6 & 51.6 & \underline{28.0}
-  & \textbf{100.0} & 98.4 & \textbf{53.4} & \underline{26.0}
-  & \textbf{99.8} & \textbf{99.2} & \textbf{53.0}
-  & \textbf{95.6} & \textbf{90.0} & \underline{47.8} \\
-\bottomrule
-\end{tabular}%
-}
-\caption{In-context retrieval accuracy (\%) on RULER single- and multi-key needle-in-a-haystack
-tasks~\citep{hsieh2024ruler}. Best per column within each block in \textbf{bold}, second best
-\underline{underlined}.}
-\label{tab:pretrain-niah}
-\end{table}
 
 \paragraph{Real-world retrieval.}
 Table~\ref{tab:real-world-retrieval} reports the six-task real-world retrieval comparison at
 $1.3$B parameters. Among recurrent-only models, the Diagonal KDN achieves the best average
 and leads FDA, TriviaQA, and DROP. In the hybrid block, the Isotropic KDN $+$ SWA has the best
 average, while the Diagonal KDN $+$ SWA ranks second and leads FDA.
-
-\begin{table}[t]
-\centering
-\small
-\setlength{\tabcolsep}{4.5pt}
-\begin{tabular}{@{}l cccccc >{\columncolor{gray!10}}c@{}}
-\toprule
-Model & SWDE & SQuAD & FDA & TriviaQA & NQ & DROP & Avg. \\
-\midrule
-\multicolumn{8}{@{}l}{\emph{Recurrent 1.3B / 100B}}\\
-Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3}
-  & 26.34 & 36.35 & 22.52 & 60.90 & 21.98 & 20.89 & 31.50 \\
-Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3}
-  & 24.93 & 36.71 & 25.25 & 61.02 & 23.50 & 21.99 & 32.23 \\
-KDA~\citeyearpar{kimiteam2025kimilinear}
-  & 28.77 & \textbf{38.70} & \underline{27.97} & 61.97
-  & \textbf{24.11} & 21.03 & \underline{33.76} \\
-GDN-2~\citeyearpar{hatamizadeh2026gdn2}
-  & 29.90 & 35.64 & 21.16 & 61.49 & 23.34 & 20.99 & 32.09 \\
-\rowcolor{blue!8}
-Isotropic KDN (ours)
-  & \textbf{33.08} & 36.71 & 22.98 & \underline{62.09}
-  & 22.14 & \underline{23.38} & 33.40 \\
-\rowcolor{blue!8}
-Diagonal KDN (ours)
-  & \underline{30.18} & \underline{38.09} & \textbf{30.61}
-  & \textbf{62.56} & \underline{23.63} & \textbf{24.10}
-  & \textbf{34.86} \\
-\midrule
-\multicolumn{8}{@{}l}{\emph{Hybrid 1.3B / 100B}}\\
-Transformer~\citeyearpar{vaswani2017attention} (2K SWA)
-  & 36.08 & 42.43 & 52.68 & 62.09 & 25.40 & 21.47 & 40.02 \\
-Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
-  & 36.27 & 43.37 & 58.95 & 64.57 & 26.70 & 22.47 & 42.06 \\
-Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
-  & 42.55 & 43.33 & \underline{64.85} & \textbf{65.88}
-  & \textbf{28.44} & \underline{23.53} & 44.76 \\
-KDA~\citeyearpar{kimiteam2025kimilinear} $+$ SWA
-  & \underline{51.08} & 43.10 & 57.86 & 65.17
-  & \underline{28.22} & \textbf{25.11} & 45.09 \\
-GDN-2~\citeyearpar{hatamizadeh2026gdn2} $+$ SWA
-  & 47.80 & 42.73 & 63.22 & 62.38 & 26.10 & 23.19 & 44.24 \\
-\rowcolor{blue!8}
-Isotropic KDN (ours) $+$ SWA
-  & \textbf{53.98} & \textbf{43.60} & 63.12 & \underline{65.52}
-  & 26.89 & 22.52 & \textbf{45.94} \\
-\rowcolor{blue!8}
-Diagonal KDN (ours) $+$ SWA
-  & 48.08 & \underline{43.50} & \textbf{66.58} & 64.93
-  & 27.72 & 22.52 & \underline{45.55} \\
-\bottomrule
-\end{tabular}
-\caption{Zero-shot accuracy (\%) on real-world retrieval tasks with inputs limited to $2$K tokens.
-\emph{Avg.} is the unweighted six-task mean. Best per column within each block in \textbf{bold},
-second best \underline{underlined}.}
-\label{tab:real-world-retrieval}
-\end{table}
 
 \FloatBarrier
 
@@ -1227,25 +1228,24 @@ second best \underline{underlined}.}
     Learned       & \textbf{18.51} & 14.68 & 54.62 \\
     \bottomrule
   \end{tabular}
-  \caption{Information-scale ablation for the 750M Diagonal KDN trained on 50B tokens
-  ($d_k=128$). The learned scale is initialized at $d_k$; \emph{Avg.} is the mean of the six
-  accuracies in Table~\ref{tab:pretrain-lm}.}
+  \vspace{-2mm}
+  \caption{Information-scale ablation.}
   \label{tab:info-scale-ablation}
   \vspace{-0.6\baselineskip}
+  \vspace{-2mm}
 \end{wraptable}
-The $\mu=1$, $\sqrt{d_k}$, and $4d_k$ rows form a matched fixed-scale sweep; for consistency with
-the main comparison, the $d_k$ row reuses the Diagonal KDN checkpoint reported in
-Table~\ref{tab:pretrain-lm}. The learned-scale row is a separate run initialized at $d_k$. Across
-the fixed scales, increasing $\mu$ steadily improves LAMBADA perplexity, with $4d_k$ best, while
-WikiText and average accuracy peak at $d_k$. Learning the scale gives the best WikiText perplexity
-($18.51$), but trails fixed $d_k$ on LAMBADA perplexity ($14.68$ versus $14.15$) and average
-accuracy ($54.62$ versus $54.97$). Overall, the effect remains small and metric-dependent.
+Table~\ref{tab:info-scale-ablation} ablates the information scale using fixed values
+$\mu\in\{1,\sqrt{d_k},d_k,4d_k\}$ and a learned scale initialized at $d_k$. Increasing the fixed scale
+steadily improves LAMBADA perplexity, with $4d_k$ performing best, whereas WikiText
+perplexity and average accuracy peak at $d_k$. The learned scale performs best on WikiText but
+trails the fixed $d_k$ setting on LAMBADA and average accuracy, indicating that the overall effect
+is small and metric-dependent.
 
 \FloatBarrier
 
-\paragraph{Fixed observation and process noise.}
+\paragraph{Observation and process noise.}
 
-\begin{wraptable}{r}{0.46\textwidth}
+\begin{wraptable}{r}{0.50\textwidth}
   \vspace{-0.8\baselineskip}
   \centering
   \small
@@ -1259,21 +1259,15 @@ accuracy ($54.62$ versus $54.97$). Overall, the effect remains small and metric-
     Fix both at $1$ & 18.64 & 15.84 & 53.87 \\
     \bottomrule
   \end{tabular}
-  \caption{Noise ablation for the 750M Diagonal KDN trained on 50B tokens at $\mu=1$.
-  The baseline learns both $r_t$ and $\ve{\omega}_t$; the next row fixes $r_t=1$; the final row
-  additionally fixes $\ve{\omega}_t=\ve{1}$.
-  \emph{Avg.} is the mean of the six accuracies in Table~\ref{tab:pretrain-lm}.}
+  \caption{Observation- and process-noise ablation.}
   \label{tab:fixed-noise-ablation}
   \vspace{-0.6\baselineskip}
 \end{wraptable}
-Table~\ref{tab:fixed-noise-ablation} summarizes progressively constrained noise parameterizations.
-Relative to the learned-noise baseline, fixing $r_t=1$ improves WikiText perplexity by $0.23$ but
-worsens LAMBADA perplexity by $0.21$ and average accuracy by $0.35$ points. Additionally fixing
-$\ve{\omega}_t=\ve{1}$ changes the last logged training loss only from $2.154$ to $2.162$ and
-recovers $0.10$ average-accuracy points, while worsening WikiText and LAMBADA perplexity by another
-$0.19$ and $0.12$. These small, mixed single-seed shifts provide no evidence that either constraint
-consistently improves short-context quality. The last two rows form the controlled comparison;
-the baseline comes from the information-scale sweep and is included as a reference.
+Table~\ref{tab:fixed-noise-ablation} ablates the observation and process noise at $\mu=1$ by comparing learned $r_t$ and
+$\ve{\omega}_t$ with variants that first fix $r_t=1$ and then fix both terms to one.
+Fixing $r_t$ improves WikiText perplexity but slightly degrades LAMBADA perplexity and average accuracy; fixing
+both terms yields similarly mixed results. Overall, neither constraint consistently improves
+short-context quality.
 
 \FloatBarrier
 
@@ -1282,18 +1276,18 @@ the baseline comes from the information-scale sweep and is included as a referen
   \vspace{-0.8\baselineskip}
   \centering
   \includegraphics[width=\linewidth]{figures/mixer_throughput_scaling.pdf}
-  \caption{Training throughput of 750M-width, state-matched mixer layers on one H200
-  ($B=4$, $d_{\mathrm{model}}=2048$, BF16; 30-run median). Diagonal KDN uses FP32/TF32x3;
-  the Transformer is full causal attention. $>4$K are scaling probes.}
+  \vspace{-8mm}
+  \caption{Mixer-layer throughput scaling.}
   \label{fig:mixer-throughput}
   \vspace{-0.6\baselineskip}
 \end{wrapfigure}
-Figure~\ref{fig:mixer-throughput} isolates the mixer rather than end-to-end model throughput.
-At 4K, Isotropic KDN matches KDA (1.70 versus 1.65 million tokens/s/GPU); Diagonal KDN reaches
-1.18 million, below GDN-2 at 1.31 million. At 32K, Mamba-3 SISO leads at 2.31 million,
-KDA and Isotropic KDN sustain 1.79 and 1.78 million, GDN-2 reaches 1.37 million, and Diagonal KDN
-reaches 1.29 million. The channel-wise uncertainty scan therefore costs $1.38$--$1.40\times$ KDA layer
-latency from 4K to 32K while retaining linear scaling.
+Figure~\ref{fig:mixer-throughput} benchmarks the mixer layers rather than end-to-end models, using
+the state-matched 750M configuration on one H200 ($B=4$, $d_{\mathrm{model}}=2048$, BF16; median
+over 30 runs). Diagonal KDN uses FP32/TF32x3, the Transformer uses full causal attention, and
+lengths beyond the 4K training context are scaling probes. Isotropic KDN closely tracks KDA across
+sequence lengths. Diagonal KDN incurs additional cost from the channel-wise uncertainty scan but
+remains close to GDN-2 and retains linear scaling. Mamba-3 SISO leads at long contexts, whereas
+full attention degrades sharply as sequence length grows.
 
 \FloatBarrier
 
@@ -2030,6 +2024,8 @@ a future-write control rather than an increase in current observation strength.
 \FloatBarrier
 
 % =============================================================================
+\iffalse
+% Appendices C and D are intentionally omitted.
 \section{Background: the Kalman filter}
 \label{app:kalman}
 
@@ -2155,6 +2151,7 @@ parallelizable. The nonlinearity is confined to the per-step inverse $\ve{P}_t=\
 $\ve{S}_t=\ve{C}_t^{-1}\ve{B}_t$). Carrying $\ve{C}_t$ rather than $\ve{P}_t$ --- the \emph{information} form --- is
 therefore the parallel-friendly representation: the state accumulates linearly, and only the
 read-out inverts.
+\fi
 
 % =============================================================================
 \section{Isotropic Kalman Delta Network}
@@ -2419,17 +2416,12 @@ The covariance states are computed by the scalar M\"obius scan
   \begin{bmatrix}1\\ 1\end{bmatrix}.
   \label{eq:iso-kla-box-mobius}
 \end{equation}
-The adaptive gain at token $t$ uses the exclusive prefix covariance $b_{t-1}$:
+The adaptive gain at token $t$ uses the pre-write predictive covariance $\widehat b_t$:
 \begin{equation}
-\begin{aligned}
-  \widehat b_t
-  &=a_tb_{t-1}+\omega_t,
-  &
   \ve{\kappa}_t
-  &=\frac{\widehat b_t\ve{k}_t}
+  =\frac{\widehat b_t\ve{k}_t}
     {r_t+\widehat b_t\|\ve{k}_t\|_2^2}
   \equiv\beta_t\ve{k}_t.
-\end{aligned}
 \label{eq:iso-kla-box-gain}
 \end{equation}
 With $\beta_t$ available before the memory scan, the memory update has the same affine form as KDA:

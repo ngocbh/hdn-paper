@@ -8,7 +8,7 @@
 \title{Rotational Diagonal Kalman Linear Attention:\\
 Model, Lessons from Mamba-2/Mamba-3, and Production Implementation}
 \author{}
-\date{September 3, 2026}
+\date{September 4, 2026}
 
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\ve}[1]{\boldsymbol{#1}}
@@ -752,15 +752,28 @@ production-submission gate.  Train-smoke, distributed checkpoint/resume, and mul
 soak/attestation remained for that baseline at the time of sealing.  The next section records the
 later shared-DT candidate and its separate, still-open qualification.
 
-\section{Shared-DT engineering status as of September 3, 2026}
+\section{Shared-DT engineering status as of September 4, 2026}
 \label{sec:shared-dt-status}
 
 This section records a newer production candidate and does not revise the closed E2 result above.
 The candidate starts from commit
 \texttt{6472a0711eb61177c3ef91845855fffa82202290} and replaces E2's detached bounded clock with a
-shared-DT transition.  Its qualification is \emph{not complete}: four gates passed in the first
-campaign, the gradient gate exposed both a defective acceptance rule and real rotational-gradient
-amplification, the soak was cancelled before allocation, and no aggregate authorization was built.
+shared-DT transition.  Its qualification is \emph{not complete}.  Four gates passed in the first
+campaign, whose gradient gate exposed both a defective acceptance rule and real rotational-gradient
+amplification; that soak was cancelled before allocation.  The subsequent reviewed head-scaled
+commit passed all five non-soak gates, but its 3300-update soak failed closed with an aggregate
+count at boundary 269.  A divergent diagnostic replay independently exposed rejection of the
+finite-input exact-zero decay endpoint.  The narrow lower-endpoint correction then passed all five
+non-soak gates and 675 soak updates before failing closed at boundary 676 with an unrecorded key.
+A second divergent replay independently exposed rejection of the finite-input exact-one endpoint;
+the reviewed upper-endpoint correction passed its fresh numerical H200 suite, but its evidence
+could not be sealed because a pre-existing asynchronous log-finalization race omitted the terminal
+PASS marker from the retained log.  The narrow source-gate logging correction was reviewed,
+committed, and published.  Its fresh campaign passed and sealed the H200 gate and all four short
+distributed gates, then its soak crossed both old boundaries and failed closed at update 790 on a
+rank-equal pre-clip global norm that triggered the combined nonfinite, negative, or greater-than-10
+rejection predicate.  The failed run did not retain which branch fired.  No soak seal or aggregate
+authorization exists; the diagnostic replay and threshold-provenance analysis are recorded below.
 
 \subsection{Relation to Mamba-2 and Mamba-3}
 
@@ -774,12 +787,13 @@ and its bias-free pair-angle projection follows the installed Mamba-3 constructi
 \begin{equation}
   \delta_{thj}=\pi\tanh(e_{tj})DT_{th},
   \qquad
-  \phi_{thj}=\sum_{s\leq t}\delta_{shj},
+  \phi_{thj}=-\sum_{s\leq t}\delta_{shj},
   \label{eq:shared-dt-phase}
 \end{equation}
 with one angle value per token/pair broadcast over heads, a headwise $DT$, a cumulative phase scan,
-and the corresponding reverse-suffix backward.  The apparent phase-sign difference is only the
-gauge $W_{\rm angle}\mapsto-W_{\rm angle}$ and therefore cannot explain a gradient-norm change.
+and the corresponding negative reverse-suffix backward.  This is the literal RDiag source
+convention; installed Mamba-3 uses the positive scan.  The difference is the exact gauge
+$W_{\rm angle}\mapsto-W_{\rm angle}$ and therefore cannot explain a gradient-norm change.
 The relevant difference from the E2 model is instead that the angle and $DT$ paths remain live and
 the same shared $DT$ controls radial decay and rotation.
 
@@ -804,13 +818,128 @@ head-shared cumulative rotation as the amplification source.
 \paragraph{Completed engineering work.}
 The Mamba-2/Mamba-3 source audit, exact H200 measurement, rotation/gradient ablations, matched-
 backbone control, and scale/cap sweep are complete.  The replacement design and implementation
-plan received an independent review with no remaining Important findings.  In campaign
+plan received an independent review with no remaining Important findings.  The layer-side
+$H^{-1/2}$ change and its nonpersistent-state host contracts are now implemented in the isolated
+checkout below: 41 host tests passed.  Development H200 job 1827839 passed the focused H=18
+all-parameter oracle/VJP case and H=16, T=4096 BF16 boundary/backward case; job 1827905 then passed
+the full 109-test production-H200 suite.  These runs exercised the mutable development checkout,
+so they are correctness evidence rather than immutable qualification seals.
+
+The same checkout now also contains the complete gradient-v3 control closure: both arms construct
+the same 220M configuration, strictly load one full reference state, prove matching configuration,
+parameter-inventory, and full-state digests, and reset CPU/CUDA randomness symmetrically.  The
+no-rotation arm installs connected-zero hooks only on the twelve angle projections, checks all
+twelve angle-weight gradients are present, finite, and exactly zero for every batch, checks the
+shared radial gradient norms remain finite and positive, and proves hook removal.  The v3 recipe,
+catalog digest, result attestor, stale-schema rejection, and aggregate-v3 recursive requirement are
+integrated.  The focused gate-runner host suite passed 38 tests; the complete stable host sweep is
+also complete: the qualification-control suite passed 71 tests with one filesystem-capability skip
+(the skipped case passed separately on local temporary storage), and the broader thirteen-file
+shared-DT host sweep passed 418 tests with three expected skips.
+
+In campaign
 \texttt{9870d362bcbb4ec3b9b3cafb13459ef8}, production-H200 (job 1824028), train-smoke (1824365),
 checkpoint-fault (1824367), and authenticated-resume (1824368) produced recursively valid seals
 with SHA-256 prefixes \texttt{ecc03259}, \texttt{9ca6354e}, \texttt{06c1f60a}, and
 \texttt{656c9412}, respectively.  Gradient job 1824370 failed the invalid absolute-10 rule and
 produced no seal; the soak was cancelled before allocation.  These seals characterize the
 unmodified base commit only and do not qualify the proposed head-scaled change.
+
+\paragraph{Qualification outcome.}
+The implementation commit passed separate exact-SHA specification/math and code-quality reviews
+without a finding and was pushed to the branch named below.  Its immutable snapshot contains 4227
+files and has source-manifest SHA-256
+\pathcode{5b6b80bf8c38f4c959ac1f908a10fc01a25ff6986e77f0ee1c0a35de6843fbd9}.
+Fresh campaign \pathcode{a65918f1771446e7acfbffcc3e5c7dc3} is closed incomplete.  Production-H200 gate job
+1828250 passed all 109 tests and attestor job 1828252 published seal SHA-256
+prefix \texttt{a05c99d0544a721a}.
+The other four short gates and their attestors passed.  Gradient A/B job 1828811 measured
+shared/no-rotation median and 95th-percentile ratios 1.179 and 1.262, inside the 1.25/1.50 limits;
+attestor 1828820 published seal SHA-256
+prefix \texttt{0eabab83a02ac397}.
+Checkpoint-fault jobs 1828813/1828823, authenticated-resume jobs 1828814/1828821, and train-smoke
+jobs 1828815/1828822 published seals with SHA-256 values
+prefixes \texttt{a3558a17796d427c}, \texttt{1ea7a7da40576d20}, and
+\texttt{c2e19737cff63305}, respectively.  They are valid partial evidence but cannot authorize the
+commit without a valid soak seal.
+
+The production soak did \emph{not} pass.  Job 1828812 trained normally through completed update
+268 (loss 5.356, global gradient norm 1.101, and zero reported health failures), then failed closed
+at the pre-optimizer boundary for update 269 with aggregate health-failure count 158720.  It
+therefore emitted neither a result nor a seal, and dependent attestor 1828824 was cancelled.  The
+exception predated the detailed failed-counter breakdown.  Its stage excluded
+observation/parameter/gradient coverage, gradient-nonfinite, and bootstrap-liveness failures, but
+could not distinguish the remaining forward-domain predicates from parameter non-finiteness or
+collective-structure disagreement.  That ambiguity motivated the fail-closed diagnostic replays
+below.
+
+The first diagnostic replay identified the candidate predicate.  Non-authorizing job 1829026 ran
+on a different H200 node pair and observed its first exact FP32 zero earlier, at boundary 241, so
+the exact-boundary harness correctly exited nonzero rather than labeling the run a reproduction.
+Every one of the 16 ranks nevertheless reported the same sole failed key,
+\texttt{alpha\_nonpositive\_count=128}: one scalar $[B,T,H]$ decay site materialized over the
+$K=128$ key width.  All other failure counters were zero; the aggregate diagnostics included
+$\min\alpha=0$, $DT_{\max}=7.3498993$, and $\max|\tanh(e^{\rm eff})|=0.9377124$.
+The retained scheduler log is
+\pathcode{/checkpoints/ngocbh/hdn/ckpts/logs/rdiag_sdt_soak269_diag_1829026.log}, with SHA-256
+{\ttfamily\scriptsize 5dc12cd3ea0ea52765495763b28bd0185b038c306bad6c333fabb537eb67e6ee}.
+This is evidence for the same candidate failure mode, not an exact reproduction of the original
+boundary-269 trajectory.  The original aggregate count $158720=1240\mathbin{\times}128$ is
+consistent with the same width replication, but its exception did not retain a per-key breakdown.
+Intermediate job 1829217, from commit
+\pathcode{28531cf959304ab26b22789f2ea4ce082adbed13}, remained healthy through boundary 269 on yet
+another node pair and correctly failed closed without a summary when its search condition was not
+met.  Its source-manifest and scheduler-log SHA-256 values are respectively
+{\ttfamily\scriptsize 0dee86b8f758f14aabd78047e2d0d530475be2d29f99d27587c256233644c73f} and
+{\ttfamily\scriptsize 142120433da0eddb643d6d6160974c756397ed730fe802c009fbd1eaed1b3924}.
+
+Final non-authorizing search job 1829305 ran from diagnostic commit
+\begin{quote}
+\pathcode{06eaf237f5be9f79ee8d00075b79dcc0e7a9e96a}.
+\end{quote}
+It completed 277 optimizer updates and stopped before clipping or update 278 with status
+\texttt{SAME\_FAILURE\_MODE} and
+\texttt{authorizing=false}.  All 16 ranks agreed on the sole production-predicate count
+\texttt{alpha\_nonpositive\_count=128}; removing the repeated key-width dimension leaves one
+unique scalar decay site.  Every recorded $A_{\log}$, $\exp(A_{\log})$, and
+$\exp(A_{\log})DT$ value was finite.  Their global ranges were respectively
+$[0.0472397,2.7735384]$, $[1.0483732,16.0152016]$, and
+$[0.000105659,104.639008]$.  The largest exponent exceeds the FP32 round-to-nearest zero threshold
+of approximately $103.972$; $87.3365$ is only the normal-to-subnormal onset.  Thus finite inputs to
+$\exp[-\exp(A_{\log})DT]$ can produce the observed stored zero.
+
+The retained summary is
+\begin{quote}
+\pathcode{diagnostic_runs/soak269_replay_06eaf237f5be_1829305/}\\
+\pathcode{artifacts/replay-summary.json},
+\end{quote}
+with SHA-256
+{\ttfamily\scriptsize 558a1dde9c842b95d6afaafb16c54994f8e75aae68b7fed0bfef11cfa4718fb5};
+its trajectory has SHA-256
+{\ttfamily\scriptsize eeb607f58f40a156e4fb42df899ef27f724a17c3ede5f85906395a4917692614}.
+The scheduler log has SHA-256
+{\ttfamily\scriptsize c46c802ac2b73fa875a40699ce2ac96b2f32bff61c1e128a54625e8916264b03}.
+The replay compared 268 original updates, retained nine additional updates, and did not exactly
+match the original prefix; it therefore establishes the floating-point endpoint and candidate
+failure mode, not an exact boundary replay.  The harness temporarily exempted only
+\texttt{alpha\_nonpositive\_count} so that it could retain this evidence and still stopped before
+the update; its logged zero health-failure count is not a production pass.
+
+The evidence classifies the reproduced zero-alpha endpoint as a health-policy false positive rather
+than a model or kernel math defect; because the original exception lacks a per-key breakdown, it
+does not prove that job 1828812 had identical causality.  At original update 268, 583512 distinct
+scalar decay sites were already below the diagnostic $10^{-6}$ floor while loss and gradients
+remained finite.  The S3 prefix clamps this range to $10^{-6}$ and assigns the below-floor branch
+zero cotangent; the Kappa recurrence is also defined at raw $\alpha=0$.  The narrow correction keeps
+\texttt{alpha\_nonpositive\_count} as telemetry, adds \texttt{alpha\_negative\_count} as the fatal
+domain predicate, and leaves the model's alpha and both recurrences unchanged.  At commit
+\pathcode{83118d2...}, alpha nonfinites and $\alpha\geq1$ remained fatal.
+
+One login-namespace preparation attempt failed closed on the intentionally strict live-data
+identity check, and the first compute-side preparation attempt (job 1828245) failed before manifest
+publication because its three mutable roots had not been pre-created.  Preparation was rerun in the
+Slurm user namespace with those private roots fixed at mode 0700; neither failed attempt executed a
+numerical gate.
 
 \paragraph{Diagnostic evidence.}
 The primary metric artifacts are
@@ -830,7 +959,7 @@ All are rooted at
 \subsection{Approved implementation and remaining qualification}
 
 \paragraph{Chosen change.}
-For $H$ recurrent heads, the layer will derive the nonpersistent scalar $H^{-1/2}$ and form
+For $H$ recurrent heads, the development layer derives the nonpersistent scalar $H^{-1/2}$ and forms
 \begin{equation}
   e^{\rm eff}_{tj}=H^{-1/2}(W_{\rm angle}x_t)_j,
   \qquad
@@ -852,14 +981,23 @@ runaway sentinel becomes an inclusive 100; the late-training soak limit of 10 is
 the gradient sample/result/recipe/seal closure advances to schema v3.  Aggregate-v3 retains its
 schema name but must recursively require the v3 gradient seal.
 
-\paragraph{Active checkout and plans.}
+\paragraph{Head-scale checkout and plans.}
 Implementation is isolated from the main checkout in this worktree:
 \begin{quote}
 \pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/source_worktrees/rdiag_shared_dt_headscale_20260902}.
 \end{quote}
 The observed checkout is branch
-\pathcode{codex/rdiag-shared-dt-angle-headscale-20260902}, based on the commit above.  The reviewed
-documents are
+\pathcode{codex/rdiag-shared-dt-angle-headscale-20260902}, based on the commit above.  The clean
+reviewed and published implementation snapshot is
+\begin{quote}
+\pathcode{a76dc7b930ae4d85157391d444c40ef7db14ef86},
+\end{quote}
+with tree \pathcode{4cdb6287080365089349f56b14f1d782202d6157}.
+The reviewed design/plan snapshot is commit
+\begin{quote}
+\pathcode{9e621b5ede53529df50619804f0c9d8d32707284}.
+\end{quote}
+Its documents are
 \begin{itemize}[leftmargin=1.8em]
   \item \pathcode{docs/plans/2026-09-02-rdiag-shared-dt-angle-headscale-design.md}; and
   \item \pathcode{docs/plans/2026-09-02-rdiag-shared-dt-angle-headscale-plan.md}.
@@ -871,31 +1009,1894 @@ The primary implementation and qualification paths are
         \pathcode{lit_gpt/kla_ops/rdiag_bounded_phase.py};
   \item \pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_production_host.py} and
         \pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_production_h200_v1.py};
+  \item \pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_training_health_host.py};
   \item \pathcode{scripts/tests/rdiag/rdiag_shared_dt_gradient_ab.py} and
-        \pathcode{scripts/tests/rdiag/rdiag_shared_dt_gradient_ab_run.py}; and
+        \pathcode{scripts/tests/rdiag/rdiag_shared_dt_gradient_ab_run.py};
   \item \pathcode{scripts/train/rdiag_kla/rdiag_recipe.py},
         \pathcode{scripts/tests/rdiag/attest_rdiag_shared_dt_gate.py}, and
-        \pathcode{scripts/train/rdiag_kla/rdiag_shared_dt_qualification.py}.
+        \pathcode{scripts/train/rdiag_kla/rdiag_shared_dt_qualification.py};
+  \item \pathcode{scripts/tests/rdiag/prepare_rdiag_shared_dt_source_gate.py} and
+        \pathcode{scripts/tests/rdiag/prepare_rdiag_shared_dt_qualification.py};
+  \item \pathcode{scripts/tests/rdiag/rdiag_shared_dt_production_soak.py},
+        \pathcode{scripts/tests/rdiag/run_rdiag_shared_dt_production_soak.sbatch},
+        \pathcode{scripts/tests/rdiag/attest_rdiag_shared_dt_production_soak.py}, and
+        \pathcode{scripts/tests/rdiag/attest_rdiag_shared_dt_qualification.py}; and
+  \item \pathcode{scripts/train/rdiag_kla/submit_rdiag_shared_dt.py},
+        \pathcode{scripts/train/rdiag_kla/rdiag_job_control.py}, and
+        \pathcode{scripts/train/rdiag_kla/rdiag_batch_supervisor.py} for the separately
+        snapshotted production run and its mandatory evaluation tail.
 \end{itemize}
 
+The immutable qualification source is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/}\\
+\pathcode{rdiag_shared_dt_auth_v3_qualification_}\\
+\pathcode{a76dc7b930ae4d85157391d444c40ef7db14ef86},
+\end{quote}
+and the campaign root is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{campaigns/}\\
+\pathcode{rdiag_shared_dt_auth_v3_a76dc7b930ae4d85157391d444c40ef7db14ef86}.
+\end{quote}
+The failed-soak investigation is isolated in sibling worktree
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/source_worktrees/rdiag_shared_dt_soak269_diag_20260903}
+\end{quote}
+on branch \pathcode{codex/rdiag-shared-dt-soak269-diagnostic-20260903}, based exactly on
+\pathcode{a76dc7b930ae4d85157391d444c40ef7db14ef86}.  The principal diagnostic code is
+\pathcode{lit_gpt/rdiag_shared_dt_training_health.py}; the retained journal is under
+\pathcode{production_soak/output/evidence/qual_rdiag_shared_dt_soak3300_a65918f1771446e7acfbffcc3e5c7dc3},
+and the job logs are under \pathcode{production_soak/logs} within the campaign root.
+The completed replay plan retained in that diagnostic branch is
+\begin{quote}
+\pathcode{docs/plans/2026-09-03-rdiag-shared-dt-soak269-diagnostic-plan.md}.
+\end{quote}
+Its replay entry points are \pathcode{scripts/analyses/replay_rdiag_shared_dt_soak269.py} and
+\pathcode{scripts/analyses/run_rdiag_shared_dt_soak269_replay.sbatch}.
+
+The diagnostic line progressed through initial and early-mode commits
+\begin{quote}
+\pathcode{f82fa86f52c0f661d0ddbc74197d1dbc82a9e8f2},\\
+\pathcode{28531cf959304ab26b22789f2ea4ce082adbed13},
+\end{quote}
+before the final search commit and tree
+\begin{quote}
+\pathcode{06eaf237f5be9f79ee8d00075b79dcc0e7a9e96a},\\
+\pathcode{f1ecf305edc04824ce14042fe75dbbba106f21c0}.
+\end{quote}
+The final immutable replay source is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/}\\
+\pathcode{rdiag_shared_dt_alpha_zero_search_}\\
+\pathcode{06eaf237f5be9f79ee8d00075b79dcc0e7a9e96a},
+\end{quote}
+with source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 81f40cb7ccd697483d7b2757e0c728da18c4ee3a99b85b54be2f63e9af51cffe}.
+\end{quote}
+Its replay job 1829305 wrote only below
+\pathcode{diagnostic_runs/soak269_replay_06eaf237f5be_1829305} and produced neither a
+qualification result nor a seal.
+
+The then-current qualification checkout, containing the minimal lower-endpoint production-policy
+correction, is isolated from both the main checkout and diagnostic harness in worktree
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/source_worktrees/rdiag_shared_dt_alpha_zero_fix_20260903}
+\end{quote}
+on branch \pathcode{codex/rdiag-shared-dt-alpha-zero-fix-20260903}.  It is based exactly on the
+reviewed head-scaled commit.  The production-policy change itself is commit and tree
+\begin{quote}
+\pathcode{46ba8ec3105177a9caba2f2c153e9b71c8b62cac},\\
+\pathcode{e38fdab82c68300a361613e4ee3a8c784b7c1a12}.
+\end{quote}
+The executable plan is
+\pathcode{docs/plans/2026-09-03-rdiag-shared-dt-alpha-zero-policy-plan.md}.  Aside from adding that
+plan, commit \pathcode{46ba8ec...} changes only
+\pathcode{lit_gpt/rdiag_shared_dt_training_health.py}, its focused host test
+\pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_training_health_host.py}, and one existing case
+in \pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_production_h200_v1.py}; it does not change
+model or kernel math.
+
+The first qualification attempt exposed a test-construction issue rather than a kernel failure.
+Its new subcase forced $DT=120$ at all 33 tokens, roughly 10.9 times the reproduced maximum, and
+therefore also imposed phase stress outside the replay-observed range.  Immutable job 1829420
+passed 108 of 109 tests;
+the modified full-layer case passed its output comparison and finite elementwise/relative-$L_2$
+hidden-gradient checks, but its hidden-gradient cosine was $0.996079<0.999$.  The gate failed
+closed, result SHA-256 was
+{\ttfamily\scriptsize d64821ee25f44c06aad4b6fb8d27b1433af328381be9a61d08e6e244e0a117bc},
+and no seal was created.  This failed snapshot and campaign are retained as evidence and are not
+reused.
+
+Correction commit and tree
+\begin{quote}
+\pathcode{83118d2d96325c9b9b555d60ad4316c950c5a12d},\\
+\pathcode{8c05ae8f2b5b205a17ba64042c4fad337a1d4d45}
+\end{quote}
+restore the ordinary strict output/all-VJP oracle case unchanged.  A separate subrun within the
+same catalog item uses replay-bounded $DT=6.53125$ and rate 16, giving exponent 104.5 and exact FP32
+$\alpha=0$.  It proves that Kappa receives raw zero, S3 receives the finite BT32 prefix of
+$\log_2(10^{-6})$, the full forward matches the literal oracle, all model gradients remain finite,
+and live Kappa/S3 cotangents are finite; no tolerance or 109-test inventory entry changed.  The
+related host sweep passed 131 tests.  Development H200 job 1829576 passed the corrected item in
+117.26 seconds; its stdout SHA-256 is
+{\ttfamily\scriptsize 271d1ceb10772e4516cb9fe897e67cb7989e9af07939e329120a3d394f36f3a2}.
+Two independent exact-SHA reviews approved this final commit without blockers, and the branch is
+published.
+
+The superseded 4228-file qualification snapshot for \pathcode{46ba8ec...} is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/}\\
+\pathcode{rdiag_shared_dt_auth_v3_qualification_}\\
+\pathcode{46ba8ec3105177a9caba2f2c153e9b71c8b62cac},
+\end{quote}
+with source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 2507dede155e9e50df876a493170d8ccfc2523413bab115e7a3f0e3369f21b93}.
+\end{quote}
+Failed campaign \pathcode{2f02ccb07eac4837bd6416546b17112c} is rooted at
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{campaigns/}\\
+\pathcode{rdiag_shared_dt_auth_v3_}\\
+\pathcode{46ba8ec3105177a9caba2f2c153e9b71c8b62cac}.
+\end{quote}
+Compute-side preparation job 1829417 passed after the login namespace correctly rejected a distinct
+live-data inode identity.  Job 1829420 ran from execution-manifest SHA-256
+{\ttfamily\scriptsize b23ea908ac550bc14c76267ff8e295e06f620d21412e37c766787f8ecfd72eb2}.
+
+The now-superseded immutable qualification manifest for the corrected lower-endpoint test covers
+4228 source files at
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/}\\
+\pathcode{rdiag_shared_dt_auth_v3_qualification_}\\
+\pathcode{83118d2d96325c9b9b555d60ad4316c950c5a12d},
+\end{quote}
+with source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 52a82f97849f400730dfa2496472017916ca84e36dd785a7bac9e2da629936df}.
+\end{quote}
+That now-superseded campaign, \pathcode{a262363313d141e9bda423b0ce243940}, is rooted at
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{campaigns/}\\
+\pathcode{rdiag_shared_dt_auth_v3_}\\
+\pathcode{83118d2d96325c9b9b555d60ad4316c950c5a12d}.
+\end{quote}
+Compute-side preparation job 1829624 passed.  Production-H200 gate job 1829629 then completed on
+H200 node \pathcode{h200-028-028} with scheduler exit \pathcode{0:0} and all 109 tests passing.  It
+ran from execution-manifest SHA-256
+{\ttfamily\scriptsize 98488ffdb2db208f015e34df678ef57a4003cc8ac8c29337aa7648755509e0df}.
+Its retained result has SHA-256
+{\ttfamily\scriptsize 32c5b2eed517f2add1e327d841c43f012858454edcf975bb5681403ec45e8675};
+the JUnit report and run log have SHA-256 values
+{\ttfamily\scriptsize 507bfa8de347b1967d573b41578c3c3760a23b42e8b412f4076fe7b443dcba99} and
+{\ttfamily\scriptsize c6357f6d46f284dda75280ae94c53d3668e0e78bdce92abd6b5c051e83fed30d},
+respectively.  Compute-side attestor job 1829796 completed successfully and published the read-only
+H200 bootstrap seal with SHA-256
+{\ttfamily\scriptsize 6f900869b3c13e6ef41e8920a52f9115bc31f7e69f7f8169a8b4014dc55b05f8}.
+Five compute-side preparers then authenticated that seal and emitted read-only execution manifests
+for train-smoke, checkpoint-fault, authenticated-resume, gradient A/B, and the 3300-update soak,
+with SHA-256 values respectively
+\begin{quote}
+{\ttfamily\scriptsize 0d1e63001f57615c21a494e11eacfda8f04f464d258eb6d3c10207557f70fdc8},\\
+{\ttfamily\scriptsize 9287308502d9e2bbffc6ff0bb2e71506c4ea9d14758a703edbef8519914157d2},\\
+{\ttfamily\scriptsize 34280cd404e1680b3bc13a94bea26678cd4b24fd37bc49c4d64ad5be817ed281},\\
+{\ttfamily\scriptsize 8f4fd8e74f56c3770c0464a385faac255561933b510d741d3820ddcae4ef7da7},\\
+{\ttfamily\scriptsize 5f3e7a352e529666aebfbbd841c06413310b7db0a00525f45184880772e0f8ed}.
+\end{quote}
+Only their emitted commands were submitted, as jobs 1829974--1829978.  Train-smoke, checkpoint-
+fault, authenticated-resume, and gradient A/B jobs 1829974--1829977 passed and were independently
+attested.  Their seal SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize 472ebcf70fa24a50870b68b25024c74df296d6f35f1e218eeeb36965458dd13a},\\
+{\ttfamily\scriptsize b4f44aa38f2e11397f300f88f50b03881008ebe4d19ea7afa688ce9565ea416f},\\
+{\ttfamily\scriptsize 153c83d8be341bf7600990adeea69bb35e792b441459159e6fdc928316036a12},\\
+{\ttfamily\scriptsize 164138bf3a3c2809d8ed4fb7dd93a7a829fa42714fd123ddd8a634b6e3bc2d11}.
+\end{quote}
+Gradient A/B again passed with shared/no-rotation median and 95th-percentile ratios 1.179 and 1.260.
+Production-soak job 1829978 ran on nodes \pathcode{h200-207-042} and
+\pathcode{h200-211-043}; its immutable-source and runtime-identity stages completed successfully.
+It crossed the original failure point: updates 268, 269, and 270 all completed with zero health
+failures.  At update 269, loss was 5.3710, global gradient norm was 1.2287, and 11211776 alpha
+elements were below the S3 floor but remained diagnostic-only.  The run then completed 675 healthy
+updates.  Its final retained record has loss 4.0055, global gradient norm 1.4537, and zero health
+failures.
+
+The next pre-optimizer check, boundary 676, failed closed with aggregate failure count 256 on all
+16 ranks; update 676 was not applied.  The Python step exited 1 and the surrounding Slurm job
+terminated with exit \pathcode{15:0}.  The ordinary soak evidence deliberately does not retain the
+failed-key breakdown, so at that stage the responsible predicate was not identified.  No result or seal was
+emitted.  The 675-line update journal, stdout, and stderr have SHA-256 values respectively
+\begin{quote}
+{\ttfamily\scriptsize d26a63a89430a738c689d3e1fddc2d554ce30f3c400b1258c63c2a3fd2ef31cc},\\
+{\ttfamily\scriptsize 958939cf35074c8f9ca8611a19ec3dabd2830bd3090ee2e2bb104a12627dfd93},\\
+{\ttfamily\scriptsize 202e1bf22ac711421f006ef01c4c9820ac1522726cb4569480f635e7217c5a28}.
+\end{quote}
+
+\paragraph{Boundary-676 diagnostic replay.}
+The non-authorizing investigation is isolated in worktree
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_worktrees/rdiag_shared_dt_boundary676_diag_20260903}
+\end{quote}
+on branch \pathcode{codex/rdiag-shared-dt-boundary676-diagnostic-20260903}.  Its executable plan is
+\pathcode{docs/plans/2026-09-03-rdiag-shared-dt-boundary676-diagnostic-plan.md}.  Diagnostic-only
+health rendering was introduced at commit
+\pathcode{ef4ee3c053bc1d34243f4086edd88e62b85f73d4}; the reviewed replay harness is commit and tree
+\begin{quote}
+\pathcode{a9ce0db738dc65c3d72e4bcd85b955815952b163},\\
+\pathcode{bfb397412c1977acaef4742850738f69e948fc87}.
+\end{quote}
+The relevant code paths are
+\pathcode{lit_gpt/rdiag_shared_dt_training_health.py},
+\pathcode{scripts/analyses/replay_rdiag_shared_dt_boundary676.py},
+\pathcode{scripts/analyses/run_rdiag_shared_dt_boundary676_replay.sbatch}, and
+\pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_boundary676_replay_host.py}.  The focused replay
+suite passed 29 tests, the broad shared-DT host sweep passed 522 tests with four skips, and three
+independent reviews approved the exact staged tree that became the replay commit.
+
+The immutable 4232-file diagnostic source is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/rdiag_shared_dt_boundary676_diagnostic_}\\
+\pathcode{a9ce0db738dc65c3d72e4bcd85b955815952b163},
+\end{quote}
+with source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 6f7e52aa691c684543be51aeda0b6ab3b8d5d43c90b753b306070af68209da45}.
+\end{quote}
+Replay job 1830570 ran from that snapshot with the pinned failed-run data manifest and the exact
+original nodes \pathcode{h200-207-042,h200-211-043}.  It completed with scheduler exit
+\pathcode{0:0}; every retained record carries \pathcode{authorizing: false}, and no qualification
+result or seal was emitted.  The replay stopped naturally before optimizer boundary 649 after 648
+completed updates.  Its sole fatal key was
+\pathcode{alpha_at_or_above_one_count=640}, exactly five shared scalar sites expanded over width
+128.  Global \pathcode{alpha_max} was exactly one.  All $DT$, $A_{\log}$, $\exp(A_{\log})$, and
+decay-exponent values were finite; $DT_{\min}=1.1172518910\times10^{-8}$ and the smallest positive
+decay exponent was $3.4472314780\times10^{-8}$.  Parameter and gradient nonfinite counts were zero.
+Thus the captured failure is rejection of the finite FP32 identity-decay endpoint, and no monitored
+nonfinite predicate fired.  The replay alone is not a Kappa/S3 oracle check; the later targeted
+$K=128,T=33$ H200 subrun supplies that forward/VJP evidence.  The observed exponent is slightly
+above the ideal round-to-nearest-even crossover
+$-\log(1-2^{-25})=2.9802322832\times10^{-8}$; CUDA's transcendental implementation need not be
+correctly rounded, so the retained output value and bitwise endpoint test, rather than the ideal
+crossover alone, govern the implementation claim.
+
+The replay is deliberately classified \pathcode{DIFFERENT_FAILURE}: it did not reproduce the old
+trajectory, boundary, or count; instead it failed at boundary 649 with
+\pathcode{alpha_at_or_above_one_count=640}, while the original boundary-676 key remains unknown.
+Across the 648 comparable updates, maximum absolute loss and gradient-norm differences were 0.1493
+and 1.3539.  This evidence does not identify the old boundary-676 key retroactively, but it
+independently demonstrates that the replayed \pathcode{83118d2...} upper-endpoint policy rejected a valid
+production-shaped state.  The retained artifact root is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/boundary676_replay_a9ce0db738dc_1830570}.
+\end{quote}
+The summary, trajectory, invocation, inner stdout, inner stderr, and artifact-inventory SHA-256
+values are respectively
+\begin{quote}
+{\ttfamily\scriptsize 9a8c357b37731924aed61e02b7bf8ea599b943f7508cb93f91fb7bd572c89157},\\
+{\ttfamily\scriptsize 7eb3ab52f083079f85059522c7b0a219e22cacdd3923c3b55df135d59b851ac7},\\
+{\ttfamily\scriptsize 82848cb2fb25f4b448cebb2e87dddf197d320c7c962dbc6946e654ce6a531fa7},\\
+{\ttfamily\scriptsize 859d3c15b6223acafabddecc491afd896ebaf22368b5fc54823af481a05c18f4},\\
+{\ttfamily\scriptsize 645326b62f8847a96dcc47cb8ddf9b39ed214dde65d6b731131c3f8b90e8b01c},\\
+{\ttfamily\scriptsize af23c4fef6684ae97102f3d81bb4cb6edc46e116623cc5e9f23fca88da78e370}.
+\end{quote}
+All 24 inventoried artifact hashes independently revalidated.  The terminal outer scheduler log
+and empty scheduler error file have SHA-256 values respectively
+\begin{quote}
+{\ttfamily\scriptsize 2034750abdc9f1baea2074a0a8a28f2e6196838a1beac4fa84ad984d9ddbc151},\\
+{\ttfamily\scriptsize e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855}.
+\end{quote}
+
+The resulting narrow correction is isolated from both qualification and replay evidence in
+worktree
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_worktrees/rdiag_shared_dt_alpha_one_fix_20260903}
+\end{quote}
+on branch \pathcode{codex/rdiag-shared-dt-alpha-one-fix-20260903}, based exactly on
+\pathcode{83118d2...}.  Its plan is
+\pathcode{docs/plans/2026-09-03-rdiag-shared-dt-alpha-one-policy-plan.md}.  The reviewed and
+published correction commit and tree are
+\begin{quote}
+\pathcode{e5d07ad0f49f74e90d89a0b49ab8279b39152546},\\
+\pathcode{2573a97d33244e9125ba94557b428868816360f4}.
+\end{quote}
+That commit changes exactly the plan and three implementation/test files
+\begin{itemize}[leftmargin=1.8em]
+  \item \pathcode{docs/plans/2026-09-03-rdiag-shared-dt-alpha-one-policy-plan.md};
+  \item \pathcode{lit_gpt/rdiag_shared_dt_training_health.py};
+  \item \pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_training_health_host.py}; and
+  \item \pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_production_h200_v1.py}.
+\end{itemize}
+It retains \pathcode{alpha_at_or_above_one_count} as telemetry, adds
+\pathcode{alpha_above_one_count}, and makes only strict $\alpha>1$ fatal; negative and nonfinite
+checks are unchanged.  The 109-case H200 catalog gains no test node: an existing full-layer case
+now includes a positive-exponent exact-one subrun covering raw FP32 bits, Kappa, the BT32 S3
+prefix, literal recurrence agreement, and live finite VJPs.  Host policy tests passed 36/36, the
+broad host sweep on the final pre-commit worktree passed 492 tests with four skips, and targeted H200 job 1830711
+passed in 114.16 seconds.  This was non-authorizing mutable-worktree development evidence, run
+before the final commit; the immutable full H200 gate is job 1830943 below.  The targeted job's
+stdout and stderr SHA-256 values are
+\begin{quote}
+{\ttfamily\scriptsize 689c9451b67e5e9593fb15bc858723f4d4e7e89d3b47fdb90ebbce5044501442},\\
+{\ttfamily\scriptsize 57ac2d0201a2657267a97ef3371038e486fe85eac5d21983843138591659f847}.
+\end{quote}
+Three independent exact-SHA reviews approved the correction without blockers.
+
+The superseded \pathcode{e5d07ad...} source snapshot manifest covers 4229 source files; the
+snapshot directory also contains \pathcode{SOURCE_MANIFEST.json}.  That snapshot is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/rdiag_shared_dt_auth_v3_qualification_}\\
+\pathcode{e5d07ad0f49f74e90d89a0b49ab8279b39152546},
+\end{quote}
+with source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 3f6a8ae9176ddb9e9aee323febf6cb5d9dc22bc88d8933540be727c23a604832}.
+\end{quote}
+Its corresponding campaign \pathcode{7a24d88d497d4ad28b572b4ee885ac90} is closed and incomplete;
+it is rooted at
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{campaigns/rdiag_shared_dt_auth_v3_}\\
+\pathcode{e5d07ad0f49f74e90d89a0b49ab8279b39152546}.
+\end{quote}
+Compute-side preparation job 1830934 passed and emitted production-H200 execution-manifest
+SHA-256
+{\ttfamily\scriptsize 0d9277ab08b69f8d9e673e96cdd2d91ce8c753ce1d495879850edf0355377426}.
+Its exact control path is
+\begin{quote}
+\pathcode{production_h200/control/}\\
+\pathcode{production_h200_7a24d88d497d4ad28b572b4ee885ac90.manifest.json}
+\end{quote}
+relative to the campaign root above.  The corresponding scheduler logs are under
+\pathcode{production_h200/logs/}, and retained gate artifacts are written below
+\pathcode{production_h200/artifacts/production_h200_7a24d88d497d4ad28b572b4ee885ac90/}.
+The resulting H200 gate, job 1830943 on \pathcode{h200-004-175}, completed with scheduler exit
+\pathcode{0:0} and 32:21 wall time; pytest reported all 109 cases passed in 405.96 seconds after the
+source/runtime preflight.  Its result, JUnit report, and run log have SHA-256 values respectively
+\begin{quote}
+{\ttfamily\scriptsize 6ac6a4ce2775230cfcfd929aa77638c968ca6841b4a863a85824e479019f67da},\\
+{\ttfamily\scriptsize b6132c80118ec46578178ab567cae9a76361d30d8476d403b8071a3c154b65be},\\
+{\ttfamily\scriptsize 5301d528c8b215fddca189209c17f8f3efefe7cbd831204e141ec29aed067c41}.
+\end{quote}
+Its outer stdout has SHA-256
+{\ttfamily\scriptsize e33b84600aa1d7896723fcac68d40d342c5264914c73a052b1c608863d303f2f};
+the empty stderr has SHA-256
+{\ttfamily\scriptsize e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855}.
+
+The numerical result cannot authorize downstream work because its retained \pathcode{run.log} is
+the exact 2706-byte prefix of the 2728-byte scheduler stdout: only the final 22-byte
+\pathcode{PASS: production_h200} line is absent.  At \pathcode{e5d07ad...}, both source-gate
+runners redirected through an asynchronous process-substitution \pathcode{tee}, froze
+\pathcode{run.log}, printed PASS, and exited without waiting for that writer.  The race affected
+both production-H200 and train-smoke; the attestor's requirement that both closed logs contain
+PASS was correct and remains unchanged.
+
+The first attestor allocation, job 1830944, had an operationally insufficient 20-minute wall limit.
+After 5:43 it had read 34496.23 MiB of the runtime closure; the corresponding prior successful
+attestor read 270926.75 MiB in 42:47, projecting this attempt well beyond its limit.  It was
+therefore manually cancelled before publishing a seal; dependent preparer 1830946 never allocated
+and was also cancelled.  Replacement attestor job 1831239 used the byte-identical command and
+evidence pins with a one-hour limit.  It completed the full closure read and then correctly failed
+\pathcode{2:0} after 57:28 on the missing retained-log marker; it emitted no seal.  Dependent
+preparer 1831240 never allocated.  A redundant fail-safe attestor, job 1831513, was cancelled after
+the deterministic artifact defect was identified rather than spending another full validation
+cycle.
+
+The logging correction is isolated in worktree
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_worktrees/rdiag_shared_dt_source_gate_log_fix_20260903}
+\end{quote}
+on branch \pathcode{codex/rdiag-shared-dt-source-gate-log-fix-20260903}, based exactly on
+\pathcode{e5d07ad...}.  Its executable plan is
+\begin{quote}
+\pathcode{docs/plans/}\\
+\pathcode{2026-09-03-rdiag-shared-dt-source-gate-log-finalization-plan.md}.
+\end{quote}
+\paragraph{Working-location index.}
+The worktree above is the historical qualification-source checkout, on branch
+\pathcode{codex/rdiag-shared-dt-source-gate-log-fix-20260903} at the exact reviewed commit
+\pathcode{1fce1b9...}; current diagnostic and control development is isolated in the
+generation-zero, forward-determinism, RMSNorm-control, trigger-capture, and matched-intervention
+worktrees named below.  The main checkout is not the source of any qualification job.  Within the
+historical source worktree, the shortest paths into
+the implementation and its controls are:
+\begin{itemize}[leftmargin=1.8em]
+  \item \pathcode{lit_gpt/rdiag_shared_dt_kla.py} for the layer parameterization and the
+        $H^{-1/2}$ angle head scale;
+  \item \pathcode{lit_gpt/kla_ops/rdiag_shared_dt.py} and
+        \pathcode{lit_gpt/kla_ops/rdiag_shared_dt_reference.py} for the composed GPU path and
+        reference recurrence, with phase/clock helpers beside them;
+  \item \pathcode{lit_gpt/rdiag_shared_dt_training_health.py} for the alpha endpoint telemetry and
+        fatal-domain policy;
+  \item \pathcode{scripts/tests/rdiag/} for H200 cases, distributed smoke/soak/fault gates, runners,
+        and attestors; and
+  \item \pathcode{scripts/train/rdiag_kla/} for recipe pinning, campaign/job control,
+        authorization, and the production submitter.
+\end{itemize}
+The design and implementation plans for the numerical correction are, relative to that worktree,
+\begin{itemize}[leftmargin=1.8em]
+  \item \pathcode{docs/plans/}\\
+        \pathcode{2026-09-02-rdiag-shared-dt-angle-headscale-design.md}; and
+  \item \pathcode{docs/plans/}\\
+        \pathcode{2026-09-02-rdiag-shared-dt-angle-headscale-plan.md}.
+\end{itemize}
+The two subsequently discovered finite-precision endpoint policies are recorded in the
+corresponding \pathcode{alpha-zero-policy} and \pathcode{alpha-one-policy} plans dated
+2026-09-03.  The boundary-269 and boundary-676 plans live only in their respective historical
+diagnostic worktrees.  Those filesystem-writable worktrees are retained for investigation but are
+not qualification sources; the current immutable source snapshot and campaign root are named
+below.
+
+The only intended runtime changes are
+\pathcode{scripts/tests/rdiag/run_rdiag_shared_dt_production_h200_v1.sbatch} and
+\pathcode{scripts/tests/rdiag/run_rdiag_shared_dt_train_smoke.sbatch}; regression coverage is in
+\pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_source_gate_host.py}.  The corrected lifecycle is
+PASS emission, closure of both pipe writers, an explicit wait for the captured \pathcode{tee} PID,
+and only then read-only log publication.  It preserves any earlier nonzero status and makes a
+logger or chmod failure fatal.  No result, seal, aggregate, or attestor schema is weakened.
+
+The reviewed and published logging correction is commit/tree
+\begin{quote}
+\pathcode{1fce1b9a8e4a80d4da82a689dfb69983109aad0c},\\
+\pathcode{297b4b1f3f4ba7e4ac64ac35df0510c9bdea69be}.
+\end{quote}
+It changes exactly the two runners and the source-gate host test named above, plus the tracked plan.
+A focused selection over \pathcode{test_rdiag_shared_dt_source_gate_host.py},
+\pathcode{test_rdiag_shared_dt_production_h200_v1_host.py},
+\pathcode{test_rdiag_shared_dt_train_smoke_host.py}, and
+\pathcode{test_rdiag_shared_dt_gate_runners_host.py} passed 134 tests.  The full 22-file RDiag host
+sweep passed all 823 tests, and independent collection still reports exactly 109 H200 cases.  Two earlier broad
+attempts were deliberately excluded: concurrent test artifacts filled the 512 MiB
+\pathcode{/var/tmp} filesystem in one, while placing temporary trees on Lustre changed the
+filesystem-specific test branch in the other.  The final sweep used a spacious local filesystem
+and had no failures.  Three independent exact-SHA reviews approved the commit without blockers.
+
+The replacement immutable source snapshot contains 4230 tracked regular files and excludes only
+the approved \pathcode{paper} gitlink.  It is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/rdiag_shared_dt_auth_v3_qualification_}\\
+\pathcode{1fce1b9a8e4a80d4da82a689dfb69983109aad0c},
+\end{quote}
+with source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 429348ceb16350782bc0eb2b4a34affabc5eb73f1d3ac997e5da42a2d1949067}.
+\end{quote}
+Fresh campaign \pathcode{ae2041e3d1fd4b1ca7c1d609184c2642} is rooted at
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{campaigns/rdiag_shared_dt_auth_v3_}\\
+\pathcode{1fce1b9a8e4a80d4da82a689dfb69983109aad0c}.
+\end{quote}
+Compute-side preparation job 1832038 completed with execution-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize a1759ea8f8b058b4ab49b235d7ce0d083d7760cc41447d0d9447e01515ee925e}.
+\end{quote}
+The manifest is
+\begin{quote}
+\pathcode{production_h200/control/}\\
+\pathcode{production_h200_ae2041e3d1fd4b1ca7c1d609184c2642.manifest.json}
+\end{quote}
+relative to that campaign root.  Its authenticated emitted command was checked as an exact argv
+sequence inside H200 allocation 1832039 and submitted as job 1832040.  That gate completed
+\pathcode{0:0} on \pathcode{h200-052-125} in 31:54; all 109 cases passed in 423.33 seconds.  The
+result, JUnit report, and retained log have SHA-256 values respectively
+\begin{quote}
+{\ttfamily\scriptsize e39ebe47ce0e1bd43f23c312c75269a5a6300b6f367f6f43df7906568bc8d057},\\
+{\ttfamily\scriptsize a654c778be9062d4cc9f41b62b0f779732f09bf0c5e9c27521538384c1c9a732},\\
+{\ttfamily\scriptsize 5335a009a8407fcf2965cc67eb09f02124d562d378c98019e05119cf57e1401d}.
+\end{quote}
+The mode-0400 retained log is byte-identical to scheduler stdout, includes exactly one terminal
+\pathcode{PASS: production_h200} marker, and the scheduler error file is empty (SHA-256
+{\ttfamily\scriptsize e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855}).
+This directly exercises and resolves the former publication race.  The two-hour external attestor
+is job 1832042; it completed \pathcode{0:0} in 52:16 and published a mode-0400 bootstrap seal with
+SHA-256
+\begin{quote}
+{\ttfamily\scriptsize a6c63dae54416ad4085631de5e7d27ee97423ad881a5d1f75596d68d4dc35cff}.
+\end{quote}
+Five manifest-only preparation jobs were dependency-bound to that attestor: production soak
+1832100, train smoke 1832101, checkpoint fault 1832102, authenticated resume smoke 1832103, and
+gradient A/B 1832104.  All five completed \pathcode{0:0}; their stderr logs are empty and their
+mode-0400 execution-manifest SHA-256 values, in that order, are
+\begin{quote}
+{\ttfamily\scriptsize 2039a4b702586e5549c6a92bcfb0d0b3054151df8af290086e153439674c9873},\\
+{\ttfamily\scriptsize 36c6b0a2597dd6ee31d95b048d9434eb6a021f2f8a65a26736fa4fca6822e0df},\\
+{\ttfamily\scriptsize f2ae3776688b6a3c06e6fd7b2f6e1e71b303e50663fb2b296bebf799797fb63f},\\
+{\ttfamily\scriptsize 5ca194e4c54c7342c498689000d377acbf283e1e5a0be9075e7b9116c6e9a15c},\\
+{\ttfamily\scriptsize db126e731f9bae7cdd1172fa4815a966dc49084ecb21310ca0026dfa30e5d119}.
+\end{quote}
+Control allocation 1832771 independently rehashed each manifest, loaded it through the pinned
+control code, rebuilt the scheduler argv inside an H200 allocation, required exact equality with
+the preparer-emitted argv, and found no existing job with any of the five unique scheduler
+comments.  This compute-side step was required because the login node intentionally has a
+different data-root device identity.  It submitted the exact workloads and dependency-bound
+external attestors as the following pairs:
+\begin{quote}
+\pathcode{production-soak 1832774 -> 1832775},\\
+\pathcode{train-smoke 1832776 -> 1832777},\\
+\pathcode{checkpoint-fault 1832778 -> 1832779},\\
+\pathcode{authenticated-resume 1832780 -> 1832781},\\
+\pathcode{gradient-A/B 1832782 -> 1832783}.
+\end{quote}
+The four short workloads and attestors then completed successfully:
+\begin{itemize}[leftmargin=1.8em]
+  \item train-smoke jobs \pathcode{1832776 -> 1832777}, seal SHA-256\\
+        {\ttfamily\scriptsize d04cbec0b679496a8d4e05c22435c919ce1dbce455ea1e08dd48bbc04abad556};
+  \item checkpoint-fault jobs \pathcode{1832778 -> 1832779}, seal SHA-256\\
+        {\ttfamily\scriptsize d382d2ef31dbb49588316a7850f8c022ee3796681ee6aa418e10a53f0c0902aa};
+  \item authenticated-resume jobs \pathcode{1832780 -> 1832781}, seal SHA-256\\
+        {\ttfamily\scriptsize dc1ab93029eca699c27d4d1a8ac23a946cc6ff2c76c95d30de77edd82d897e23}; and
+  \item gradient-A/B jobs \pathcode{1832782 -> 1832783}, seal SHA-256\\
+        {\ttfamily\scriptsize a17fb2ecc2f116c41c7b333853571a8665b4811a23685b8530fea071b1e12e2b}.
+\end{itemize}
+All eight scheduler exits are \pathcode{0:0}; every external-attestor stderr is empty, and each
+independently rehashed seal is an owner-held, single-link, mode-0400 regular file.  The new
+train-smoke retained log is byte-identical to scheduler stdout and contains exactly one terminal
+PASS marker, providing a second end-to-end exercise of the log-finalization fix.  Checkpoint-fault
+and authenticated-resume emitted the same framework initialization, FSDP deprecation, and
+process-group shutdown warnings seen in the earlier successful campaign; neither emitted a Python
+traceback, and the external attestors accepted their exact results.
+
+The two-node soak allocation 1832774 started at 2026-09-03 20:15:33 UTC on
+\pathcode{h200-232-233} and \pathcode{h200-233-046}.  Slurm emitted two bootstrap warnings because
+it probed the exported job-private \pathcode{TMPDIR} before the first per-node bootstrap step had
+created that directory, and therefore used \pathcode{/tmp} for that step; the runner then created
+and used its intended mode-0700 cache trees.  This is retained scheduler stderr, not the training
+failure.
+
+The journal crossed both historical failure boundaries with zero aggregate health failures.  Its
+exact update-269 row records loss 5.395138889551163, global gradient norm 1.213560938835144, and
+26,092,800 alpha values below the diagnostic S3 floor out of 17,179,869,184.  Its update-676 row
+records loss 4.053754523396492, global gradient norm 1.0578112602233887, and 102,754,304
+below-floor values out of the same denominator.  The workload then failed closed at the
+pre-optimizer boundary for update 790.  All 16 ranks reported
+\pathcode{SoakEvidenceError: global gradient exceeds the soak limit}; job 1832774 ended
+\pathcode{FAILED 1:0}, and dependency-bound attestor 1832775 was cancelled without allocation.
+No soak result, final checkpoint, seal, or aggregate exists.
+
+The retained journal contains exactly 789 contiguous accepted rows and has SHA-256
+\pathcode{4814e6c0cedbdc4efdceefb4b944ca2e8b1df357d4f7a49118857a64f8da286f}.
+Its median and lower-empirical 95th and 99th percentile pre-clip norms are respectively 1.14646,
+2.27364, and 3.35581.  The maximum is 7.970221519470215 at update 789; excluding that row, the
+maximum is 4.06596 at update 24.  Updates 783--789 measure 3.39357, 1.82029, 1.61033, 2.27467, 2.26284,
+3.04553, and 7.97022, followed by the unretained update-790 rejection.  Loss at the rejected
+boundary was finite, and every accepted row has zero health failures.
+
+The name \pathcode{after_clip} is temporal rather than semantic.  Lightning delegates this call
+to FSDP, which returns the accumulated distributed norm \emph{before} multiplying gradients in
+place by approximately \pathcode{min(1, 1/(norm+1e-6))}.  Thus update 789 was subsequently clipped
+to approximately one; update 790 had a rank-equal pre-clip norm that was nonfinite, negative, or
+above 10 and was rejected before \pathcode{optimizer.step}.  Its exact scalar and predicate branch
+are irrecoverable from this run: the harness checks the combined predicate before constructing or
+appending a record, and named-gradient sampling begins only at update 3000.  The run retained only
+its generation-zero checkpoint.
+
+This is a genuine failure of the frozen qualification contract, but not yet proof that the 750M
+model is unstable.  The limit 10 was copied from the older bounded-E2 soak.  That accepted E2
+screen observed a sampled maximum 1.888 over updates 300--500, but it did not calibrate the tail of
+a completed 3300-update shared-DT run.  Conversely, the separate 220M gradient-v3 gate uses 100
+only as a gross fail-fast ceiling around a matched shared/no-rotation ratio experiment; it cannot
+justify changing the 750M soak threshold to 100.  The late rise makes attribution mandatory before
+either a model change or a versioned gate-policy change.
+
+The non-authorizing investigation is isolated in worktree
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_worktrees/rdiag_shared_dt_soak790_diag_20260903}
+\end{quote}
+on branch \pathcode{codex/rdiag-shared-dt-soak790-diagnostic-20260903}, branched from
+\pathcode{1fce1b9...}.  The reviewed and published execution commit is
+\pathcode{47bb7812da1bd5809d974ea9c5504209f3a357f3}, tree
+\pathcode{2fc10ee5320a418a72960a86145083916a3d739c}.  Post-execution evidence hardening is the current
+branch head:
+\begin{quote}
+commit \pathcode{4091b2572f19f8cefaab8932b2d035969f663ec0},\\
+tree \pathcode{bf8abd733df27ba03331fadf35560107fadf1e8b}.
+\end{quote}
+It does not alter the executed source.  Relative
+to that worktree, the completed replay plan is
+\pathcode{docs/plans/}\\
+\pathcode{2026-09-03-rdiag-shared-dt-soak790-diagnostic-plan.md}; its entry points are
+\pathcode{scripts/analyses/replay_rdiag_shared_dt_soak790.py} and
+\pathcode{scripts/analyses/run_rdiag_shared_dt_soak790_replay.sbatch}.  The replay keeps the
+production recipe, ordered data, seed, optimizer schedule, 2-by-8 topology, FP32 FSDP buffers,
+clipping, and strict limit under measurement-only instrumentation.  This is a same-recipe replay,
+not bit-exact production reproduction: read-only scans, copies, and reductions can perturb GPU
+scheduling, and ``same boundary'' denotes only the boundary number.  It revalidates the failed
+run's complete runtime fingerprint, computes per-rank target-token hashes and pre-clip category and
+top-parameter diagnostics at every boundary, and retains the hashes for a gradient-rejection
+boundary.  It stops non-authorizingly on a natural production-health failure, a finite norm above
+10, a nonfinite returned norm or post-health named gradient, or exhaustion through update 820.
+Nonfinite values use canonical JSON-safe tokens, finite-only norms are labeled as such, and every
+offending parameter remains separately listed.
+The validator requires the exact 32-field PRE-health inventory, the full-update alpha denominator
+17,179,869,184, and name-to-category agreement for every retained contributor.  Physical-family
+nonfinites remain owned by the earlier production-health failure path.
+
+The final pre-execution replay, health, and pretrain-integration host suite passed 87 tests.  Independent
+runner, schema, and mathematical-contract reviews approved execution commit \pathcode{47bb7812...}.
+A Git-object
+snapshot was materialized at
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/}\\
+\pathcode{rdiag_shared_dt_soak790_diag_47bb7812da1bd5809d974ea9c5504209f3a357f3}
+\end{quote}
+with source-manifest SHA-256
+{\ttfamily\scriptsize a948eb8a0540a2ff7625f344372a2d04389865bb5e3a977ad7ceff123e4a742f}.
+The manifest closes 4,234 tracked regular files; its
+\pathcode{SOURCE_MANIFEST.json} is stored at the snapshot root.
+Two-node H200 replay job \pathcode{1833926} ran on \pathcode{h200-101-019} and
+\pathcode{h200-208-076} from 2026-09-03 22:40:57 through 23:02:14 UTC.  It and all Slurm steps
+completed \pathcode{0:0}.  The rank-complete result is
+\pathcode{NO_GRADIENT_LIMIT_EXCEEDANCE_THROUGH_820}: all 820 returned norms were finite,
+nonnegative, and no larger than 10; all named-gradient nonfinite counts and all health-failure
+counts were zero.  Update 790 measured norm 1.0757828950881958 and loss 4.024734705686569, update
+820 measured norm 4.972261428833008, and the replay maximum was 7.394214630126953 at update 817.
+Thus the replay did not reproduce the original update-790 rejection.
+
+The replay is not a matched trajectory.  Of the 789 comparable records, 673 differ in at least one
+shared field; floating-point norms differ at update 1, alpha-below-floor counts first differ at
+update 3, and every update from 139 through 789 differs.  Original versus replay update 789 is
+respectively 7.970221519470215 versus 1.4658762216567993.  Gradient norms over 1--789 have Pearson
+correlation 0.5998 and first-difference correlation 0.0389; over 1--99 those values are 0.999565 and
+0.99191, while update 100 starts the first five-update run with absolute norm differences above
+0.25.  Loss remains tightly same-step coupled (Pearson 0.999511), showing the same broad recipe but
+not the same numerical state.  No original update-790 input hashes exist, and this no-rejection
+outcome retained no replay batch hashes, so data equality at that boundary is unproved.
+
+The late replay excursion is broad rather than an isolated radial failure.  Across updates
+783--820, squared gradient-norm mass is 45.57\% ordinary/backbone, 32.91\% angle, 21.50\% DT
+weight, 0.026\% DT bias, and 0.00085\% \pathcode{A_log}.  At the maximum, update 817, category norms
+are 5.2138 ordinary/backbone, 4.5117 angle, 2.6695 DT weight, 0.0909 DT bias, and 0.0271
+\pathcode{A_log}.  This localizes co-amplification but is not a causal decomposition; it supports
+neither removing rotation nor changing the frozen limit.
+
+The finalized artifacts are under
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/soak790_replay_47bb7812da1b_1833926/artifacts}.
+\end{quote}
+The retained evidence digests are:
+\begin{quote}
+summary: {\ttfamily\scriptsize 9620387f55d38bfde32e5763b1ecf72c1c4fe23223ea6d01d051acb246a718f5},\\
+trajectory: {\ttfamily\scriptsize d8fbb3c1fdea2bc1f63f089cb457b9ee832372cd828465fbee2070327801a7fc},\\
+invocation: {\ttfamily\scriptsize ff2a6a83950942e2d7ba12d8ac1bac163264e628f6d34a97e010ab27ad644634}.
+\end{quote}
+An independent audit found one packaging defect: the invocation named Slurm's ephemeral spool copy
+of the runner, which disappeared after cleanup.  Its recorded SHA-256 and size exactly match the
+immutable snapshot runner, and substituting that path regenerates the summary byte-for-byte, so
+the result is corroborated but is not self-validating as originally packaged.  Commit
+\pathcode{4091b2572f19f8cefaab8932b2d035969f663ec0} fixes future packages by retaining a mode-0400 artifact-local
+\pathcode{runner.sbatch}, binding it to the retained source-manifest entry, and rejecting external
+or writable runner records.  Its focused suite passes 48 tests.  There is no evidential reason to
+rerun job 1833926 merely to repair this historical packaging defect.
+
+The shortest code paths for this boundary are \pathcode{pretrain.py} (data fetch, health, clip,
+optimizer, and checkpoint lifecycle), \pathcode{data.py} (stateful worker/buffer order),
+\pathcode{lit_gpt/rdiag_checkpoint.py} and \pathcode{lit_gpt/fsdp_strategy.py} (full model/optimizer
+and per-rank sidecars), and
+\pathcode{scripts/tests/rdiag/rdiag_shared_dt_gradient_ab_run.py} (the existing connected-zero
+rotation intervention).  Replay-specific instrumentation remains confined to the helper and runner
+named above.
+
 \paragraph{Remaining work.}
-The head scale and repaired gradient closure are designed but not yet implemented or qualified.
-The remaining sequence is:
+The head scale and gradient-v3 closure remain frozen and published at
+\pathcode{a76dc7b930ae4d85157391d444c40ef7db14ef86}; the alpha-zero policy source is frozen and
+published at \pathcode{83118d2d96325c9b9b555d60ad4316c950c5a12d}.  That source crossed the former
+boundary-269 failure but did not pass the full soak.  The alpha-one correction is frozen at
+\pathcode{e5d07ad0f49f74e90d89a0b49ab8279b39152546}; the failed source head is its
+log-finalization child \pathcode{1fce1b9a8e4a80d4da82a689dfb69983109aad0c}.  Every existing seal
+is source-bound historical evidence; the five successful non-soak seals cannot authorize a
+source or policy change.
+
+The formerly proposed production root for \pathcode{1fce1b9...} remains deliberately absent:
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/production/}\\
+\pathcode{rdiag_shared_dt_auth_v2_1fce1b9a8e4a80d4da82a689dfb69983109aad0c}.
+\end{quote}
+It will not be created from a failed qualification.  A future production root, if authorized from
+a later source commit, will have fixed children \pathcode{source_snapshot}, \pathcode{manifests},
+\pathcode{control}, \pathcode{output}, and \pathcode{logs}.  The separate production snapshot must
+be created atomically by the immutable launcher's \pathcode{prepare-fresh} mode; the qualification
+snapshot is not reused as the training snapshot.  The four recipe digests listed below are
+historical pins for \pathcode{1fce1b9...}, not reusable authorization for changed source:
+\begin{itemize}[leftmargin=1.8em]
+  \item \pathcode{rdiag_kla_shared_dt_v1_220M}:\\
+        {\ttfamily\scriptsize 8f4d2d21f38ee93bda045e74d80bf6c5c1dd1feef9102e3ab413583b1542d9e1};
+  \item \pathcode{rdiag_kla_shared_dt_v1_750M}:\\
+        {\ttfamily\scriptsize 7a07b7af54a9df20736fc85c2eb615900c969c8a977ca12836cee210f301b2c4};
+  \item \pathcode{rdiag_kla_shared_dt_v1_1.3B}:\\
+        {\ttfamily\scriptsize f11e601a6a60fe67dd069ec5fc72954c2f32396bda4d910a32b13ed34f377834}; and
+  \item \pathcode{swa_rdiag_kla_shared_dt_v1_1.3B}:\\
+        {\ttfamily\scriptsize 225f1cd89233f0a290c527ad5c59ce4b71f9d884dfcdb1a6569044a93bd96b3f}.
+\end{itemize}
+The launcher credential prerequisite has been materialized through the no-argument/no-stdout
+credential path at \pathcode{/storage/home/ngocbh/.wandb-key}; it is an owner-controlled,
+single-link regular file with mode 0400.  No separate production-training snapshot, execution
+manifest, output directory, or training job has been created.
+Because update 790 was not reproduced, the next investigation first locates the earliest divergence
+from the exact original generation-zero checkpoint.  It is isolated in worktree
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_worktrees/rdiag_shared_dt_gen0_repro_diag_20260903}
+\end{quote}
+on branch \pathcode{codex/rdiag-shared-dt-gen0-repro-diagnostic-20260903}.  Its executable plan is
+\pathcode{docs/plans/}\\
+\pathcode{2026-09-03-rdiag-shared-dt-gen0-reproducibility-plan.md}.  It pins the original 2.9-GB
+generation-zero model with SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 8a37e667678d2743c5bdcfb3b808c909f980c50b906e2ff9e97e29b02074b581}
+\end{quote}
+and all 16 rank sidecars.  It runs three six-microbatch loader controls: no snapshot (the 1833926
+path), snapshot-and-continue on the same loader (the failed fresh-production path), and new-loader
+sidecar restore.  Four common-anchor training arms
+run in counterbalanced \pathcode{minimal-A1/instrumented-B1/instrumented-B2/minimal-A2} order for
+three updates on the same allocation and GPU mapping.  Complete local parameter/optimizer Merkle
+inventories and exact input hashes are prerequisites.  Historical process RNG was not checkpointed,
+so this test localizes only the first observed divergence among captured stages; it cannot alone
+identify the unique historical cause.  This experiment is diagnostic only.
+The generation manifest and its sidecar/ordered-file composites are pinned respectively to
+\begin{quote}
+{\ttfamily\scriptsize 6649a1a68f83b80df9f5600864dc52e51639d19b42a827b78c9eeacef9e9f8f6},\\
+{\ttfamily\scriptsize 162ff05e5940a427504c0075c82002aa8894091a8bd4f1c22c5bb5e0cb69172f},\\
+{\ttfamily\scriptsize 6a184a861f445a0eb9ed383e029d726f9cec78f97285df3c350fda95bc52fd86}.
+\end{quote}
+The validator requires exact zero counters, modes, identities, and the 17-file model-plus-sidecar
+closure before any arm runs.
+
+Implementation and review are complete in the worktree above.  The reviewed execution identity is
+\begin{quote}
+commit \pathcode{4804be477a09f19adbd88d5ca773be721608d9f3},\\
+tree \pathcode{b3d882ee859038366f6d18cbd612ad91aa2d31d3}.
+\end{quote}
+It is based on diagnostic-evidence head
+\pathcode{4091b2572f19f8cefaab8932b2d035969f663ec0}.  Relative to the worktree, its executable entry
+points and host contract are
+\begin{itemize}[leftmargin=1.8em]
+  \item \pathcode{scripts/analyses/reproduce_rdiag_shared_dt_gen0.py};
+  \item \pathcode{scripts/analyses/run_rdiag_shared_dt_gen0_repro.sbatch}; and
+  \item \pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_gen0_repro_host.py}.
+\end{itemize}
+Pre-execution review found and corrected four material harness defects: the post-run snapshot
+verifier omitted its required private-copy argument; the terminal completion marker preceded
+verified node-local cleanup; an instrumented-arm wrapper discarded ordinary loss capture; and the
+classifier could ignore some global-loss, learning-rate, named-gradient, rank-agreement, and
+loader-to-training input discrepancies.  The corrected helper now rederives every field used for
+classification, binds the restored L2 input matrix to all training arms, requires finite rank-equal
+pre-clip norms, distinguishes minimal- and instrumented-pair collective differences, and validates
+an exact 214-file artifact closure before completion.  The exact reviewed helper, runner, and test
+SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize 37b0e2061a145b2b1935a74a362235a1d462457119ed42e4e1efd3d36b7be7bc},\\
+{\ttfamily\scriptsize f9d5c8a04f7384b360eb04435c32d0a2abeb177e6f6534e91f4910e5b7c1bb14},\\
+{\ttfamily\scriptsize 750d0bae60ca24c7ae7fecffc0a52c2decba915854b5f282910b038bd088bfdc}.
+\end{quote}
+The focused generation-zero suite plus the retained soak-replay suite passes 94 tests; Python
+compilation, batch-shell parsing, staged whitespace checks, and a fresh exact validation of all 17
+generation-zero inputs also pass.  Independent artifact/runner, mathematical-contract, and
+Lightning/FSDP runtime reviews found no remaining Critical or Important issue on these exact
+bytes.  The broader RDiag host sweep first reached 898 passes before 19 late fixture writes failed
+because the login node's 1-GB \pathcode{/tmp} filled; these were \pathcode{ENOSPC} errors rather
+than assertion failures.  Re-running both affected files with a diagnostic-Lustre temporary root
+passed 82/82, closing all 917 distinct broad-suite tests.  The two disposable test-owned temporary
+trees were then removed.
+
+Commit \pathcode{4804be477...} is pushed on the branch named above.  Its immutable Git-object
+snapshot is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/}\\
+\pathcode{rdiag_shared_dt_gen0_repro_diag_4804be477a09f19adbd88d5ca773be721608d9f3}.
+\end{quote}
+The snapshot contains 4,238 tracked regular files, excludes only the external
+\pathcode{paper} gitlink, and was independently revalidated against source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 1bbf00a65b30ffd26bd01926e09b7c306c2836054f40d83aab9963904e16c893}.
+\end{quote}
+Two-node H200 diagnostic job \pathcode{1834859} ran directly from that snapshot on
+\pathcode{h200-091-173} and \pathcode{h200-101-011} from 2026-09-04 01:23:02 through 01:28:07
+UTC and failed \pathcode{15:0} in the first loader probe.  Source staging, both runtime identities,
+invocation capture, and the complete generation-zero input preflight succeeded.  Before any
+training update or rank result was written, all ranks rejected the first batch at
+\pathcode{batch_record}: the live Transformers collator returns a \pathcode{BatchEncoding}, which
+implements \pathcode{Mapping} and contains \pathcode{input_ids}, \pathcode{attention_mask}, and
+\pathcode{labels}, but the diagnostic required the concrete type \pathcode{dict}.  No summary,
+artifact inventory, completion marker, or scientific result exists.  The retained scheduler log
+and stderr SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize 29939733705f0f3e49dd2fe2e1210484f68a3d6b90f6fafe361fb992cc7718a2},\\
+{\ttfamily\scriptsize 4f5e6fb8ab374b4bce06213cab824ed588b5ee4ae5c6ad818ce4b2f10ee34326}.
+\end{quote}
+The failure is a fail-closed diagnostic type-contract bug, not model evidence.
+
+The corrected execution identity is
+\begin{quote}
+commit \pathcode{f1cfd305cfe76039cf8a0d62881e84ec5faee6d7},\\
+tree \pathcode{5c558d3e470b3c5f47aa7912f8ffed71bcbd5255}.
+\end{quote}
+It replaces that concrete-type check with
+\pathcode{isinstance(batch, Mapping)}, documents that the retained identity is the two-field
+training-input projection, and tests an actual three-field \pathcode{BatchEncoding} plus negative
+non-mapping/missing-field cases.  The focused generation-zero plus replay suite now passes 97
+tests.  An independent review reproduced the real collator type and found no analogous live-API
+type blocker.  The corrected helper SHA-256 is
+\begin{quote}
+{\ttfamily\scriptsize 9e9c20f71fb5810ae39da45e29dddaa2c7b130e4b5b7740e819a9a2664cbb63c}.
+\end{quote}
+The runner remains byte-identical.  The replacement 4,238-file immutable snapshot is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/}\\
+\pathcode{rdiag_shared_dt_gen0_repro_diag_}\\
+\pathcode{f1cfd305cfe76039cf8a0d62881e84ec5faee6d7},
+\end{quote}
+independently revalidated against source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 524164d0e3b75e91b9cf3013ac581b0d0a12b8288aeec8ec33579efb6eb87a55}.
+\end{quote}
+Replacement two-node H200 job \pathcode{1835101} ran directly from that snapshot on
+\pathcode{h200-081-214} and \pathcode{h200-199-061} from 2026-09-04 01:57:03 through 02:11:54
+UTC and failed \pathcode{15:0}.  Unlike job \pathcode{1834859}, all three loader modes completed:
+48 rank records prove that the two-field training-input projections of all six microbatches match
+exactly between no-snapshot, snapshot-and-continue, and new-loader sidecar-restore paths on every
+rank.  The L1 and L2 canonical loader-state hashes are also identical.  Thus neither calling
+\pathcode{state_dict} nor restoring its captured state is the first observed loader fork in this
+environment.
+
+The first training arm then failed on all ranks before model construction or any update because
+the shared-DT frontend import loads TileLang, whose TVM initialization intentionally prepends its
+Python directory to the in-process \pathcode{PYTHONPATH}.  The harness validated the pristine
+launch environment after that import and therefore rejected the expected library mutation.  No
+training-arm record, summary, artifact inventory, completion marker, or scientific classification
+exists.  The retained artifact root is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/gen0_repro_f1cfd305cfe7_1835101/artifacts}.
+\end{quote}
+Its scheduler log, stderr, invocation, and pre-run checkpoint-inventory SHA-256 values are
+respectively
+\begin{quote}
+{\ttfamily\scriptsize 1d1770bc94f23f14a4d3d97083827130031eec773131a7512fd4ce2abe350c8f},\\
+{\ttfamily\scriptsize ccb4628c9a94d73a0f324f748c106c38bc44b846b3e797eef809febb6d3ac9b9},\\
+{\ttfamily\scriptsize b13029c37f098209ec5eb046e78ecd4652c38af6998fbe9e88fe8caf7be8b45c},\\
+{\ttfamily\scriptsize 20bbc0c2a345eaa46671d670c0d865b6f9a73266c9310bd81a1f43243ed120fd}.
+\end{quote}
+
+The second correction moves the unchanged launch-environment validation before heavyweight model
+imports; it does not weaken the check.  It is reviewed and pushed as
+\begin{quote}
+commit \pathcode{e2b5e317b750e88437d30e95eb6a89ac88cb11c2},\\
+tree \pathcode{f625647a419c9ded1dd02a9b5367827981b00b18}.
+\end{quote}
+The helper and host-test SHA-256 values are now
+\begin{quote}
+{\ttfamily\scriptsize fc3c44e57af6d0994934a7bd0c7433580904a481428966773e6863b77adf2217},\\
+{\ttfamily\scriptsize 4be33408b0e33743486be389d31968f3fd6337c83d58f823a9d1ce33860f803f}.
+\end{quote}
+The combined generation-zero/replay host suite passes 98 tests; an independent import-chain audit
+reproduced the TileLang mutation and found no earlier mutating import.  A fresh 4,238-file
+Git-object snapshot is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/rdiag_shared_dt_gen0_repro_diag_}\\
+\pathcode{e2b5e317b750e88437d30e95eb6a89ac88cb11c2},
+\end{quote}
+verified against source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 797858b93cf5b7c1e98581e00bd3fa58b0db28d1de3c87e4b23b3b5a4775b968}.
+\end{quote}
+Replacement job \pathcode{1835588} ran on \pathcode{h200-046-019} and
+\pathcode{h200-171-121} from 2026-09-04 02:49:35 through 03:07:27 UTC and failed
+\pathcode{15:0}.  The environment-order correction worked: all three loader phases and the
+three-update \pathcode{minimal_a1} arm completed on every rank.  Its 16 training records have
+finite, rank-equal pre-clip norms at all three boundaries and use the same input projection as the
+restored sidecar.  The subsequent cache-inventory step failed before the next arm because the
+training path, unlike each loader probe, had not explicitly stopped its four persistent DataLoader
+workers per rank.  A local reproduction showed that live workers create
+\pathcode{TMPDIR/pymp-*/listener-*} AF\_UNIX sockets; the strict cache inventory correctly rejects
+such a special entry.  This is post-measurement harness cleanup evidence, not a model failure, but
+the job has no final summary, artifact inventory, completion marker, or admissible classification.
+The retained artifact root is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/gen0_repro_e2b5e317b750_1835588/artifacts}.
+\end{quote}
+Its scheduler log, stderr, invocation, and rank-0 \pathcode{minimal_a1} record SHA-256 values are
+respectively
+\begin{quote}
+{\ttfamily\scriptsize a064b744df142a24957ae3ad3915da441d127d7c37c84c2b6ed91018024f2fe3},\\
+{\ttfamily\scriptsize f9f48e95fb92bebe27c4f0ddb5ec44f27dc560854f5c28da92ca3c696d812424},\\
+{\ttfamily\scriptsize 356a404e648d383301ac25b79bd6680c9ce289dd49877538fc869bf7a62e9374},\\
+{\ttfamily\scriptsize b358564f0dfb6f8a39f077258a620119d5030743ce49e4c2c10118a77cf2cf4c}.
+\end{quote}
+
+The third correction factors the already-used worker shutdown into one helper and invokes it from
+both loader probes and training-arm cleanup.  Special cache entries remain fail-closed, and future
+errors now include their relative path, decoded kind, and mode.  The reviewed, pushed identity is
+\begin{quote}
+commit \pathcode{0e9cda6875e8709fa250110dcb35772d46d22817},\\
+tree \pathcode{dad58c03e607bf38304dd41ae7d6e8993d729720}.
+\end{quote}
+The helper and host-test SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize a37fdea21c59757246c6fabff0dac15d8ca93ac3cfdc784d0549413544e30f70},\\
+{\ttfamily\scriptsize 92766a1a21c35be8a26314cf0c4e85b8d298eec88abc37467d6a5e69d632ffa4}.
+\end{quote}
+The combined focused suite passes 100 tests, including an AF\_UNIX-socket rejection test, and an
+independent review confirmed that shutdown removes all four reproduced listener sockets without
+changing measured training math.  Its fresh immutable snapshot is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/rdiag_shared_dt_gen0_repro_diag_}\\
+\pathcode{0e9cda6875e8709fa250110dcb35772d46d22817},
+\end{quote}
+verified against source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize b228c5e0b44a9888d96d2d381c53940d7f6eb7264c71367ecde06f26535cf0e6}.
+\end{quote}
+Replacement job \pathcode{1835824} ran directly from that snapshot on
+\pathcode{h200-046-019} and \pathcode{h200-094-010} from 2026-09-04 03:42:39 through 04:13:57
+UTC.  The job and every step \pathcode{.0}--\pathcode{.18} completed \pathcode{0:0}.  It produced
+the exact preregistered closure: 112 rank JSON records across seven 16-rank phases, 214 mode-0400
+files recorded by \pathcode{artifact-inventory.json}, and 215 final directory entries because the
+inventory does not list itself.  Independent validation returned \pathcode{VALID}; the log has
+exactly one non-authorizing completion marker and the scheduler stderr is empty.  The retained
+artifact root is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\
+\pathcode{diagnostic_runs/gen0_repro_0e9cda6875e8_1835824/artifacts}.
+\end{quote}
+The summary, artifact inventory, invocation, scheduler log, and empty scheduler stderr SHA-256
+values are respectively
+\begin{quote}
+{\ttfamily\scriptsize aa466253b9bcdfeebf695ead220357b6693189c93aa5d089c573a3e887a71df6},\\
+{\ttfamily\scriptsize 7aef2fc9349c84876b0ea7d46ee114147a4dc52be2cd4b0c776c4d6245b08339},\\
+{\ttfamily\scriptsize eba71feda5c6f650968a143f49c4881fa524ce22ac4dec31b713ca1e0bbc9534},\\
+{\ttfamily\scriptsize 8567a91cdacd6df770a49cc61f13ffe5be0431e479f30bbeae21afb50bdc6f40},\\
+{\ttfamily\scriptsize e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855}.
+\end{quote}
+
+The result is valid diagnostic evidence but fails the scientific hard gate.  All loader and
+training input matrices match the original sidecars; the reconstructed model, optimizer, loader,
+first-RNG anchor, rank topology, and corresponding-rank mapping also match.  Nevertheless both
+the minimal A1/A2 pair and instrumented B1/B2 pair classify as
+\pathcode{ORDINARY_RUNTIME_NONDETERMINISM}, making the overall training classification the same.
+The first classifier-stage difference is the boundary-1 local-gradient Merkle root after the first
+two microbatches.  The earliest chronological scalar difference occurs even earlier at rank 1,
+microbatch 1: minimal A1 records loss token \pathcode{0x1.50da340000000p+3}, whereas minimal A2
+records \pathcode{0x1.50ddc80000000p+3}, despite joint input SHA-256
+\pathcode{5dcab61b5c06aa429639e90ef660cba3caf85ed6161fd6cf36812696f369cf7a}
+and pre-forward RNG SHA-256
+\pathcode{7db887f05ff2b0af83e6e7c4b4c9d7ac1a71e2f172d903ea409ce54cf21bdabe}
+being identical.  Because both minimal replicates diverge before clipping, this is neither a loader
+restore failure nor instrumentation-only or pre-clip-norm-collective divergence.  The exact
+operator remains unidentified; trigger capture stays blocked pending a focused runtime/kernel
+repeatability diagnostic and a successful repeat of this hard gate.
+
+That focused forward-determinism diagnostic was implemented in the isolated worktree
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_worktrees/rdiag_shared_dt_forward_determinism_20260904}
+\end{quote}
+on branch
+\pathcode{codex/rdiag-shared-dt-forward-determinism-20260904}, based on commit
+\begin{quote}
+\pathcode{0e9cda6875e8709fa250110dcb35772d46d22817}.
+\end{quote}
+Its reviewed executable plan is
+\pathcode{docs/plans/}\\
+\pathcode{2026-09-04-rdiag-shared-dt-forward-determinism-plan.md}; its entry points are
+\begin{itemize}[leftmargin=1.8em]
+  \item \pathcode{scripts/analyses/reproduce_rdiag_shared_dt_forward_determinism.py};
+  \item \pathcode{scripts/analyses/run_rdiag_shared_dt_forward_determinism.sbatch}; and
+  \item \pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_forward_determinism_host.py}.
+\end{itemize}
+The design compares two ordinary-autotune and two diagnostic-only RMSNorm-warp-8 phases.  Each
+process retains one minimally observed cold forward through the normal Fabric/FSDP and health
+path, stops after the exact ordinary cross-entropy reduction and before backward, then performs
+three equal-RNG warm traces plus a post-trace replay of all six existing RMSNorm forward
+configurations.  Cold and warm evidence are reported on separate axes; every configuration replay
+must be stable across corresponding ranks before RMSNorm selection can be called strongly
+supported.  This diagnostic cannot authorize trigger capture: any candidate execution control
+must still pass a fresh copy of the unchanged generation-zero \pathcode{minimal=MATCHED} gate.
+Independent plan and runtime reviews found and closed three pre-launch defects: an invalid
+cross-scope FSDP weight-object identity requirement, conflation of the raw BF16 \pathcode{lm_head}
+output with Fabric's distinct FP32 return/loss input, and a missing final fail-together exchange
+after cleanup and rank-local result validation.  The focused suite now passes 57 tests and the
+combined forward-diagnostic, generation-zero, and soak-790 host suites pass 157 tests.  The
+reviewed and pushed diagnostic identity is
+\begin{quote}
+commit \pathcode{70165b017cd28df832a9a8797a72a1f8234284d0},\\
+tree \pathcode{c58e220299a54525c443f4f0dc204e22e1fb19b8}.
+\end{quote}
+The plan, helper, runner, and host-test SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize 7aff0bea0a85887e7744f57816239dd598426c5bc4623ffb140a01f410a98f26},\\
+{\ttfamily\scriptsize 52583f1d8cfdfdd571897a446ce00a69b598a72889e244be9e342498fd32010f},\\
+{\ttfamily\scriptsize eeb1704bdb8bb30a376ba5483747e1ad6022426f96fe6cab3e8627cf642fe0fd},\\
+{\ttfamily\scriptsize 71a20bbcfce4c1109766263bca07e5e8099312f7ec6196d4b2e276aba62a3a65}.
+\end{quote}
+The 4,242-file immutable source snapshot is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/rdiag_shared_dt_forward_determinism_}\\
+\pathcode{70165b017cd28df832a9a8797a72a1f8234284d0},
+\end{quote}
+verified against source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize e1129c0caa1832c5bc5ff3d2f978a8c6a18a38a1c55f7d0027b1792ddb77e665}.
+\end{quote}
+H200 diagnostic job \pathcode{1836996} ran from this snapshot on
+\pathcode{h200-079-003} and \pathcode{h200-079-202} from 2026-09-04 06:17:47 through 06:37:39
+UTC.  The allocation and every step \pathcode{.0}--\pathcode{.12} completed \pathcode{0:0}.
+It produced the exact preregistered closure: 64 rank JSON records, 64 NCCL logs, eight node/phase
+cache inventories, 154 mode-0400 files recorded by \pathcode{artifact-inventory.json}, and 155
+final directory entries because the inventory does not list itself.  Independent validation
+returned \pathcode{VALID}; the log has exactly one non-authorizing completion marker and scheduler
+stderr is empty.  The retained artifact root is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/forward_determinism_70165b017cd2_1836996/artifacts}.
+\end{quote}
+The summary, artifact inventory, invocation, scheduler log, and empty scheduler stderr SHA-256
+values are respectively
+\begin{quote}
+{\ttfamily\scriptsize 741e75362c6214b4a82644bbab2b12b61fc6ed827e80ff4ac4d3f86be94861ff},\\
+{\ttfamily\scriptsize 463b68fc3d70f85682fe03137df857e5e577d9c9aae009e7f7c13659f591931f},\\
+{\ttfamily\scriptsize 0179440c6f58ac1935626684916b4599bd2035820cde6ee4ccf1cc5ebcdbfde5},\\
+{\ttfamily\scriptsize 45a7018391bd5ec572d48c2557d3a0239cadd679289cf465f8e241a444cfb29a},\\
+{\ttfamily\scriptsize e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855}.
+\end{quote}
+The pre/post generation-zero input inventories are byte-identical, both with SHA-256
+\pathcode{b5bc763929a966c54adbfeb1d9a1d9d1c0ae891556860ad89449a333fec50cbe}.
+
+The preregistered classification is
+\pathcode{RMSNORM_AUTOTUNE_SELECTION_STRONGLY_SUPPORTED}.  Every initial-state and input
+comparability axis matches, every within-process warm repeat matches its cold result, and both
+warp-8 phases match exactly across processes.  By contrast, the two ordinary cold processes
+diverge on ranks 3, 6, 12, and 14.  Those are exactly the ranks whose selected forward RMSNorm
+warp count changes: respectively $8\mathbin{\to}4$, $2\mathbin{\to}4$,
+$4\mathbin{\to}8$, and $4\mathbin{\to}1$.  Their first warm-trace difference is
+\pathcode{block_00.norm_1}; their external logits, unreduced loss, and reduced loss then differ,
+while z-loss remains equal.  Replaying each selected configuration reproduces its recorded warm
+output, and all six forced configurations are stable when compared at equal input, weight, rank,
+and configuration.  Thus timing-dependent RMSNorm forward autotune selection is strongly
+supported as the source of the observed first-forward variance.  This remains diagnostic rather
+than production authorization: it does not test backward repeatability, and a narrowly scoped
+fixed-warp production control must pass a fresh unchanged generation-zero hard gate.
+
+The corrective implementation is now isolated in worktree
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_worktrees/rdiag_shared_dt_rmsnorm_control_20260904}
+\end{quote}
+on branch \pathcode{codex/rdiag-shared-dt-rmsnorm-control-20260904}, based exactly on diagnostic
+commit \pathcode{70165b017cd28df832a9a8797a72a1f8234284d0}.  Its executable plan is
+\pathcode{docs/plans/}\\
+\pathcode{2026-09-04-rdiag-shared-dt-rmsnorm-determinism-plan.md}.  The selected scope is the
+narrow forward-only control justified by job \pathcode{1836996}: for the four resolved
+shared-DT configurations only, require the cold RMSNorm forward autotuner's exact existing
+six-candidate closure and install its unique existing warp-8 object as a singleton.  The backward
+RMSNorm tuner, every FLA tuner, precision policy, recurrence, parameters, and generation-zero
+helper/runner remain unchanged.  Activation keys on the resolved internal config identity rather
+than the raw CLI name, because the generation-zero diagnostic deliberately uses a temporary CLI
+alias whose copied payload retains the production internal name.  No environment selector,
+config/recipe field, or runtime-fingerprint field is added: the historical runtime, data, model,
+and sidecar identities remain fixed, while the new source-manifest SHA binds the control.  The
+implementation must fail closed on warm, altered, or ambiguous tuner state, emit a canonical
+policy digest with rank consensus before model construction, cover the direct evaluation and
+gradient-gate constructors that bypass \pathcode{pretrain.py}, and prove that the backward tuner
+is not mutated.  The process-global pin is intentionally irreversible; every authenticated
+entry point runs one shared-DT model family per process, and a mixed-family caller must use a
+separate process rather than attempting to restore Triton global state.
+
+The initial policy implementation and smoke harness were reviewed, committed, and pushed as
+\begin{quote}
+commit \pathcode{28ea1c51a16825ae02d3d4c6520087e8b9b2ca42},\\
+tree \pathcode{1f7dd60edbebe92b429e4a541fdea85e6ec3c182}.
+\end{quote}
+The plan, policy module, trainer integration, authenticated evaluation integration, and gradient
+gate integration SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize 91cc8fd7580ff953f71cedd5594a489eacc126168bce68904d7b17ffebbcbbb2},\\
+{\ttfamily\scriptsize 74898f2dfa3c3073e491616eb7e847acdaa695c4b8b70596af5534e5c6591433},\\
+{\ttfamily\scriptsize ff9fa812d81266577c5d9b4404966e039e1bad205abf19009099ffc24651a584},\\
+{\ttfamily\scriptsize b78e03c7996933e5c68a2e08a46ab074a8a235b5ac783e2588a523e14497c5f8},\\
+{\ttfamily\scriptsize 755fa87cc6598b21391a06de20a9b25ce1a9286b383e8e714a26764c141015e6}.
+\end{quote}
+The corresponding implementation entry points are
+\begin{itemize}[leftmargin=1.8em]
+  \item \pathcode{lit_gpt/rdiag_shared_dt_rmsnorm.py} for applicability checks, fail-closed tuner
+        inspection, installation, and the canonical policy record;
+  \item \pathcode{pretrain.py}, \pathcode{scripts/eval/eval_lm_harness.py}, and
+        \pathcode{scripts/tests/rdiag/rdiag_shared_dt_gradient_ab_run.py} for authenticated
+        training, evaluation, and gradient-gate activation; and
+  \item \pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_rmsnorm_policy_host.py},
+        \pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_rmsnorm_integration_host.py}, and the
+        policy smoke files below for host and H200 contracts.
+\end{itemize}
+The smoke helper and runner are
+\pathcode{scripts/tests/kernels/test_rdiag_shared_dt_rmsnorm_policy.py} and
+\pathcode{scripts/tests/kernels/run_rdiag_shared_dt_rmsnorm_policy.sbatch}, with SHA-256 values
+\pathcode{aa58e4cfa0efb2f35e4cf4c38d86eb1492a1fbba359b644c7cf526c8c15e13cc} and
+\pathcode{85f8ce9bf11cf61d006916ac44c3955fbe1f7b1c070ac17453f4afd89f850c84}.
+It exercises the actual wrapped Triton forward at $M=16384$ and widths 1024, 2048, and 2304,
+requires repeat and two-rank output/rstd byte equality, and benchmarks all six existing candidates
+with 40 order-balanced samples each.  Warp 8 must remain within $1.25\times$ the empirical fastest
+candidate by both median and lower-quartile latency.  Installation leaves the backward candidate
+objects unchanged; a later backward smoke only proves that the untouched path still executes.
+At the initial implementation revision, the focused policy/integration/smoke contract suite passed
+49 tests.  The combined existing generation-zero, forward-diagnostic, runtime-identity,
+gate-runner, and authorization suite passed 309 tests with three declared skips when pytest
+temporary files were redirected to Lustre; an initial attempt exhausted the already-full system
+temporary filesystem and is not a code failure.  After the later smoke-helper and launcher-only
+revisions, the final focused runner/smoke-host suite passed nine tests.
+Independent final review reports no Critical, Important, or Minor finding.  The generation-zero
+helper and runner remain byte-identical to commit \pathcode{70165b0}, with SHA-256 values
+\pathcode{a37fdea21c59757246c6fabff0dac15d8ca93ac3cfdc784d0549413544e30f70} and
+\pathcode{f9d5c8a04f7384b360eb04435c32d0a2abeb177e6f6534e91f4910e5b7c1bb14}.
+
+The 4,249-file immutable control snapshot is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/rdiag_shared_dt_rmsnorm_control_}\\
+\pathcode{28ea1c51a16825ae02d3d4c6520087e8b9b2ca42},
+\end{quote}
+independently verified against source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 4207beb5e9eb0aeaaa11c7eb489d2295122ac257ecedfc77b5dfde21f35241c1}.
+\end{quote}
+Non-authorizing two-H200 smoke job \pathcode{1837294} was submitted from exactly this snapshot and
+failed before Python after two seconds.  The batch shell and its \pathcode{srun} task steps receive
+different node-local \pathcode{/tmp} namespaces on this cluster; the batch-created cache parent was
+therefore absent in both GPU tasks.  No numerical test executed and no result JSON was published;
+the empty artifact directory is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/rmsnorm_policy_28ea1c51_ZxLwOVLa/artifacts}.
+\end{quote}
+The runner correction creates and removes a distinct private \pathcode{/tmp} root inside each
+\pathcode{srun} task, preserves the workload exit status through guarded cleanup, and has passed
+its seven host contracts, shell syntax check, and independent review.  Because this changes the
+runner bytes, the reviewed and pushed replacement identity is
+\begin{quote}
+commit \pathcode{edf5bb3aa95e2d64beabc8f4196c56029851b037},\\
+tree \pathcode{fbcc46493836860a268d9fe56514ca8eadd38993}.
+\end{quote}
+The corrected plan, runner, and runner-host-test SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize cb77a67a4e06e5d31c93547e4560064eb10bd045261a37a8bc5b971e7338fdb7},\\
+{\ttfamily\scriptsize 48463cff46aa3eae19a46514655dfac90b8886e02a8df08036a9df4ad12c66ba},\\
+{\ttfamily\scriptsize 2b06e25a26341d7eb108f06c6abe7c087a7ea035d9ede29715eb36f801814b75}.
+\end{quote}
+Its independently verified 4,249-file snapshot is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/rdiag_shared_dt_rmsnorm_control_}\\
+\pathcode{edf5bb3aa95e2d64beabc8f4196c56029851b037},
+\end{quote}
+with source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 2dc7fc4d3856c43f607e00df606a63c4c221fcbd5c5da5f461e6fab34fc59c98}.
+\end{quote}
+Replacement smoke job \pathcode{1837353} reached Python from this corrected snapshot but failed
+on the first NCCL collective: task-local one-GPU visibility caused NCCL 2.27 to report
+\pathcode{invalid device ordinal}.  The irrecoverable allocation was cancelled after 2:08 to
+release its H200s.  It also published no result; its empty artifact target is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/rmsnorm_policy_edf5bb3a_MBXIibLe/artifacts}.
+\end{quote}
+The second launcher correction follows a completed project H200 reference: both allocated GPUs
+are visible to both tasks via \pathcode{--gpus-per-node=2 --gpu-bind=none}, and ranks select CUDA
+devices by \pathcode{LOCAL_RANK}.  It also prints rank-local phase tracebacks before recovery and
+re-raises fatal CUDA/NCCL failures instead of attempting another collective on a poisoned CUDA
+context.  The reviewed and pushed identity is now
+\begin{quote}
+commit \pathcode{fd9ca79e697b2fce14b8938459a7d2e63e434bea},\\
+tree \pathcode{b72796b9106c8e06d2b7e59051e5cab094ec8b40}.
+\end{quote}
+The current plan, smoke helper, runner, and runner-host-test SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize 61277a3f3db22a8495f5cc2cfbdd50fd038cc53664c219c04bcacad8e8f3c572},\\
+{\ttfamily\scriptsize af2f17b7b178930291a1225345373713c3fc1357165a3812afa9f237c494d31e},\\
+{\ttfamily\scriptsize 87652ee3fdb1fd54cf17cfdbcb32e65877aa1fa27b8c146af96b860e0fe9d38f},\\
+{\ttfamily\scriptsize cfb736f894504e8bc2f941074452579dbb87c825ce5fd7cb54c36e8674821d69}.
+\end{quote}
+Its independently verified 4,249-file snapshot is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/rdiag_shared_dt_rmsnorm_control_}\\
+\pathcode{fd9ca79e697b2fce14b8938459a7d2e63e434bea},
+\end{quote}
+with source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 0d49e9471d3e6a3b48bc21838b6366cf26d7b8f9418639b70a5f012dec866f20}.
+\end{quote}
+Smoke job \pathcode{1837393} ran from this snapshot on \pathcode{h200-129-161} from
+2026-09-04 07:51:39 through 07:52:08 UTC.  The allocation, batch, extern, and sole
+\pathcode{srun} step all completed \pathcode{0:0}.  It published exactly one retained artifact,
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/rmsnorm_policy_fd9ca79e_gz8Nu1Ly/artifacts/result.json}.
+\end{quote}
+That mode-0400, single-link, root-owned result is 17,835 bytes and has SHA-256
+\begin{quote}
+{\ttfamily\scriptsize f39137e97c07d7cafc9d930b4060dce798b352a439aba9a22201d106107aeb30}.
+\end{quote}
+The scheduler log SHA-256 is
+\begin{quote}
+{\ttfamily\scriptsize a6228b2518a21a27e627c69c2f0b61d96613396230833eaa7acd2c757b288490}.
+\end{quote}
+Independent validation returned \pathcode{VALID}.  The result is explicitly
+\pathcode{authorizing=false} and \pathcode{production_gate=false}.  Both ranks agreed on policy
+record SHA-256
+\begin{quote}
+{\ttfamily\scriptsize cd31a0f1bc60aa5421cb7074f5236a14ff4fb66d59632e587e0920f4e343ecac}.
+\end{quote}
+At widths 1024, 2048, and 2304, the first forward used the exact pre-existing warp-8 object, the
+forward cache remained empty, repeat outputs and reciprocal standard deviations were byte-exact,
+and the corresponding cross-rank values were byte-exact.  Across all rank/width pairs, the maximum
+warp-8-to-fastest ratio was 1.04614 by median and 1.04703 by lower-quartile latency, well within the
+preregistered $1.25\times$ bounds.
+
+The deliberately untouched backward smoke also exposed the next concrete risk.  Rank 0 selected
+warp 16 while rank 1 selected warp 8; equal forward outputs and weight-gradient hashes accompanied
+different input-gradient hashes:
+\begin{quote}
+{\ttfamily\scriptsize f364b0deeac41662c4571b76f4ae57c9d45ac5923b47b0d0685f357ca7f83647},\\
+{\ttfamily\scriptsize ae9fca3f6523a4a59d0670dd4af9bdbf041c6992f5df43eb37907baa1a9be3d3}.
+\end{quote}
+Backward cross-rank equality was not a preregistered requirement of this forward-control smoke, so
+the bounded smoke validly passes; the observation nevertheless makes RMSNorm backward autotuning
+the leading suspect if the forward-only control is insufficient.  The unchanged replacement
+generation-zero run discriminates that sufficiency, not backward causality.  That gate, not
+installation or this smoke, decides whether trigger capture can begin.  If it does not return
+\pathcode{minimal=MATCHED}, focused backward-RMSNorm localization is the next priority, and a
+separately reviewed narrow control is warranted only if that localization implicates it.  No
+trigger or production authorization is presently claimed.
+
+The unchanged replacement generation-zero job \pathcode{1837446} then ran from the same
+\pathcode{fd9ca79e...} snapshot on \pathcode{h200-004-175} and \pathcode{h200-071-008} from
+2026-09-04 07:57:40 through 08:27:18 UTC.  The allocation, batch, extern, and all steps
+\pathcode{.0}--\pathcode{.18} completed \pathcode{0:0}.  Its retained artifact root is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/gen0_repro_fd9ca79e697b_1837446/artifacts}.
+\end{quote}
+Independent validation returned \pathcode{VALID}: the directory contains the exact 214-file
+inventoried closure plus \pathcode{artifact-inventory.json}, for 215 mode-0400, single-link files.
+The summary, inventory, invocation, scheduler log, and empty scheduler stderr SHA-256 values are
+respectively
+\begin{quote}
+{\ttfamily\scriptsize c69adb84b265f7c20560ad1be54a7654fcda963ffe068cda252f398c942d9c54},\\
+{\ttfamily\scriptsize 97a46cae0bc31162351ffa1d39acf6f55b048d4f8ccc22677b549082a3c64a14},\\
+{\ttfamily\scriptsize 2bf614563fa4f82662220809cfaf2c1b9d23f512e11400e87fa11db40644f179},\\
+{\ttfamily\scriptsize fb0cbcfc30f950f5b899095bb603caf1110cb369eb25eff6bdba682d396b1e90},\\
+{\ttfamily\scriptsize e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855}.
+\end{quote}
+The log has exactly one completion marker.  Its pre/post checkpoint-input inventories are
+byte-identical, both with SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 20bbc0c2a345eaa46671d670c0d865b6f9a73266c9310bd81a1f43243ed120fd}.
+\end{quote}
+Both node runtime-identity records retain SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 135ea68e47d1e9728f1295e480dd22518566f818619d06b6853bed343b00639d}.
+\end{quote}
+
+The hard gate passes.  The reconstructed common anchor, rank topology, training inputs, and
+sidecar inputs match; all three loader arms match over their first six rank-local microbatches.
+Both preregistered replicate-pair classifications are \pathcode{MATCHED}, including the required
+\pathcode{minimal=MATCHED}; global loss and pre-clip norm are exact at each of the first three
+update boundaries.  The overall training classification is
+\pathcode{MATCHED_RECONSTRUCTED_FIRST_THREE_UPDATES}.  This remains non-authorizing and does not
+make the reconstructed process RNG historically comparable to the failed production run, whose
+RNG was not retained.  It does establish that the forward-only control is sufficient for the
+generation-zero repeatability gate.  The backward-smoke observation remains a risk note rather
+than evidence warranting a second intervention, so no backward pin is introduced.  This result
+released revision, review, and non-authorizing execution of the trigger-capture diagnostic; it
+does not authorize production.
+
+The gated follow-on capture work is isolated in worktree
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_worktrees/rdiag_shared_dt_trigger_capture_20260904}
+\end{quote}
+on branch \pathcode{codex/rdiag-shared-dt-trigger-capture-20260904}; its plan is
+\pathcode{docs/plans/}\\
+\pathcode{2026-09-04-rdiag-shared-dt-trigger-capture-plan.md}.  Its earlier plan-only identity was
+\begin{quote}
+commit \pathcode{8074daf35bbd3dac839f0fc2601361d7cf069d50},\\
+tree \pathcode{b27a3f6ab3269df09daf02f08507f178a77cefe9}.
+\end{quote}
+The accepted control lineage was merged without rewriting either parent as
+\begin{quote}
+commit \pathcode{57afdd1f9fe497f3630f262f7febfcbbd56e4f7e},\\
+tree \pathcode{ad12554140dac65bb315dd49a0c7fc003393acb1},
+\end{quote}
+whose parents are \pathcode{8074daf...} and \pathcode{fd9ca79e...}.  The plan was then revised,
+independently reviewed for evidence integrity and runtime semantics, committed, and pushed as
+\begin{quote}
+commit \pathcode{dfd928cf7e861f5f828f6486730cf2836cdd3089},\\
+tree \pathcode{1666a25b3ef188dca6c151a18209c11d57b470f9}.
+\end{quote}
+Its reviewed plan SHA-256 is
+\begin{quote}
+{\ttfamily\scriptsize 48f65aaf84d0c0ce403ed25bc9bd860c33b511c2119c28191b3e71123473e7d8}.
+\end{quote}
+The plan pins job \pathcode{1837446}'s summary, inventory, invocation, source, input, runtime, and
+log identities at their actual nested classifier paths.  Its exact 1,281-byte root scheduler row
+is retained separately, without modifying the closed generation-zero directory, at
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/gen0_repro_fd9ca79e697b_1837446_scheduler_record/}\\
+\pathcode{sacct-root-row.txt},
+\end{quote}
+with mode 0400, one link, and SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 7b3df5231f751e1841c448cb55714c471522bcd74bbb973b577477785f07f587}.
+\end{quote}
+Review also closes process-RNG changes during loader read-ahead, rank-asymmetric capture failures,
+unexpected loader EOF/worker errors, nonfinite-forward handling, live RMSNorm autotuner provenance,
+and the two earlier launcher topology/cache failures.  The executable scope remains the plan plus
+\pathcode{scripts/analyses/capture_rdiag_shared_dt_trigger.py},
+\pathcode{scripts/analyses/run_rdiag_shared_dt_trigger_capture.sbatch}, and
+\pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_trigger_capture_host.py}.  The implementation
+was independently reviewed, committed, and pushed as
+\begin{quote}
+commit \pathcode{ef57031fc2f342a0dfe9c9ef7af2d0e268e332cb},\\
+tree \pathcode{db686e18708233ecbb049cb68cbc1ace9d81d4d6}.
+\end{quote}
+The initial helper, runner, and host-test SHA-256 values were respectively
+\begin{quote}
+{\ttfamily\scriptsize ec0db20eb6f0609425c5add313dab82c111b7619e8c2c0f94840ed45cc0e29d3},\\
+{\ttfamily\scriptsize 11c92b07965f69e622fe7ec0af3ae00256942eaeb7c9192adda7d15cf6cde95e},\\
+{\ttfamily\scriptsize 56eb9d0a04d053a0e1e19724155e56dc3f1d225ee150c4d18bbbf8c19127f8a8}.
+\end{quote}
+The initial focused suite passed 60 tests, the adjacent RDiag suite passed 170 tests, and the broad
+compatibility sweep passed 495 tests with three skips.  Its immutable 4,253-file Git-object
+snapshot, excluding only the paper gitlink, is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/rdiag_shared_dt_trigger_capture_}\\
+\pathcode{ef57031fc2f342a0dfe9c9ef7af2d0e268e332cb},
+\end{quote}
+with source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 5d3edaa28885ee012fde8887f96af827f0fe320b84eba4ea5e0b5ff46cccb907}.
+\end{quote}
+Both the publisher's closed-tree verification and a fresh private-copy reconstruction from Git
+objects passed.  The filesystem's unavailable no-replace rename path required the publisher's
+fail-closed copy fallback; the final execution root is owner-held mode 0555.  Hidden staging
+siblings retained by publication and by a concurrent collision check are evidence only and are
+explicitly rejected as execution roots.
+
+Non-authorizing two-node, 16-H200 trigger-capture job \pathcode{1838085} was submitted from that
+snapshot at 2026-09-04 10:11:12 UTC with the exact failed-run data manifest.  It ran on
+\pathcode{h200-205-088} and \pathcode{h200-231-137} from 10:30:02 through 10:33:51 UTC, then failed
+closed before capture training.  Source-copy, topology, runtime-identity, and two-node exit-cleanup
+steps all completed \pathcode{0:0}; the root and batch exited \pathcode{1:0}.  Its run root is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/trigger_capture_ef57031fc2f3_1838085},
+\end{quote}
+where \pathcode{anchor} and \pathcode{output} are empty and \pathcode{artifacts} contains only six
+preflight files.  There are no capture results, NCCL logs, summary, inventory, checkpoint, or
+completion marker.  The external root and full-step scheduler rows have SHA-256 values
+\begin{quote}
+{\ttfamily\scriptsize 2d9eae9ab2fc00dd7e407629b9214d97efb4629fb1753f5bbac9b5f0ebf9380f},\\
+{\ttfamily\scriptsize 395f5ebda2a1ad3910b956209ead563a3de974fd80f9a72a1a27b6fec76105db},
+\end{quote}
+under \pathcode{diagnostic_runs/trigger_capture_ef57031fc2f3_1838085_scheduler_record}.  Scheduler
+record filenames are \pathcode{root-row.txt} and \pathcode{all-steps.txt}.  Scheduler stdout and
+stderr are
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/ckpts/logs/}\\
+\pathcode{rdiag_sdt_trigger_1838085.log}, and\\
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/ckpts/logs/}\\
+\pathcode{rdiag_sdt_trigger_1838085.err};
+\end{quote}
+their SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize 158b30dd9c16f898aed9b40df8272e059506c806384c8a75359ba919fe5a5447},\\
+{\ttfamily\scriptsize 196a496ecaa4e47cba69b79bab5292c81d2006f65de9861d43c47701623cba87}.
+\end{quote}
+
+The defect was a strict framing mismatch rather than a scientific failure: the helper queried
+\pathcode{sacct -P} (\pathcode{--parsable2}), whose 19 fields have 18 separators and no trailing
+\pathcode{|}, but parsed it as \pathcode{-p} output with a trailing separator.  The retained
+1,281-byte job-1837446 row and a fresh \pathcode{-P} query remain byte-identical with SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 7b3df5231f751e1841c448cb55714c471522bcd74bbb973b577477785f07f587}.
+\end{quote}
+The minimal correction keeps \pathcode{-P}, requires exactly 19 fields, and uses a strict zip; it
+does not alter any scientific path.  It was reviewed, committed, and
+pushed as
+\begin{quote}
+commit \pathcode{4cbddbc1f715e5eb3a4177fe1557b29d7ab4f3d0},\\
+tree \pathcode{869a5f036fe8cf2bcb085c8b4e8d38cb5e64f550}.
+\end{quote}
+The corrected helper, unchanged runner, and corrected host-test SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize 3d6879298bed98dfc6fa992d518d7d0ef0ae80267c4e8d5c7db3a134ba1abca6},\\
+{\ttfamily\scriptsize 11c92b07965f69e622fe7ec0af3ae00256942eaeb7c9192adda7d15cf6cde95e},\\
+{\ttfamily\scriptsize 8eacb854d8d3297c2e9f1eeb2a19a404f51521f900027e29af47f3ff3957602d}.
+\end{quote}
+The corrected focused suite passed 68 tests and the broad suite passed 503 tests with three skips;
+the full real prerequisite command also passed against the pinned checkpoint, generation-zero
+closure, data manifest, scheduler record, and initial snapshot.  The replacement immutable
+snapshot is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/rdiag_shared_dt_trigger_capture_}\\
+\pathcode{4cbddbc1f715e5eb3a4177fe1557b29d7ab4f3d0},
+\end{quote}
+with source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize e27fb7c3a64465ddd3b4d92cbd9d3dc0e83d0e2f9d5a48e8b69540e7f9327b6d}.
+\end{quote}
+Both publication verification and a fresh private-copy reconstruction passed.  Replacement job
+\pathcode{1838250} was submitted at 2026-09-04 10:48:12 UTC, started at 12:21:08 UTC on
+\pathcode{h200-094-010} and \pathcode{h200-094-088}, and failed closed at 12:41:26 UTC.
+The two-node source-copy, topology, and runtime-identity steps completed \pathcode{0:0}; exact
+snapshot, generation-zero closure, data-manifest, and retained scheduler-evidence verification
+all passed, so the corrected parsable2 boundary has been exercised successfully.  The intended
+16-rank capture step started at 12:24:44 UTC, reconstructed the 621,284,352-parameter model,
+resumed the exact generation-zero state, and trained normally with 60.4 GB peak allocation per
+GPU.  Update 835 was the last printed completed update.  An eligible finite, rank-agreed trigger
+with norm in $[3,10]$ subsequently became pending before update 840, but its exact boundary and
+norm existed only in process memory and are not recoverable from this failed attempt.  During
+anchor publication, all 16 ranks then failed together in \pathcode{anchor-rmsnorm-tuners} before
+any anchor write: \pathcode{inspect_rmsnorm_tuners} passed the fully qualified display strings
+\pathcode{lit_gpt.rmsnorm._layer_norm_fwd_1pass_kernel} and
+\pathcode{lit_gpt.rmsnorm._layer_norm_bwd_kernel} directly to module \pathcode{getattr}, although
+the module exposes their basename attributes.  Capture step \pathcode{.3} therefore exited
+\pathcode{1:0} after 16:39; cache harvest/removal step \pathcode{.4} and private-source cleanup
+step \pathcode{.5} completed \pathcode{0:0}.  This is an implementation failure after trigger
+selection, not \pathcode{NO_TRIGGER_THROUGH_900} and not a scientific trigger result.  Its
+deterministic run root is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/trigger_capture_4cbddbc1f715_1838250}.
+\end{quote}
+It contains 43 mode-0400 partial artifacts, an empty anchor root, and only the expected zero-byte
+checkpoint placeholder under \pathcode{output}.  Rank capture results, \pathcode{capture-phase},
+post-input inventory, invocation, summary, artifact inventory, loader verification, and completion
+marker are all absent.  The scheduler stdout/stderr and capture stdout/stderr SHA-256 values are
+respectively
+\begin{quote}
+{\ttfamily\scriptsize 2fae5175174f72c705af06fb0023a333785f447f9d83214f00e126d921a4aa1b},\\
+{\ttfamily\scriptsize 028a4dacfc45125ba976c3990402c20a538e306929c352f6b8178d99351f5d8a},\\
+{\ttfamily\scriptsize 1d39eebde75592b3a4fa202a37b0be5f122884f05cbfcba34b9a50b8c42d24c3},\\
+{\ttfamily\scriptsize aa7dbceb04a817036fafc5192c1b32a7e921357e7348ce7ac2fce3c8f4567e38}.
+\end{quote}
+The externally retained root and nine-row full-step scheduler records are mode 0400, one-link files
+under
+\begin{quote}
+\pathcode{diagnostic_runs/trigger_capture_4cbddbc1f715_1838250_scheduler_record},
+\end{quote}
+with SHA-256 values
+\begin{quote}
+{\ttfamily\scriptsize 3db33e5c49a94e7fcb7dfef72a19f9b4d6c67d0597a2108940e140eaf24a870e},\\
+{\ttfamily\scriptsize 012202c4d97ce0ae5a7ccbcccc002e2bef202ca192cb182f8f0ea51bd1b96185}.
+\end{quote}
+The minimal repair resolves each qualified name's final component for Python lookup while retaining
+the qualified string in canonical policy evidence.  A host regression now exercises the real
+qualified-symbol/module-basename shape and proves inspection leaves both tuner states unchanged;
+the focused suite passes 69 tests and the focused-plus-policy suite passes 91.  Independent review
+found no blocking issue; Python compilation, shell syntax, and Git diff checks pass.  A deliberately
+overbroad login-node sweep was not an acceptance test: its CUDA cases rejected the GPU-less host
+and one unrelated source-publisher test observed the already documented Lustre staging fallback.
+The reviewed and pushed repair is
+\begin{quote}
+commit \pathcode{015ba66e07f0ec1860b188ea74e638ce955384cc},\\
+tree \pathcode{d1d59c7a08112e29ac942b0153f36552a7cc60ea}.
+\end{quote}
+The repaired helper, unchanged runner, and regression-test SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize c732721ae49d4798a2ff280300ffb09f7e4f83470ee415092e8955dd7f51ca5e},\\
+{\ttfamily\scriptsize 11c92b07965f69e622fe7ec0af3ae00256942eaeb7c9192adda7d15cf6cde95e},\\
+{\ttfamily\scriptsize 02ec5161fbb73dbe1db0a1ab197fc9cf908844fa04c1871a48ac8e9e1ad726ef}.
+\end{quote}
+Its immutable 4,253-file snapshot, again excluding only the paper gitlink, is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/rdiag_shared_dt_trigger_capture_}\\
+\pathcode{015ba66e07f0ec1860b188ea74e638ce955384cc},
+\end{quote}
+with source-manifest SHA-256
+\begin{quote}
+{\ttfamily\scriptsize bf0b5288a873f5f7c67963492239226921150b2c0f7350de6a3cf57367987dca}.
+\end{quote}
+Both publication verification and an independent fresh private-copy reconstruction passed.
+Replacement job \pathcode{1838750} was submitted from that snapshot at 2026-09-04 13:06:42 UTC
+and ran on \pathcode{h200-094-010} and \pathcode{h200-094-088} from 13:09:11 through 13:45:29
+UTC.  The root, batch, extern, and numbered steps \pathcode{.0}--\pathcode{.8} all completed
+\pathcode{0:0}; the numbered task counts were exactly $2,2,2,16,2,16,2,2,2$.  Its sole completion
+marker is present and scheduler stderr is empty.  The preregistered first eligible trigger was
+absolute boundary 838, with rank-agreed norm 3.4058520793914795, canonical token
+\pathcode{finite:0x1.b3f2f60000000p+1}, and zero health failures.  It retained the post-update
+generation
+\begin{quote}
+\pathcode{step-000000000838-iter-000000001676-6ee7296afb63448f9863efab3454d49d}
+\end{quote}
+plus 16 RNG records and 16 future raw microbatches per rank.  All 16 independent loader-replay
+records match every ordered joint and component-tensor hash.  The continuation later stopped
+non-authorizingly at boundary 853 with finite norm 11.937856674194336; that postselection stop
+does not invalidate the retained boundary-838 anchor.
+
+The accepted run root is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/trigger_capture_015ba66e07f0_1838750}.
+\end{quote}
+Its summary, artifact inventory, invocation, byte-identical pre/post input inventory, capture
+phase, derived anchor manifest, and checkpoint-generation manifest SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize 0123887d03356ca08a0e88aa267746ac1d4680b4c17a6fb63f98800175bb9b33},\\
+{\ttfamily\scriptsize 0709972f30d9b4118e41865d8ecc03a55dda9f34bdc856d87d3ef23cbee48500},\\
+{\ttfamily\scriptsize 04f0d067c7c52cac583f9a5ca528282a5c757c560e6135a8007eedb093586509},\\
+{\ttfamily\scriptsize 729aee6bea81535c49a5c16092750d0ff603275b866fdfca662abf7ca23d3231},\\
+{\ttfamily\scriptsize 05b5070b22064b56e1f3aba9403099824c45c338d3c5c6b676cb5918a89461f2},\\
+{\ttfamily\scriptsize 1c01aa9798bcf3c1d75cc016bd103cac919ca7c8296cddffb4817bede8353bd8},\\
+{\ttfamily\scriptsize 3b41e9f4590909f461b89aaec0041ff8b7f51347ae531bcd07faf18dba36d008}.
+\end{quote}
+The artifact directory has exactly 164 inventoried files and 165 physical files including the
+inventory, all mode 0400 and single-link.  Its decision is
+\pathcode{CAPTURE_RETAINED_NONAUTHORIZING} with
+\pathcode{CAPTURED_LOADER_REPLAY_MATCHED}.  The external scheduler-record root is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/trigger_capture_015ba66e07f0_1838750_scheduler_record},
+\end{quote}
+whose root-row, full-step, completion-marker, and scheduler-log-hash records have SHA-256 values
+\begin{quote}
+{\ttfamily\scriptsize 6987ed8bf54cc5b80713503dce990fad621032a4c0d2a4d3c1116c1fd0828494},\\
+{\ttfamily\scriptsize 3afc238b32b6631cba1bd64b15dd29f012c366c2f47b60789ab754fa57e8428a},\\
+{\ttfamily\scriptsize f00be3ff84a1349b7bb29cb5a5460de217f3c932d7389d736e79809dc6d6b6ba},\\
+{\ttfamily\scriptsize 7fb33026b6196a9d9321774c1650e1d41f302c4ff60a8dcc1e3f5a9b2fc25773}.
+\end{quote}
+Scheduler stdout is
+{\ttfamily\scriptsize fb69191ebd7bbc42e9a20222629ae4f03525badc5df4544fb59871f02c5b2b50};
+stderr has the empty-file digest.
+
+A separate read-only validator, job \pathcode{1838966}, then ran on
+\pathcode{h200-002-213} from 13:52:43 through 14:01:15 UTC and completed
+\pathcode{0:0}.  It reconstructed the invocation-bound historical path
+\pathcode{/tmp/rdiag_sdt_trigger_1838750/source}, verified the immutable 4,253-file source before
+and after validation, revalidated source, generation zero, and anchor, returned
+\pathcode{VALID} with \pathcode{artifact_count=164}, removed both owned node-local roots, emitted
+one marker, and left empty stderr.  Its evidence root is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/trigger_capture_015ba66e07f0_1838750_independent_validation}.
+\end{quote}
+The retained validator runner, validation result, acceptance result, root-row, full-step,
+completion-marker, scheduler-log-hash, and complete evidence-list SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize ce3ee70f2d5f80a9b98ab7fc692ad93d139d3d319115e4b3b889ff8478f2b600},\\
+{\ttfamily\scriptsize 2f50dd577f9b5a507280c9ec913608b22f8f56a7028dc0f852a66848b544be42},\\
+{\ttfamily\scriptsize 7e564d9f4131bbc820390cc798929739d8e291cb9535d1196e3a6e64d1511314},\\
+{\ttfamily\scriptsize 254091248607cbbd8bb476ae5350029974fdb6be1d287fe889cf91c7dece84c9},\\
+{\ttfamily\scriptsize acde647a47074436c368fcde4cce661b49ae4bb250a53786d87a0f00e73a0444},\\
+{\ttfamily\scriptsize 0a2257b4e2b4f8c063059b52c7be11d353a2fa39a547c448d253bf6c4f247565},\\
+{\ttfamily\scriptsize d455f9590ade96882b0cffe52132ef96977202c5e26bd559dbf5a084907647d3},\\
+{\ttfamily\scriptsize 35e2822bc0a296487522dc3f6fe8a10b17cbe196085c5227b2e095425c393cbb}.
+\end{quote}
+This closes the trigger-capture prerequisite for implementation; it remains diagnostic and cannot
+authorize production by itself.
+
+The downstream matched-intervention design and implementation are isolated in
+worktree
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_worktrees/rdiag_shared_dt_matched_intervention_20260904}
+\end{quote}
+on branch \pathcode{codex/rdiag-shared-dt-matched-intervention-20260904}; its plan is
+\pathcode{docs/plans/}\\
+\pathcode{2026-09-04-rdiag-shared-dt-matched-intervention-plan.md}.  The original reviewed and
+pushed plan-only identity was
+\begin{quote}
+commit \pathcode{2b8066717dc05128a37404def1dcfa643fd0ef7d},\\
+tree \pathcode{6aed24664104fa61833f95a7b5cc3626f1baea5d}.
+\end{quote}
+It requires one immutable post-trigger anchor and sequential fresh shared-A1, connected-zero
+no-rotation, and shared-A2 arms over 16 retained microbatches per rank.  Exact A1/A2 equality is a
+precondition for interpreting the intervention.  Review corrected the initial draft to compare
+rank-local FSDP state only with the corresponding rank across arms, use replica-aware global
+gradient diagnostics, limit first-boundary DT/alpha equality to the treated layer, stop only after
+the eighth update is fully committed, capture nonfinite-loss exits artifact-locally, retain the
+ordered 32-loss boundary estimand, and bind all 256 rank/batch joint hashes.  That original plan's
+SHA-256 is
+\begin{quote}
+{\ttfamily\scriptsize 17a7d50a0349ed1038b4c703dfe25a12e791e5da40c194b5493a46ee087ca0db}.
+\end{quote}
+At that stage, a read-only merge preflight found no textual conflicts, and the branch deliberately
+did not absorb the plan-only trigger tip; it remained gated on a successful final trigger capture
+and repin before implementation.
+
+Before observing the trigger outcome, the plan was tightened to pin accepted generation-zero job
+\pathcode{1837446}, current trigger commit \pathcode{4cbddbc...} and manifest
+\pathcode{e27fb7c3...}, and the still-pending retry without claiming its result.  It now fixes the
+32-loss ordering and arithmetic, phase-dependent unavailable fields, value-exact zero semantics,
+first-boundary frontend scope, early-stop estimands, operational-failure continuation, nonfinite
+loss interception, and reconstruction of the trigger invocation's historical source path.  The
+reviewed and pushed revision is
+\begin{quote}
+commit \pathcode{444946e6b1f588c4bcfffc083c54ac80ac1cca6d},\\
+tree \pathcode{ffa896e55eebdb48f15c4b71ae2bb89da117c2e3},
+\end{quote}
+with plan SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 43dc150759e293f39e810f42cc4d6dae11909d5ce28d10f4753a5fa6c2eefa51}.
+\end{quote}
+The acceptance clause explicitly requires both a structurally valid trigger closure and
+\pathcode{CAPTURE_RETAINED_NONAUTHORIZING} with
+\pathcode{CAPTURED_LOADER_REPLAY_MATCHED}; a valid no-anchor or loader-mismatch outcome cannot
+release implementation.  Because revision \pathcode{444946e...} pins failed job
+\pathcode{1838250}, it is now a historical blocked design record.  The reviewed plan was repinned
+without implementation to pending job \pathcode{1838750}, trigger commit \pathcode{015ba66e...},
+tree \pathcode{d1d59c7a...}, manifest \pathcode{bf0b5288...}, the exact historical source path
+\pathcode{/tmp/rdiag_sdt_trigger_1838750/source}, and the corrected retained-anchor closure of 164
+inventoried files (165 physical files including the inventory).  That reviewed and pushed plan is
+\begin{quote}
+commit \pathcode{41de0ee4836fa492e560f0d1640f6cac73c13382},\\
+tree \pathcode{4ebdfc9335b9f4c2f11c6e2c86e98a48eca21587},
+\end{quote}
+with plan SHA-256
+\begin{quote}
+{\ttfamily\scriptsize e7a4df5999f17cae172d9de2f454299fca38879773e225690a14c2aed2c91ff8}.
+\end{quote}
+That repin was the last pre-outcome design state.  After both job \pathcode{1838750} and external
+validator \pathcode{1838966} passed, the accepted trigger source was merged without conflict as
+\begin{quote}
+commit \pathcode{9d65a587be64f0a7dc9b2c3b3ed40ac0351c08ae},\\
+tree \pathcode{53136608092429aad484efcaffed22cb021233cf}.
+\end{quote}
+The plan was then independently checked against every retained job, source, scheduler, artifact,
+anchor, and validator identity and pushed as
+\begin{quote}
+commit \pathcode{285c36b9e75c897521e6529cd0e5766c2fcafbb7},\\
+tree \pathcode{3787abb2b4480cf73cc581e718a3558706a6dd5d},
+\end{quote}
+with plan SHA-256
+\begin{quote}
+{\ttfamily\scriptsize 3b869d76eb17fafcca9ddb1364524927be4a924642f726d8a27649b076c98355}.
+\end{quote}
+The reviewed implementation is commit
+\begin{quote}
+\pathcode{49f06078d19f349ca9724e3bbfc08fa436e91e54},
+\end{quote}
+with tree \pathcode{ebb54a1719a6bf8490e9d6997ec471b5201423f3}.  Its implementation paths are
+\pathcode{scripts/analyses/rdiag_shared_dt_matched_intervention.py},
+\pathcode{scripts/analyses/run_rdiag_shared_dt_matched_intervention.sbatch}, and
+\pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_matched_intervention_host.py}.  The final plan,
+helper, runner, and host-test SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize 13d5bf40a3c5f5974a64a91b4cf3ae72efd999e1bbf012f2e57fc3bac32643c3},\\
+{\ttfamily\scriptsize 0a339701716fcb5d404deecd849d36a3cbd40eee654520a229801de90204b180},\\
+{\ttfamily\scriptsize ceaae69aacba7b12325188c7b50d2e503977968f0022b777cfc79c331b40f935},\\
+{\ttfamily\scriptsize 09002a176e6eceadf504746b774d0dcf50db08b02b616cc53c5e40c722964482}.
+\end{quote}
+All implementation steps before publication are complete.  The focused host suite passed 126
+tests, and the matched plus trigger, generation-zero, and soak-replay sweep passed 295 tests;
+Python compilation, shell syntax, diff hygiene, direct validation of all 16 retained rank-local
+initial states, and live scheduler revalidation of jobs \pathcode{1838750} and
+\pathcode{1838966} also passed.  Independent scientific, distributed-runtime, and
+immutable-artifact reviews found no remaining code blocker after repairs to collective forwarding,
+post-update evidence, rank-local failure coordination, exact anchor binding, nonfinite-loss
+rederivation, contiguous-prefix estimands, and fixed-order arm continuation.
+
+The immutable source snapshot is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_snapshots/}\\
+\pathcode{rdiag_shared_dt_matched_intervention_}\\
+\pathcode{49f06078d19f349ca9724e3bbfc08fa436e91e54}.
+\end{quote}
+Its \pathcode{SOURCE_MANIFEST.json} SHA-256 is
+\begin{quote}
+{\ttfamily\scriptsize 45644d7de85703ceacfbd4789925245097b00332f1c9a9c5df8da334ce8ce3a5}.
+\end{quote}
+The manifest contains 4,257 regular Git files; the physical frozen tree contains 4,258 files
+including the manifest and 409 directories, with directories and executables mode 0555 and other
+files mode 0444.  The \pathcode{paper} gitlink is recorded and intentionally excluded.  The
+publisher's built-in verification and a separate reconstruction into a private source tree both
+matched the commit and manifest exactly.  Because Lustre used the supported no-replace fallback,
+the complete read-only hidden staging tree is retained as publication evidence; it is not an
+execution source.
+
+Exactly one two-node/16-H200 matched-intervention allocation, job \pathcode{1839531}, was submitted
+from that named snapshot at 2026-09-04 15:37 UTC.  It ran on
+\pathcode{h200-071-128} and \pathcode{h200-074-040} from 15:59:07 through 17:06:49 UTC and
+completed \pathcode{0:0}.  The root, batch, extern, and numbered steps \pathcode{.0}--\pathcode{.16}
+all completed \pathcode{0:0}; the numbered task counts were exactly
+$2,2,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2$.  The run executed fresh shared-A1, connected-zero
+no-rotation, and shared-A2 arms in that order, with no requeue and no production authority.  Its
+run root is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{diagnostic_runs/matched_intervention_49f06078d19f_1839531}.
+\end{quote}
+The in-job final validator returned \pathcode{VALID}, revalidating the matched source, accepted
+trigger anchor, and all prerequisites.  The artifact inventory contains 118 closed files and the
+directory contains 119 physical files including the inventory; every artifact is a mode-0400,
+single-link regular file.  The summary and inventory SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize 140ca76485e6838c6ae3f6bfc086e0112aae5c48f809cfaa06adc92724efe83c},\\
+{\ttfamily\scriptsize bdd78e22df0ac67242c36f559b9ede1c1ae3485b575bc3647d25285599d62765}.
+\end{quote}
+
+The validity checks passed exactly.  A1 and A2 are byte-identical under the complete common-arm
+projection, with \pathcode{a1_a2_first_difference=null}; initial state, topology, all 256
+rank/microbatch inputs, and pre-forward RNG records match.  All three arms committed eight updates
+through boundary 846.  The no-rotation arm has exact-zero angle projection output, phase increment,
+phase, and current angle gradient while the radial gradients remain live; layer-0 \pathcode{DT} and
+\pathcode{alpha} match the normal arm exactly at boundary 839.  Consequently the summary reports
+\pathcode{intervention_isolation=MATCHED}, no isolation failures, and causal estimands on every
+boundary 839--846.
+
+\begin{table}[ht]
+  \centering
+  \small
+  \caption{Matched boundary-838 intervention, job 1839531.  ``On'' is the exactly repeated normal
+  shared-DT arm and ``off'' is connected-zero rotation.  Only boundary 839 is an instantaneous
+  counterfactual; later rows are paired longitudinal outcomes.}
+  \label{tab:shared-dt-matched-1839531}
+  \begin{tabular}{@{}rrrrrl@{}}
+    \toprule
+    Boundary & $g_{\rm on}$ & $g_{\rm off}$ & $g_{\rm on}-g_{\rm off}$ & Ratio & Limit-10 class \\
+    \midrule
+    839 & 1.423852 & 0.565017 & 0.858835 & 2.5200 & neither \\
+    840 & 1.352574 & 0.451292 & 0.901282 & 2.9971 & neither \\
+    841 & 1.605586 & 0.371823 & 1.233762 & 4.3181 & neither \\
+    842 & 2.048217 & 0.338519 & 1.709698 & 6.0505 & neither \\
+    843 & 1.848073 & 0.317264 & 1.530809 & 5.8250 & neither \\
+    844 & 2.508924 & 0.304979 & 2.203945 & 8.2266 & neither \\
+    845 & 4.601322 & 0.301506 & 4.299816 & 15.2611 & neither \\
+    846 & 4.129866 & 0.277695 & 3.852171 & 14.8720 & neither \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+At boundary 839, enabling rotation therefore raises the pre-clip norm by
+$0.8588348031044006$, or $2.52001478149663\times$, at this one captured state/input.  The
+A-minus-B global-loss contrast there is $-0.00017467141151428223$.  All eight norm differences are
+positive, and the seven later signs agree with the first sign.  This is persistent longitudinal
+separation in the observed window, but neither arm crosses 10 at any boundary.  It therefore does
+not establish that rotation caused the historical limit crossing, does not explain the later
+boundary-853 event, and does not justify a threshold change.  The summary remains explicitly
+non-authorizing.
+
+The retained scheduler record is
+\pathcode{diagnostic_runs/matched_intervention_49f06078d19f_1839531_scheduler_record}.  Its
+root-row, full-step, completion-marker, and scheduler-log-hash records have SHA-256 values
+\begin{quote}
+{\ttfamily\scriptsize 01713739b41fbc83a04e5a449cdbf702103c3b87568d8087adc1887c178c2053},\\
+{\ttfamily\scriptsize 74ec9cb245a3086a1ad7afaa0da6479259492b730befaa42f951a1565b5ba672},\\
+{\ttfamily\scriptsize 5346f5e235063d09bcf8e870fb98a19a05d2e099f99ab0ab8cd5a3735bcda2cd},\\
+{\ttfamily\scriptsize 23b49df7cf3b72bb6de57273350ce165ce96676015f6e54cf30f70bad4905c38}.
+\end{quote}
+Scheduler stdout contains exactly one completion marker; its SHA-256 is
+\begin{quote}
+{\ttfamily\scriptsize 2760327de1c640203d5bc1552f0807fe298743b5f702997e9b022e51322d38ae}.
+\end{quote}
+Scheduler stderr is empty.  Fresh-node independent validator job \pathcode{1840069}, submitted from
+retained runner SHA-256
+\pathcode{9e602deac9319a7e12d1d71fbcba75bd6d52da5cdbfcfafd77d34661ff3e7c84}, ran on
+\pathcode{h200-021-171} from 18:30:14 through 18:39:40 UTC and completed \pathcode{0:0}.  It
+reconstructed both invocation-bound source paths, validated all 4,257 matched-source and 4,253
+trigger-source files before and after use, independently returned \pathcode{VALID}, rederived the
+118-file inventory, and removed all three marker-owned node-local roots before its sole completion
+marker.  Its evidence root is
+\pathcode{diagnostic_runs/matched_intervention_49f06078d19f_1839531_independent_validation/}
+\pathcode{evidence-job-1840069}.  The validation result, acceptance result, and complete 16-row
+evidence-list SHA-256 values are respectively
+\begin{quote}
+{\ttfamily\scriptsize 55d0fed3dcabcbf9a60a444cce149108f4ec891a428946269a84fcb1330fcbaf},\\
+{\ttfamily\scriptsize 364d899e1a7e0b999a68917780c562d00638226a6d5640653ecf1b53ad6c3ccf},\\
+{\ttfamily\scriptsize 19d802d2e8a49f93d9fd8124078f307aa31f6cdf7bb5354bf478757672cb716f}.
+\end{quote}
+The retained validator scheduler root-row, all-step, marker, and log-record SHA-256 values are
+\begin{quote}
+{\ttfamily\scriptsize e186d5a86aa67c75ec0fa070dbd5fb6c78ab3bb947e1d8e51d3ade503bb1c6b1},\\
+{\ttfamily\scriptsize 5f1e6be98f469a337e6915104b2bb3b02cc8bdb54f711e3108973cd1eb536fe3},\\
+{\ttfamily\scriptsize 04165dfb52dfe1f9ced189fbb18ed94bdf6b518bc6e28631fa39d8453dbf9451},\\
+{\ttfamily\scriptsize 974b7bdd010fb454f4063b6b13b705e9f8bdf929032a3a01ab5c4c57c1275cfb}.
+\end{quote}
+All retained validator files are mode-0400, single-link regular files and its scheduler stderr is
+empty.
+
+Remediation work is isolated from the main checkout in
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\\
+\pathcode{source_worktrees/rdiag_shared_dt_late_angle_scale_20260904}
+\end{quote}
+on branch \pathcode{codex/rdiag-shared-dt-late-angle-scale-20260904}.  The independently reviewed,
+non-authorizing design is
+\begin{quote}
+\pathcode{docs/plans/2026-09-04-rdiag-shared-dt-late-angle-scale-design-final.md}.
+\end{quote}
+It is committed and published with commit, tree, and file SHA-256 respectively
+\begin{quote}
+{\ttfamily\scriptsize c57c9617f0256189bcc5a733789699bf32731906},\\
+{\ttfamily\scriptsize 1279bb20cac06d7ee8b5ba231a273cb955b8874e},\\
+{\ttfamily\scriptsize 549a7592ffe10b3c516f98d023ea67cb00e64ad02c8529df13e2af9325f427ba}.
+\end{quote}
+It selects the checkpoint-compatible, rotation-preserving effective angle scale
+$0.5H^{-1/2}=0.125$ at $H=16$, while retaining direct $H^{-1/2}=0.25$ and
+connected-zero controls.  It does not alter \pathcode{shared_dt_v1}.  The executable plan is
+\begin{quote}
+\pathcode{docs/plans/2026-09-04-rdiag-shared-dt-late-angle-scale-implementation-plan-final.md}.
+\end{quote}
+It is published at commit
+\pathcode{f5c7f558108fb5c5b8ccc21febc98022624f8384} (tree
+\pathcode{80b3444c7e94957370243c33cfd21ddf3d159674}) with file SHA-256
+\pathcode{ebe18b35516e12f3e998fe6908b126f361967c9adbafd9edb6f8d2ee7cad71b7}.
+Two formal adversarial plan-review rounds found and drove fixes for exact H=16 oracle coverage, a
+distinct candidate-above-10 terminal, real-anchor FSDP preflight, complete later-boundary liveness,
+fail-closed outcome mapping, immutable H200 provenance, prospective scheduler-step counts, and four
+final CLI/snapshot/validator interfaces.  The final plan contains those last repairs and requires
+their named red/green tests during implementation; the second formal review predated those repairs
+and therefore remained \pathcode{NEEDS_REVISION}.  Implementation has begun, but no candidate code,
+preflight, or result-bearing job has yet been accepted from this worktree.
+
+The completed prerequisites and diagnostics are the forward localization in job \pathcode{1836996}, the reviewed
+shared-DT-only warp-8 RMSNorm-forward control, its passing bounded smoke in job
+\pathcode{1837393}, and the passing replacement generation-zero gate in job
+\pathcode{1837446}, followed by accepted trigger capture \pathcode{1838750} and independent
+validator \pathcode{1838966}, the valid matched intervention \pathcode{1839531}, and its fresh-node
+validator \pathcode{1840069}.  The remaining
+sequence is:
 \begin{enumerate}[leftmargin=1.8em]
-  \item add failing host contracts, then implement the exactly-once layer-side scale and unchanged
-        state-schema behavior;
-  \item prove production-layer forward and all VJPs against the literal oracle at H=16, T=4096,
-        BF16 and at H=18, while preserving radial outputs and live angle/$DT$/hidden gradients;
-  \item implement the same-state rotation-off runner, v3 gradient schemas, policy boundaries,
-        readers, catalog digests, stale-schema rejection, and recursive aggregate-v3 validation;
-  \item pass focused and broad host/static gates, freeze a clean exact commit, and obtain separate
-        exact-SHA specification/math and code-quality reviews;
-  \item push that reviewed commit, materialize a fresh immutable snapshot, and rerun all six gates:
-        production-H200, train-smoke, checkpoint-fault, authenticated-resume, the real eight-batch
-        gradient gate, and production soak; and
-  \item build aggregate-v3 only after all six seals validate, then submit the 750M run with the full
-        standard-plus-all-configured-NIAH post-training evaluation tail.
+  \item test the narrow, checkpoint-compatible preserve-rotation candidate that changes the
+        effective angle scale from $H^{-1/2}$ to $0.5H^{-1/2}$ against repeated old-scale and
+        connected-zero controls at the same boundary-838 anchor; this test is separately
+        preregistered and non-authorizing;
+  \item only if that candidate passes its exact repeatability, isolation, liveness, health, and
+        prospective effect-size requirements, freeze its source and rerun all six gates, including
+        an entirely fresh 3300-update soak;
+  \item build aggregate-v3 only after all six recursive seals validate, then recompute and pin the
+        aggregate, all recipe digests, and all exact execution-manifest
+        digests for that final source; and
+  \item create the separate required production snapshot and invoke the
+        \pathcode{prepare-fresh} mode of \pathcode{submit_rdiag_shared_dt.py} only for
+        \pathcode{rdiag_kla_shared_dt_v1_750M} with train configuration
+        \pathcode{tsz128x4k_50B}; retain the supervisor-enforced \pathcode{standard},
+        \pathcode{niah_single_1}, \pathcode{niah_single_1_8k}, \pathcode{niah_single_2},
+        \pathcode{niah_single_2_8k}, \pathcode{niah_single_3}, and
+        \pathcode{niah_multikey_1} evaluation modes.
 \end{enumerate}
+Job \pathcode{1835824}'s scientific failure invalidated the prior nine-workload lower bound;
+jobs \pathcode{1836996}, \pathcode{1837446}, \pathcode{1838750}, and \pathcode{1839531} have now
+completed the localization, replacement generation-zero, trigger-capture, and matched-intervention
+workloads.  From this point, even the optimistic path requires at least seven more successful
+scientific GPU workloads before production launch: one late-anchor candidate probe and the six
+fresh qualification gates.  Production training would be the eighth.  Since the
+demonstrated six-gate control plane expands its six
+scientific gates to 20 Slurm jobs (six preparation jobs, two H200 control/submit allocations, six
+gate workloads, and six external attestors), the comparable operational lower bound is at least
+24 future scheduler jobs before production submission: one numerical preflight, one actual-anchor
+FSDP preflight, one candidate allocation, one candidate validator, and the 20-job gate control
+plane.  A held-out replication would increase that count.  Failed attempts \pathcode{1838085} and
+\pathcode{1838250} did not satisfy the trigger-capture stage.  This count excludes retries, additional
+discriminator arms, implementation-time GPU checks, held-out causal replication, and production
+requeues.
 Until that sequence closes, neither a production authorization nor a replacement training result
 is claimed.
 
@@ -965,11 +2966,21 @@ immune to nonfinite discarded angles.
 
 \paragraph{Installed Mamba implementation.}
 The source audit used \texttt{mamba-ssm 2.3.2.post1} installed under the active \texttt{hdn}
-environment.  Paths and SHA-256 identities are:
+environment; those bytes match upstream tag \pathcode{v2.3.2.post1} at commit
+\pathcode{a14b1dff0454a3bc27d9eb31355dc01e4b2490ec}.  Paths and SHA-256 identities are:
 \begin{itemize}[leftmargin=1.8em]
   \item \pathcode{mamba_ssm/modules/mamba2.py},\\[-2pt]
         {\ttfamily\footnotesize 605e4439ff0baec8d8acaf4a191d9f0570eea9900065a065909124c472b08707};
         inspect roughly lines 95--136, 210--260, and 309--318;
+  \item \pathcode{mamba_ssm/ops/triton/ssd_combined.py},\\[-2pt]
+        {\ttfamily\footnotesize 39c19c1e4c8e36982847079bc12b4f07ed3af03ac68f6a6653200ef80df5515d};
+        this is the fused Mamba-2 SSD scan;
+  \item \pathcode{mamba_ssm/ops/triton/ssd_chunk_state.py},\\[-2pt]
+        {\ttfamily\footnotesize 6d82771b2f62a7bf84c381c8ef8e4b579a95e0352021d117507a1072e4d71dcd};
+        inspect roughly lines 40--86 and 102--174;
+  \item \pathcode{mamba_ssm/modules/ssd_minimal.py},\\[-2pt]
+        {\ttfamily\footnotesize 6442a9fe25a6792258df657392ab1fab4dd873ee777d9dd5783cc76030218e07};
+        this is the readable Mamba-2 SSD reference;
   \item \pathcode{mamba_ssm/modules/mamba3.py},\\[-2pt]
         {\ttfamily\footnotesize de1b104865c941eb6eeac63c3a75d5913fc2e7a119d52991590ef19c381b05ac};
         inspect roughly lines 76--87, 150--178, and 220--237;
@@ -978,12 +2989,19 @@ environment.  Paths and SHA-256 identities are:
         inspect roughly lines 83--118 and 298--337;
   \item \pathcode{mamba_ssm/ops/triton/mamba3/mamba3_siso_combined.py},\\[-2pt]
         {\ttfamily\footnotesize 410ad57555b5841fba7bd76fdafdc3ddf82741176489c3e3493f5c6f3c0c6012};
-        inspect roughly lines 90--105 and 247--259; and
+        inspect roughly lines 90--105 and 247--259;
   \item \pathcode{mamba_ssm/ops/triton/mamba3/mamba3_siso_fwd.py},\\[-2pt]
         {\ttfamily\footnotesize 68d8d0dba0e3913f2e996862603289fd0d7157e7dc57c872e04234be8bb82695};
-        inspect roughly lines 256--332, 348--352, and 386--425.
+        inspect roughly lines 256--332, 348--352, and 386--425; and
+  \item \pathcode{mamba_ssm/ops/triton/mamba3/mamba3_siso_bwd.py},\\[-2pt]
+        {\ttfamily\footnotesize aa1b0aa8f8f7950503adf55220d3feebfea2fe006dc418b5a4e75e1e6842eadc};
+        inspect roughly lines 978--1051 and 1475--1550.
 \end{itemize}
-The hashes, package version, and paths are the durable identity; line numbers are navigation hints.
+The hashes, package version, paths, and upstream commit are the durable identity; line numbers are
+navigation hints.  Repository Mamba-3 SISO dispatch goes through the FLA wrapper.  Its executable
+baseline uses the patched \pathcode{hdn_mamba} environment; the local compatibility/decay patches
+do not alter the angle scan or adjacent-pair rotation formulas.  The unpatched \pathcode{hdn} FLA
+wrapper is not the runnable decay-correct baseline and was not used to infer those formulas.
 
 \paragraph{Qualification evidence and present status.}
 The lower-tail rejection is recorded in

@@ -3061,12 +3061,33 @@ which reduces to $r_t+\widehat b_t$ for unit-normalized keys. The same NLL can t
 the two covariance families without changing their state budgets: each model is scored using the
 predictive variance implied by its own retained state.
 
-\subsection{Relation to the variational expected NLL}
+\subsection{Relation to the VAE objective and variational expected NLL}
 
-The expected Gaussian NLL used in the variational derivation conditions on a candidate posterior
-$q_{t,j}=\mathcal{N}(\vct{\mu}_{t,j},\vct{P}_t)$. Its data term decomposes as
+The connection to a standard variational autoencoder (VAE) objective is algebraic. For one value
+coordinate, let
+$\widehat\pi_{t,j}=p(\vct{s}_{t,j}^{\star}\mid\mathcal{F}_{t-1})$ denote the pre-write predictive
+prior, and let $q_{t,j}=\mathcal{N}(\vct{\mu}_{t,j},\vct{P}_t)$ be a candidate filtering posterior
+that may depend on the current observation $v_{t,j}$. The negative ELBO has the familiar
+reconstruction-plus-regularization form
 \begin{equation}
-  \mathbb{E}_{q_{t,j}}[-\log p(v_{t,j}\mid\vct{s}_{t,j}^{\star})]
+  -\operatorname{ELBO}_{t,j}(q_{t,j})
+  =
+  \underbrace{
+    \mathbb{E}_{q_{t,j}}\!\left[
+      -\log p(v_{t,j}\mid\vct{s}_{t,j}^{\star},\vct{k}_t)
+    \right]
+  }_{\text{expected reconstruction NLL}}
+  +
+  \underbrace{
+    \operatorname{KL}\!\left(q_{t,j}\,\|\,\widehat\pi_{t,j}\right)
+  }_{\text{regularization to the predictive prior}}.
+  \label{eq:discussion-negative-elbo-decomposition}
+\end{equation}
+For the Gaussian observation model, the reconstruction term is
+\begin{equation}
+  \mathbb{E}_{q_{t,j}}\!\left[
+    -\log p(v_{t,j}\mid\vct{s}_{t,j}^{\star},\vct{k}_t)
+  \right]
   =\frac{1}{2r_t}\left[
     \left(v_{t,j}-\vct{k}_t^\top\vct{\mu}_{t,j}\right)^2
     +\vct{k}_t^\top\vct{P}_t\vct{k}_t
@@ -3074,26 +3095,57 @@ $q_{t,j}=\mathcal{N}(\vct{\mu}_{t,j},\vct{P}_t)$. Its data term decomposes as
   +\frac12\log(2\pi r_t).
   \label{eq:discussion-expected-versus-predictive-nll}
 \end{equation}
-This is a posterior objective: its squared-mean residual and posterior-variance terms determine
-the state retained after seeing $v_{t,j}$. By contrast,
-Equation~\eqref{eq:discussion-predictive-innovation-nll} is a pre-update forecasting score and
-uses the marginal variance $\Delta_t$. For any candidate $q_{t,j}$, the variational identity is
+This term is evaluated under a post-observation distribution: $q_{t,j}$ is selected after
+$v_{t,j}$ has been observed, so its mean may already incorporate the value being reconstructed.
+The KL term charges the posterior for moving away from the pre-write prior. The reconstruction
+term alone is therefore not a one-step forecasting score.
+
+By contrast, the predictive innovation NLL marginalizes the latent state under the pre-write
+prior,
 \begin{equation}
-  -\operatorname{ELBO}(q_{t,j})
+  \mathcal{L}_{\mathrm{pred},t,j}
+  =-\log p(v_{t,j}\mid\mathcal{F}_{t-1},\vct{k}_t)
+  =-\log\!\int
+    p(v_{t,j}\mid\vct{s},\vct{k}_t)
+    \widehat\pi_{t,j}(\vct{s})\,d\vct{s}.
+  \label{eq:discussion-predictive-nll-marginal}
+\end{equation}
+It therefore evaluates whether the exclusive pre-write mean and variance predict the current
+innovation. In the Gaussian model, this integral is available exactly and yields the scalar
+coordinate terms summed in Equation~\eqref{eq:discussion-predictive-innovation-nll}; no latent
+sampling or variational bound is needed to evaluate it.
+
+Bayes' rule gives the exact variational identity
+\begin{equation}
+  -\operatorname{ELBO}_{t,j}(q_{t,j})
   =\mathcal{L}_{\mathrm{pred},t,j}
    +\operatorname{KL}\!\left(
       q_{t,j}\,\|\,
-      p(\vct{s}_{t,j}^{\star}\mid v_{t,j},\mathcal{F}_{t-1})
+      p(\vct{s}_{t,j}^{\star}\mid
+        v_{t,j},\mathcal{F}_{t-1},\vct{k}_t)
     \right).
   \label{eq:discussion-predictive-nll-variational-identity}
 \end{equation}
-The two coincide when $q_{t,j}$ is the exact posterior. A diagonal or isotropic projection leaves
-a nonnegative variational gap. Moreover, a single Gaussian likelihood weights the mean-residual
-and posterior-variance terms equally. The unequal
-$(s_{\mathrm{write}},s_{\mathrm{protect}})$ objective above remains a valid decision-oriented
-criterion, but it is not the ELBO of one Gaussian observation model. If $r_t$ is learned in that
-posterior objective, the $\log r_t$ normalizer must be retained; if it is omitted, increasing
-$r_t$ reduces both quadratic terms without paying the corresponding likelihood cost.
+Thus the negative ELBO upper-bounds the predictive marginal NLL and equals it when $q_{t,j}$ is
+the exact posterior. A diagonal or isotropic variational family generally leaves a nonnegative
+gap equal to its reverse-KL error. Importantly, it is the complete negative ELBO, not the expected
+reconstruction term in Equation~\eqref{eq:discussion-expected-versus-predictive-nll}, that equals
+the predictive NLL at the exact posterior.
+
+The analogy to a VAE is therefore limited. The latent memory column plays the role of the VAE
+latent variable, the value coordinate plays the role of the observation, and $q_{t,j}$ plays an
+encoder-like role. Here, however, inference is an online filtering update with a history-dependent
+prior, the linear-Gaussian predictive marginal is analytic, and both $\vct{k}_t$ and $\vct{v}_t$
+are learned internal representations rather than observed language tokens. Consequently, the
+predictive NLL is an internal probabilistic-consistency and covariance-calibration objective, not
+a variational lower bound on the language-model likelihood.
+
+Finally, a single Gaussian likelihood assigns the same multiplier to the mean-residual and
+posterior-variance terms in Equation~\eqref{eq:discussion-expected-versus-predictive-nll}. The
+unequal $(s_{\mathrm{write}},s_{\mathrm{protect}})$ objective above remains a valid
+decision-oriented criterion, but it is not the ELBO of one coherent Gaussian observation model.
+If $r_t$ is learned, the $\log r_t$ normalizer must be retained; otherwise increasing $r_t$ can
+reduce both quadratic terms without paying the corresponding likelihood cost.
 
 \subsection{Calibration diagnostics and optimization caveat}
 
