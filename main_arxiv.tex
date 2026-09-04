@@ -1295,95 +1295,62 @@ full attention degrades sharply as sequence length grows.
 \section{Related Work}
 \label{sec:related-work}
 
-\paragraph{Linear attention, delta rules, and gated recurrent mixers.}
-Linear attention replaces the quadratic softmax attention matrix with a recurrent fast-weight
-state, giving constant-memory autoregressive inference and scan-parallel training
-\citep{katharopoulos2020transformers}. DeltaNet interprets this state as an online associative
-memory and updates it by writing only the value residual at the current key
-\citep{schlag2021linear}. Later gated variants add learned forgetting and more expressive
-state transitions, including Gated Linear Attention, Gated DeltaNet, and KDA
-\citep{yang2023gated,yang2024gdn,kimiteam2025kimilinear}. Our starting point is this
-associative-memory view: the recurrent state is a key--value map $\ve{S}_t$, the token
-measurement is $\ve{v}_t\approx \ve{S}_t^{\tr}\ve{k}_t$, and the write is a Kalman residual
-update. This lets us place DeltaNet, GDN, and KDA inside a single state-space filtering
-picture as fixed-gain or restricted-covariance approximations.
+\paragraph{Linear attention.}
+Standard self-attention and its RoPE variant retain token-level history and quadratic pairwise
+interactions~\citep{vaswani2017attention,su2024roformer}. Efficient alternatives include low-rank
+projection in Linformer~\citep{wang2020linformer} and recurrent linear attention, which compresses
+history into a fixed-size fast-weight state for constant-memory decoding and scan-parallel
+training~\citep{katharopoulos2020transformers}. Gated and corrective recurrent designs include GLA,
+DeltaNet, Gated DeltaNet, Comba, RWKV-7, and KDA
+\citep{yang2023gated,schlag2021linear,yang2024gdn,hu2025comba,
+peng2025rwkv7,kimiteam2025kimilinear}; FoX, DeltaFormer, and PaTH-FoX carry related forgetting,
+associative correction, and multiplicative positional encoding to exponential-kernel attention
+\citep{lin2025forgetting,zhong2025understanding,yang2025path}. GDN-2 further decouples erase and
+write~\citep{hatamizadeh2026gdn2}.
 
-\paragraph{Kalman filtering as a sequence mixer.}
-Classical Kalman filtering performs optimal online inference in linear--Gaussian state-space
-models by maintaining both a posterior mean and covariance. Recent work by
-\citet{shaj2026kalmanlinearattention} also introduces a method named Kalman Linear Attention
-and shows that a diagonal information-form Kalman filter can be made scan-parallel through a
-M\"obius precision recursion. Their layer treats token values as noisy observations of a
-per-channel latent feature state, uses an OU-discretized stochastic prior with time-invariant
-dynamics, and reads out the posterior mean by an elementwise query projection. In contrast, our
-KDN studies Kalman filtering for \emph{delta-network associative memory}: the latent object is
-the memory matrix $\ve{S}_t\in\R^{d_k\times d_v}$, the observation is a key-conditioned value
-measurement $\ve{v}_t=\ve{S}_t^{\tr}\ve{k}_t+\ve{e}_t$, and the central object is the Kalman
-write direction $\ve{\kappa}_t$. The exact filter for this model carries a dense key-space
-covariance, and our diagonal and isotropic variants are structured approximations to that exact
-associative-memory update. Thus the two papers share M\"obius scan algebra, but they
-apply it to different latent states and different notions of attention.
-
-\paragraph{Positioning.}
-Our goal is not only to add uncertainty to a recurrent mixer, but to identify which parts of
-Kalman filtering are compatible with key--value recall. Exact dense Kalman is the filtering
-reference for the associative-memory model, but its covariance-optimal gain can rotate writes
-away from the query key. The isotropic and diagonal variants therefore expose a useful design
-axis: scalar uncertainty gives an adaptive write strength while preserving the delta-rule
-binding direction, whereas anisotropic uncertainty gives a richer but potentially less
-retrieval-aligned write direction. This distinction is specific to the associative-memory
-formulation and is complementary to prior work that uses Kalman filtering primarily as a
-per-channel SSM primitive.
-
+\paragraph{State-space sequence mixers and Bayesian memory.}
+Structured SSMs form a complementary lineage: S4 makes long-range continuous-time dynamics
+tractable via structured convolutions, while S5 recasts them as a scan-parallel MIMO
+recurrence~\citep{gu2022efficiently,smith2023simplified},
+Mamba adds input selectivity~\citep{gu2023mamba}, Mamba-2 derives attention--SSM duality and SSD
+\citep{dao2024transformers}, and Mamba-3 introduces exponential--trapezoidal discretization, complex
+dynamics, and SISO/MIMO variants~\citep{lahoti2026mamba3}. Unlike Mamba's deterministic,
+control-driven additive updates, KDN treats token values as noisy observations of a stochastic
+key--value map and weights each innovation by propagated covariance. Kalman Linear Attention also
+tracks uncertainty with a scan-parallel information-form filter, but factorizes its belief over
+feature/state-expansion coordinates under time-invariant OU dynamics
+\citep{shaj2026kalmanlinearattention}. KDN instead observes an associative matrix through
+vector-valued, key-conditioned measurements; its exact posterior covariance is dense in key space
+and shared across value channels, with isotropic and diagonal KDNs as scan-compatible approximations.
 
 % =============================================================================
-\section{Future Directions}
-\label{sec:future-directions}
+\section{Discussion and Conclusion}
+\label{sec:discussion-conclusion}
 
-The diagonal-covariance construction is the conservative path. The same state-space view
-also suggests several extensions that trade additional structure for a closer approximation
-to the Kalman update.
+In this work, we reformulate recurrent key--value memory as a linear--Gaussian state-space model and
+introduce Kalman Delta Networks (KDNs). The memory estimates a latent, non-stationary key--value
+map, the transition describes how that map persists or drifts, and each token provides a noisy
+observation through its key. This view unifies the DeltaNet lineage: DeltaNet, Gated DeltaNet, and
+KDA use identity, scalar, and diagonal transitions, respectively, while replacing the
+covariance-derived Kalman gain with a token-predicted gain. It also explains the delta-rule
+residual. Under this observation model, the residual is the Kalman innovation---the part of the
+current value that the predicted memory cannot explain.
 
-\paragraph{Direction A: richer process models.}
-\begin{enumerate}[leftmargin=1.8em,itemsep=3pt,topsep=2pt,label=\textbf{A\arabic*.}]
-  \item \textbf{Block-diagonal transitions.} Use
-  $\ve{D}_t=\operatorname{blockdiag}(\ve{D}_t^{(1)},\ldots,\ve{D}_t^{(m)})$. Small blocks allow local
-  mixing among related memory channels while keeping the transition structured enough for
-  parallel composition.
+To make this filtering view practical, we derived scan-compatible Isotropic and Diagonal KDNs and
+introduced information scaling to protect stored associations from future overwrite. Under
+parameter-matched recurrent-only pretraining at 750M and 1.3B, both variants achieved lower
+WikiText and LAMBADA perplexity and higher mean six-task zero-shot accuracy than every evaluated
+recurrent baseline. Diagonal KDN also achieved the strongest aggregate RULER retrieval at both
+scales.
 
-  \item \textbf{Basis-rotated diagonal transitions.} Use
-  $\ve{D}_t=\ve{R}\diag(\ve{\alpha}_t)\ve{R}^{\tr}$ with a fixed or slowly changing basis $\ve{R}$. Forgetting then
-  acts in learned memory directions rather than raw coordinates, but the per-token decay
-  remains diagonal in that basis.
-
-  \item \textbf{Prefix-conditioned transitions.} Let $\ve{D}_t$ depend on scan-computable
-  statistics $\ve{z}_t$, such as decayed key energy or an innovation proxy, instead of depending
-  directly on the sequential state $\ve{S}_{t-1}$. Then $\ve{D}_t=\ve{D}(\ve{x}_t,\ve{z}_t)$ can react to drift while
-  keeping $\ve{A}_t$ available before the scan.
-\end{enumerate}
-
-\paragraph{Direction B: richer covariance and gain families.}
-\begin{enumerate}[leftmargin=1.8em,itemsep=3pt,topsep=2pt,label=\textbf{B\arabic*.}]
-  \item \textbf{Transition-aware scalar covariance.} Set $\ve{P}_t=b_t\ve{I}$, but predict the scalar
-  uncertainty through $\ve{D}_t$ before forming the gain. This still recovers the delta-rule
-  direction $\ve{\kappa}_t=\beta_t \ve{k}_t$, while allowing the scalar write strength to depend on
-  how strongly the memory has just been forgotten.
-
-  \item \textbf{Block-diagonal covariance.} Track $\ve{P}_t$ or $\ve{C}_t=\ve{P}_t^{-1}$ in small blocks.
-  This captures correlations among nearby key channels while replacing one large inverse by
-  many small inverses. The prediction remains local:
-  $\widehat{\ve{P}}_t^{(j)}=\ve{D}_t^{(j)}\ve{P}_{t-1}^{(j)}\ve{D}_t^{(j)\tr}+\ve{\Omega}_t^{(j)}$.
-
-  \item \textbf{Diagonal-plus-low-rank covariance.} Use
-  $\ve{P}_t=\diag(\ve{p}_t)+\ve{U}_t\ve{U}_t^{\tr}$, with $\ve{p}_t$ and $\ve{U}_t$ produced from prefix statistics.
-  Woodbury-style reads can keep the gain tractable, while the low-rank term captures global
-  uncertainty directions missed by a diagonal approximation.
-
-  \item \textbf{Chunk-boundary covariance updates.} Update $\ve{P}_t$ only at chunk boundaries,
-  while freezing the gain inside each chunk. This gives a TTT-like approximation: the
-  expensive uncertainty update is carried by a short sequential pass across chunks, but all
-  token updates within a chunk remain fixed-gain affine scans.
-\end{enumerate}
+These models are steps toward, rather than full realizations of, Kalman Associative Memory. Exact
+filtering maintains a dense key-space covariance and a state-dependent Riccati update, whereas the
+isotropic and diagonal approximations compress this covariance to preserve parallel training. An
+immediate next step is to extend diagonal decay with the damped rotations used by Mamba-3
+\citep{lahoti2026mamba3}, allowing stored associations to rotate as well as decay. Unlike Mamba-3's
+additive input write, a rotational KDN would continue to propagate uncertainty and apply a
+covariance-derived, key-conditioned innovation correction. Making this richer transition and
+covariance update scan-efficient remains open.
 
 
 \bibliography{main}

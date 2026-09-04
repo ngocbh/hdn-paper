@@ -2865,10 +2865,37 @@ H200, preflight, runner, and validator paths.  The reversible H=16 angle-scale o
 implemented and hardened through commits \pathcode{a14168a...}, \pathcode{5253faf...}, and
 \pathcode{11e7d37...}.  Fresh specification and quality reviews accepted that slice after it made
 rollback best-effort and fail-closed, detected mid-arm scale drift, validated exact per-rank
-topology evidence, and preserved RNG and state-dict identity.  Its focused host contract passes 33
-tests; the complete new host file passes 135 tests while nine deliberately red assertions remain
-for later implementation slices.  The matched-prerequisite closure is the current in-progress
-slice.  No numerical or result-bearing GPU job has yet been accepted from this worktree.
+topology evidence, and preserved RNG and state-dict identity.  The matched-prerequisite slice was
+then implemented at \pathcode{d31ba7d...}, hardened at \pathcode{31962f3...}, and completed by the
+dependency bootstrap at \pathcode{9bb7d3c...}.  Adversarial review first demonstrated that an
+unlisted \pathcode{sitecustomize.py} could forge the historical child result, JSON numeric aliases
+could pass Python equality, and evidence could be exchanged between hashing and parsing.  The
+accepted implementation now verifies the complete 4,257-file historical source closure before and
+after the child, uses trusted-directory file descriptors and single-captured bytes for evidence,
+requires canonical exact-type JSON, bounds and reaps child output, and retains Python \pathcode{-S}
+while explicitly appending only the active interpreter's canonical, non-writable
+\pathcode{purelib}/\pathcode{platlib} directories.  The latter was necessary because the real
+historical validator imports PyTorch while checking the retained anchor; a real import smoke proves
+that PyTorch loads without executing \pathcode{sitecustomize.py}.  Fresh specification and quality
+re-reviews accepted the slice with no remaining findings.  Its five focused adversarial tests and
+140 host tests pass; nine deliberately red assertions remain for later implementation slices.  The
+extended one-chain prerequisite schema and external-preflight interfaces were then completed at
+commit \pathcode{323ce5fc699e8611b5440cf368830a4d7098e839}.  This slice fully verifies both the
+node-private execution tree and immutable source snapshot against the reviewed Git commit, tree,
+and 4,257-file manifest; binds the exact numerical and actual-anchor preflight closures; checks the
+root and every scheduler step, TRES, submission, working-directory, stdout, and stderr record; and
+uses a sealed semantic projection on the retained rank path without repeating live queries or full
+tree walks.  Source and scheduler sub-audits found no remaining scoped blocker.  A subsequent
+quality review initially flagged a same-timestamp transient-edit probe, but its minimized trace
+showed that it changed an already-consumed preflight runner which was neither reopened nor executed
+while changed.  The reviewer therefore withdrew that finding and returned no Critical, Important,
+or Minor issue and \pathcode{Ready: Yes}; the independent specification review returned
+\pathcode{ACCEPTED}.  Eleven newly focused adversarial cases pass, the specification review's nine
+focused functions pass as 15 parameterized cases, and the complete host file now has 152 passing
+tests with the same nine deliberately red assertions reserved for later-boundary persistence,
+final artifact closure, and runner postchecks.  The candidate safety-stop and complete-liveness
+slice is now the current implementation task.  No numerical or result-bearing GPU job has yet been
+accepted from this worktree.
 
 The completed prerequisites and diagnostics are the forward localization in job \pathcode{1836996}, the reviewed
 shared-DT-only warp-8 RMSNorm-forward control, its passing bounded smoke in job
