@@ -284,7 +284,7 @@ the predicted memory and yields a principled gain for incorporating new evidence
   dense posterior; reverse-KL projection restores diagonality without changing its mean. The
   starred pair $(\ve{S}_t^\star,\ve{P}_t^\star)$ is the optimal posterior of
   Proposition~\ref{prop:kalman-associative-memory}.
-  \htl{should the starred pairs be related to equ28? }
+  % \htl{should the starred pairs be related to equ28? }
   }
   \label{fig:kdn-variational-approximation}
 \end{figure}
@@ -1295,9 +1295,8 @@ full attention degrades sharply as sequence length grows.
 \section{Related Work}
 \label{sec:related-work}
 
-\paragraph{Linear attention.}
-Standard self-attention and its RoPE variant retain token-level history and quadratic pairwise
-interactions~\citep{vaswani2017attention,su2024roformer}. Efficient alternatives include low-rank
+\paragraph{Fixed-memory attention.}
+Standard self-attention~\citep{vaswani2017attention}, including its RoPE-based variants~\citep{su2024roformer}, retains token-level history and computes quadratic pairwise interactions. Practical systems reduce these costs through sparse attention~\citep{liu2025deepseek} or bounded KV-cache retention at inference time~\citep{xiao2024efficient,bui2026cache,bui2026make}. Efficient native alternatives include low-rank
 projection in Linformer~\citep{wang2020linformer} and recurrent linear attention, which compresses
 history into a fixed-size fast-weight state for constant-memory decoding and scan-parallel
 training~\citep{katharopoulos2020transformers}. Gated and corrective recurrent designs include GLA,
@@ -1305,7 +1304,7 @@ DeltaNet, Gated DeltaNet, Comba, RWKV-7, and KDA
 \citep{yang2023gated,schlag2021linear,yang2024gdn,hu2025comba,
 peng2025rwkv7,kimiteam2025kimilinear}; FoX, DeltaFormer, and PaTH-FoX carry related forgetting,
 associative correction, and multiplicative positional encoding to exponential-kernel attention
-\citep{lin2025forgetting,zhong2025understanding,yang2025path}. GDN-2 further decouples erase and
+\citep{,zhong2025understanding,yang2025path}. GDN-2 further decouples erase and
 write~\citep{hatamizadeh2026gdn2}.
 
 \paragraph{State-space sequence mixers and Bayesian memory.}
@@ -1327,26 +1326,13 @@ and shared across value channels, with isotropic and diagonal KDNs as scan-compa
 \section{Discussion and Conclusion}
 \label{sec:discussion-conclusion}
 
-In this work, we reformulate recurrent key--value memory as a linear--Gaussian state-space model and
-introduce Kalman Delta Networks (KDNs). The memory estimates a latent, non-stationary key--value
-map, the transition describes how that map persists or drifts, and each token provides a noisy
-observation through its key. This view unifies the DeltaNet lineage: DeltaNet, Gated DeltaNet, and
-KDA use identity, scalar, and diagonal transitions, respectively, while replacing the
-covariance-derived Kalman gain with a token-predicted gain. It also explains the delta-rule
-residual. Under this observation model, the residual is the Kalman innovation---the part of the
-current value that the predicted memory cannot explain.
+We reformulate recurrent key--value memory as a linear--Gaussian state-space model and introduce Kalman Delta Networks (KDNs). In this formulation, the recurrent memory estimates a latent, non-stationary key--value map, the transition describes how this map persists or drifts, and each token supplies a noisy, key-conditioned observation. This perspective unifies the DeltaNet lineage: DeltaNet, Gated DeltaNet, and KDA correspond to identity, scalar, and diagonal transitions, respectively, but replace the covariance-derived Kalman gain with a token-predicted gain. It also gives the delta-rule residual a probabilistic interpretation: the residual is the Kalman innovation, namely the part of the observed value not explained by the predicted memory.
 
-To make this filtering view practical, we derived scan-compatible Isotropic and Diagonal KDNs and
-introduced information scaling to protect stored associations from future overwrite. Under
-parameter-matched recurrent-only pretraining at 750M and 1.3B, both variants achieved lower
-WikiText and LAMBADA perplexity and higher mean six-task zero-shot accuracy than every evaluated
-recurrent baseline. Diagonal KDN also achieved the strongest aggregate RULER retrieval at both
-scales.
+To make uncertainty-aware filtering practical, we derive scan-compatible Isotropic and Diagonal KDNs and introduce information scaling to limit future overwrite of stored associations. In parameter-matched recurrent-only pretraining at 750M and 1.3B parameters, both variants achieve lower WikiText and LAMBADA perplexity and higher mean six-task zero-shot accuracy than every evaluated recurrent baseline. Diagonal KDN also attains the highest aggregate RULER score at both scales.
 
 These models are steps toward, rather than full realizations of, Kalman Associative Memory. Exact
 filtering maintains a dense key-space covariance and a state-dependent Riccati update, whereas the
-isotropic and diagonal approximations compress this covariance to preserve parallel training. An
-immediate next step is to extend diagonal decay with the damped rotations used by Mamba-3
+isotropic and diagonal approximations compress this covariance to preserve parallel training. A future direction is to extend diagonal decay with the damped rotations used by Mamba-3
 \citep{lahoti2026mamba3}, allowing stored associations to rotate as well as decay. Unlike Mamba-3's
 additive input write, a rotational KDN would continue to propagate uncertainty and apply a
 covariance-derived, key-conditioned innovation correction. Making this richer transition and
