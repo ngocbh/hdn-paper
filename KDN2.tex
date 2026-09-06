@@ -1401,7 +1401,9 @@ This appendix derives an exact two-stage implementation of the retained two-axis
 in Section~\ref{sec:kdn2}.  The first stage advances the coupled key--value uncertainty factors and
 emits the coefficients required by the mean update.  The second stage conditions on those
 coefficients and applies the two-key compact-WY construction.  The distinction is essential: the
-mean pass is chunkwise, whereas the joint reverse-KL factor pass remains causal and sequential.
+mean pass is chunkwise, whereas the joint reverse-KL factor pass in the direct schedule remains
+causal and sequential.  Subsection~\ref{app:kdn2-parallel-factor-solvers} discusses prospective
+parallel factor solvers that retain the same covariance family and projection target.
 
 Here ``exact'' means equality with the token-by-token retained KDN-2 recurrence under the same
 prediction, factor gauge, and reverse-KL projection---not equality with the unrestricted dense
@@ -1601,7 +1603,7 @@ root iterations; a fixed truncated solver should instead be differentiated throu
 its specified recurrence.  These changes can reduce synchronization and do reduce factor-vector
 traffic inside a token, but they do not remove the causal dependence between tokens.
 
-\paragraph{Why Stage 1 is not an associative scan.}
+\paragraph{Why the direct factor pass is not an independent M\"obius scan.}
 The map
 \begin{equation}
   (\ve{P}_{t-1},\ve{B}_{t-1})
@@ -1610,10 +1612,210 @@ The map
   \label{eq:kdn2-chunk-factor-map}
 \end{equation}
 contains a joint nonlinear matrix-scaling solve whose summaries depend on both candidate factors.
-Unlike the $2\times2$ M\"obius matrices of the one-axis recurrence, composing token maps does not
-produce another token-local map in the same $O(K+V)$-parameter family.  Stage~1 chunks must
-therefore be traversed in causal order; chunking provides tiling and checkpointing, not time
-parallelism.
+Unlike the independent $2\times2$ M\"obius matrices of the one-axis recurrence, its coordinate
+updates have coefficients coupled through the incoming factor state.  They cannot be prepared
+from the token inputs alone by the same construction.  Thus the direct Stage~1 schedule traverses
+chunks in causal order; chunking that schedule provides tiling and checkpointing, not time
+parallelism.  This is a limitation of the independent coordinatewise construction, not an
+impossibility theorem for every fixed-size associative operator family or iterative parallel
+solver.
+
+\subsection{Prospective parallel factor solvers with the same reverse-KL target}
+\label{app:kdn2-parallel-factor-solvers}
+
+The following three directions target Stage~1 without replacing the retained covariance
+$\ve{B}_t\otimes\ve{P}_t$, with both factors diagonal, or its joint reverse-KL projection.
+They must also preserve the factor prediction, per-token gauge, and chosen projection policy:
+convergence to the reverse-KL optimum or a specified finite number of complete sweeps.  An exact
+evaluation of this retained recurrence is still an approximation to the unrestricted dense
+Kalman filter.  The first two directions use associative operations inside a nonlinear solve;
+the third asks whether a direct finite-dimensional representation exists.  None is established
+here as a compact, exact one-pass gain scan or as a measured GPU speedup.
+
+\paragraph{Scalar-controlled M\"obius operators.}
+It is useful to express the prediction before its gauge normalization.  Starting from the
+gauge-fixed posterior at token $t-1$, define
+\begin{equation}
+\begin{aligned}
+  U_{t,i}&=\alpha_{t,i}^2p_{t-1,i}+\omega^{(k)}_{t,i},
+  & W_{t,j}&=b_{t-1,j}+\omega^{(v)}_{t,j},\\
+  \eta^{(k)}_{t,i}&=U_{t,i}k_{t,i}^2,
+  & \eta^{(v)}_{t,j}&=W_{t,j}/r_{t,j}.
+\end{aligned}
+  \label{eq:kdn2-controlled-raw-prediction}
+\end{equation}
+Let $s_t,u_t$ denote the scalar summaries in this raw predictive gauge.  For a converged
+projection, their consistency equations and the posterior normalization are
+\begin{equation}
+\begin{aligned}
+  s_t&=F_{\ve{\eta}^{(k)}_t}(u_t),
+  & u_t&=F_{\ve{\eta}^{(v)}_t}(s_t),\\
+  h_t&=\exp\!\left[\frac{1}{V}\sum_j
+    \log\!\left(\frac{W_{t,j}}{1+s_t\eta^{(v)}_{t,j}}\right)\right],
+  & c_t&=(1+s_tu_t)h_t.
+\end{aligned}
+  \label{eq:kdn2-controlled-consistency}
+\end{equation}
+Equations~\eqref{eq:kdn2-chunk-scalar-reconstruction}--\eqref{eq:kdn2-chunk-scalar-gauge}
+then give the same canonical posterior as
+\begin{equation}
+  p_{t,i}=\frac{c_tU_{t,i}}{1+u_tk_{t,i}^2U_{t,i}},
+  \qquad
+  b_{t,j}=\frac{W_{t,j}}{h_t(1+s_tW_{t,j}/r_{t,j})}.
+  \label{eq:kdn2-controlled-reconstruction}
+\end{equation}
+In particular, $\prod_j b_{t,j}=1$.  Using the raw predictive gauge is only an algebraic
+convenience: it does not permit postponing posterior gauge normalization across tokens with
+unchanged additive process factors.
+
+Conditioned on the three scalar controls $(s_t,u_t,h_t)$, every coordinate update in
+Equation~\eqref{eq:kdn2-controlled-reconstruction} is M\"obius.  With a matrix
+$\left[\begin{smallmatrix}a&b\\c&d\end{smallmatrix}\right]$ acting as
+$x\mapsto(ax+b)/(cx+d)$, the key and value operators are
+\begin{equation}
+\begin{aligned}
+  \ve{M}^{(k)}_{t,i}
+  &=\begin{bmatrix}
+      c_t\alpha_{t,i}^2 & c_t\omega^{(k)}_{t,i}\\
+      u_tk_{t,i}^2\alpha_{t,i}^2 & 1+u_tk_{t,i}^2\omega^{(k)}_{t,i}
+    \end{bmatrix},\\
+  \ve{M}^{(v)}_{t,j}
+  &=\begin{bmatrix}
+      h_t^{-1} & h_t^{-1}\omega^{(v)}_{t,j}\\
+      s_t/r_{t,j} & 1+s_t\omega^{(v)}_{t,j}/r_{t,j}
+    \end{bmatrix}.
+\end{aligned}
+  \label{eq:kdn2-controlled-mobius}
+\end{equation}
+For given control trajectories, $K+V$ independent matrix-product scans therefore recover all
+factor trajectories.  The unresolved problem is that the controls themselves depend on those
+trajectories.  One possible algorithm guesses controls for all tokens, scans
+Equation~\eqref{eq:kdn2-controlled-mobius}, evaluates the consistency residuals in
+Equation~\eqref{eq:kdn2-controlled-consistency} at all tokens, and updates the controls with a
+nonlinear solver.  Zero consistency residual recovers the original converged-projection
+recurrence; freezing inconsistent controls does not.  There is no guarantee that a simple
+fixed-point iteration needs substantially fewer than $T$ iterations.
+
+For a prescribed $N_{\mathrm{proj}}\ge1$, the same conditional operators apply, but the first
+two consistency equations must instead enforce the lagged pair produced by
+Equation~\eqref{eq:kdn2-chunk-truncated-scalar-iteration}, evaluated with the raw statistics
+$\ve{\eta}^{(k)}_t,\ve{\eta}^{(v)}_t$.  Replacing that finite-sweep policy by the stationary
+scalar root would change the target recurrence.
+
+\paragraph{Structured Newton and quasi-Newton scans.}
+An alternative is to solve directly for the complete factor trajectory using parallel Newton
+or quasi-Newton corrections.\footnote{For the general nonlinear-recurrence approach, see
+Gonzalez, Warrington, Smith, and Linderman,
+\href{https://arxiv.org/abs/2407.19115}{\emph{Towards Scalable and Stable Parallelization of
+Nonlinear RNNs}}, NeurIPS 2024.  The factor-Jacobian structure below follows specifically from
+the KDN-2 reconstruction.}
+Remove the redundant gauge coordinate by writing
+\begin{equation}
+\begin{aligned}
+  \ve{\ell}_t
+  &=(\log p_{t,1},\ldots,\log p_{t,K},
+     \log b_{t,1},\ldots,\log b_{t,V-1})^{\tr}\in\R^d,\\
+  d&=K+V-1,
+  \qquad \log b_{t,V}=-\sum_{j<V}\log b_{t,j}.
+\end{aligned}
+  \label{eq:kdn2-factor-log-chart}
+\end{equation}
+Let $f_t$ be the original token factor map in these coordinates, including the specified
+projection policy.  At a candidate trajectory define
+\begin{equation}
+  \ve{r}^{\mathrm{traj}}_t=\ve{\ell}_t-f_t(\ve{\ell}_{t-1}),
+  \qquad
+  \ve{J}_t=\frac{\partial f_t}{\partial\ve{\ell}_{t-1}}.
+  \label{eq:kdn2-factor-trajectory-residual}
+\end{equation}
+Where the factor map is differentiable, the chain rule applied to
+Equation~\eqref{eq:kdn2-controlled-reconstruction} gives
+\begin{equation}
+  \ve{J}_t=\ve{\Lambda}_t+\ve{A}_t\ve{C}_t^{\tr},
+  \qquad
+  \ve{\Lambda}_t\ \text{diagonal},
+  \qquad
+  \ve{A}_t,\ve{C}_t\in\R^{d\times3}.
+  \label{eq:kdn2-factor-jacobian-structure}
+\end{equation}
+Indeed, holding $(s_t,u_t,\log h_t)$ fixed leaves coordinatewise log-factor updates.  All
+additional dependence passes through these three scalars, giving a correction of rank at most
+three.  Eliminating $\log b_{t,V}$ preserves this decomposition for the retained output
+coordinates.  A converged projection can use implicit differentiation of its scalar equations;
+a fixed-sweep projection must differentiate its specified finite iteration instead.
+
+An undamped Newton correction solves
+\begin{equation}
+  \ve{\delta}_t
+  =\ve{J}_t\ve{\delta}_{t-1}-\ve{r}^{\mathrm{traj}}_t,
+  \qquad \ve{\delta}_0=\ve{0},
+  \qquad \ve{\ell}^{\mathrm{new}}_t=\ve{\ell}_t+\ve{\delta}_t.
+  \label{eq:kdn2-factor-newton-scan}
+\end{equation}
+This linearized problem has an exact associative affine operator:
+\begin{equation}
+  (\ve{A}_2,\ve{c}_2)\circ(\ve{A}_1,\ve{c}_1)
+  =(\ve{A}_2\ve{A}_1,\ve{A}_2\ve{c}_1+\ve{c}_2).
+  \label{eq:kdn2-factor-affine-composition}
+\end{equation}
+However, closure of the full affine family does not imply fixed-rank closure of
+Equation~\eqref{eq:kdn2-factor-jacobian-structure}.  Composing two diagonal-plus-rank-three
+matrices can produce a rank-six correction to the product of their diagonal parts; over a
+chunk the correction rank can grow with chunk length.  General exact affine summaries require
+$O(d^2)$ storage and $O(d^3)$ work per dense merge.  The small one-token rank instead motivates
+matrix-free Jacobian products, diagonal or low-rank quasi-Newton approximations, and structured
+preconditioners.  Rank truncation during merges is an approximation and does not generally
+preserve associativity.
+
+These approximations concern the numerical correction, not necessarily the retained covariance
+model: acceptance must be based on the original nonlinear trajectory residual in
+Equation~\eqref{eq:kdn2-factor-trajectory-residual}, with the prescribed projection accuracy.
+A zero residual and the fixed initial state determine the same causal factor trajectory.
+Finite tolerances require error checks on the resulting factors and gains; neither convergence
+in a small iteration count nor a GPU speedup follows from affine closure alone.  Damping and
+gauge-eliminated coordinates are practical safeguards to investigate.
+
+\paragraph{Hypothetical exact feature lift.}
+A more ambitious direction seeks a fixed feature map $\Phi:\R^d\to\R^m$, a decoder $\Psi$,
+and token-input-dependent matrices $\ve{M}_t$ such that
+\begin{equation}
+  \Phi(f_t(\ve{\ell}))=\ve{M}_t\Phi(\ve{\ell}),
+  \qquad
+  \Psi(\Phi(\ve{\ell}))=\ve{\ell}.
+  \label{eq:kdn2-factor-exact-lift}
+\end{equation}
+A homogeneous version may allow equality up to a nonzero scale if the decoder is
+scale-invariant, as in a projective M\"obius representation.  This is related to finding a
+finite invariant space of observables for a Koopman operator.\footnote{See Brunton, Brunton,
+Proctor, and Kutz,
+\href{https://doi.org/10.1371/journal.pone.0150171}{\emph{Koopman Invariant Subspaces and Finite
+Linear Representations of Nonlinear Dynamical Systems for Control}}, PLOS ONE, 2016.}
+Here one feature family must work for every admissible token map, with $m$ independent of
+sequence or chunk length and with affordable composition and decoding.  If such a family
+exists, matrix prefix products followed by decoding would evaluate the original factor
+recurrence without an outer trajectory solve.
+
+Candidate observables include entry variances $p_i b_j$, reciprocal factors, and products or
+summaries associated with the scalar reconstruction.  Their closure is not established:
+reciprocals, additive prediction, and the nonlinear projection can introduce new functions under
+composition.  A useful first test is symbolic composition at $K=V=2$ with generic token inputs,
+checking whether a proposed dictionary remains invariant across several tokens.  Growth of the
+required dictionary would reject that candidate, not prove impossibility of every finite lift.
+A truncated or learned feature representation is only approximate unless exact closure and
+decoding are proved, or its output is corrected against the original trajectory equations.
+
+\paragraph{Scope and validation.}
+All three directions concern uncertainty propagation and gain generation, not a replacement
+for the conditional-mean construction below.  Once a factor trajectory is obtained, gains must
+still be emitted from the exclusive predictive factors in
+Equation~\eqref{eq:kdn2-chunk-factor-emissions}, using the same predictive gauge.  In particular,
+the algebraic use of raw predictive factors in
+Equation~\eqref{eq:kdn2-controlled-raw-prediction} must not silently change the stored
+$\ve{g}_t,\ve{\beta}_t$ convention.  Practical evaluation should compare factors, full gains,
+outputs, and gradients against the sequential reference under the same projection policy and
+tolerances.  The persistent scalar prepass is the baseline; outer iteration counts, operator
+storage, numerical conditioning, and total forward/backward time must all be measured before
+claiming an advantage.
 
 \subsection{Stage 2: conditional two-key mean recurrence}
 \label{app:kdn2-conditional-mean}
@@ -1853,7 +2055,7 @@ invariant.
 \subsection{Two-stage schedule, cost, and exactness}
 \label{app:kdn2-chunk-schedule}
 
-The complete forward schedule is:
+The direct two-stage forward schedule is:
 \begin{enumerate}
   \item \textbf{Coupled-factor stage.} Traverse tokens causally with
     Equations~\eqref{eq:kdn2-chunk-factor-prediction}--\eqref{eq:kdn2-chunk-factor-emissions},
@@ -1869,7 +2071,7 @@ The complete forward schedule is:
     chunk.
 \end{enumerate}
 
-With $N_{\mathrm{proj}}$ reverse-KL sweeps per token, Stage~1 costs
+With $N_{\mathrm{proj}}$ reverse-KL sweeps per token, the direct Stage~1 schedule costs
 \begin{equation}
   O\!\left(T(N_{\mathrm{proj}}+1)(K+V)\right)
   \label{eq:kdn2-chunk-factor-cost}
@@ -1880,7 +2082,9 @@ The scalar evaluation has the same asymptotic reduction work, with $N_{\mathrm{p
 sweep steps but only $N_{\mathrm{proj}}-1$ required key-ratio updates, and reconstructs the factor
 vectors once per token.  For a converged solve, replace $N_{\mathrm{proj}}$ by the number
 $N_{\mathrm{root}}$ of safeguarded scalar root iterations.  In either case the token-to-token
-depth remains linear in $T$.
+depth of this direct schedule remains linear in $T$.  The prospective solvers in
+Subsection~\ref{app:kdn2-parallel-factor-solvers} require separate iteration, work, storage, and
+accuracy analyses; the direct-schedule bounds do not constitute lower bounds for those methods.
 
 For one Stage~2 chunk, constructing the shared interactions costs $O(C^2K)$, the value-batched
 triangular systems cost $O(C^2V)$, and multiplication by the carried memory costs $O(CKV)$.
