@@ -4003,8 +4003,27 @@ host modules than its literal disposition inventory; the lifecycle cannot supply
 queue identities required by its cleanup-certificate validator; it publishes the split before
 continuing the same iterator; the reconstructed-SubmitLine runtime type check is outside its
 declared edit surface; the evaluation-seal test path is wrong; and lifecycle/dependency and
-cross-result bindings remain incomplete.  Revision v12 is now in preparation.  No replay-plan
-revision has authorized or submitted a job or changed production code.
+cross-result bindings remain incomplete.  Revisions v12--v18 were subsequently frozen and each
+rejected by independent review; their SHA-256 values are, in order,
+\pathcode{5dbf3d58321ea72da34bc762038ea2878e93bec457982a92c7cc6956163f7cfb},
+\pathcode{82845d70a67ace5152b47252cfe35400af0af32ffad9d90354d646640805b790},
+\pathcode{648dcdbb54e78d07ba6e2fc57c8d0bcd4914f59122242eb3ae9b8baf4cd5cbe5},
+\pathcode{1ce145b2e9f74400efe26e8caa428819b4c6818982a4ba483b51708f9910983a},
+\pathcode{caa082f5c15c6caae00e97adb1ede1c024be456725b9d8cae8156eab89284a27},
+\pathcode{c35c1e824dc6d007931cd6c2c4e2a0c4c6a69c5c39609fd026ef239e574fa265},
+and \pathcode{feac1b553db2842c4d8b4e032cfd13e5f96ac676e9f2f8806e89dc42fee4659f}.
+Revision v19 is frozen at SHA-256
+\pathcode{41e0ca7c0f3f91c79929724a5fe8cad2b1f01a94ee7835d87ca1a52a811d9467}
+and remains under independent review; it is not yet accepted.
+
+The T00 fail-closed retirement tranche is committed locally as
+\pathcode{9d92d77941e877bf0b99d55df0f051929bb2bcff}, tree
+\pathcode{b5c0e19c75a8813df73163e85a07c8f0c87036fd}, and received an independent
+\pathcode{APPROVED}.  It guards exactly 33 supported v2 boundaries and pins 463 literal audit
+fixtures.  Integrated pueue task \pathcode{4607} passed 653 tests with four skips, compared with
+baseline task \pathcode{4594} at 525 passes and four skips.  This local T00 commit has not been
+pushed, submitted as a compute job, or used to grant production authorization; no later replay
+substrate tranche is implemented by that result.
 
 The first additive \pathcode{shared\_dt\_v3} quarter-head plan was reviewed at SHA-256
 \pathcode{aee51f621f5e66aa15b94a369b2cf61b3a79f4b28bcdc8d3f1769ee399ba398e} and rejected by
@@ -4038,9 +4057,9 @@ The remaining sequence is:
         preserve accepted non-authorizing screen \pathcode{1855985}, and implement its sole
         promotion-eligible quarter-head correction in a new versioned source without weakening or
         blindly retrying the gate;
-  \item finish and independently accept replay/retirement plan v12, implement its dormant substrate
-        and fail-closed v2 retirement around reviewed snapshot-free replay tip
-        \pathcode{7b5808a177d03dd1526d1e0c2dc7a83a0f816217}, then run the replacement authenticated
+  \item complete independent review and acceptance of frozen replay/retirement plan v19; only then
+        implement its dormant substrate beyond the already approved local T00 retirement at
+        \pathcode{9d92d77941e877bf0b99d55df0f051929bb2bcff}, then run the replacement authenticated
         gate at exact production topology through iter 4,000, proving byte-exact
         successor batches, a committed post-resume update against an uninterrupted control, and
         the eight-hour maximum projected full-horizon replay time;

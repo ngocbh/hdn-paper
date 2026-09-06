@@ -2195,9 +2195,21 @@ chunk-local work and retain only a short recurrence across chunks.
 \label{sec:chunkwise-gain}
 
 Let $\ve{z}_{t,i}=[n_{t,i},d_{t,i}]^{\tr}$ be the homogeneous covariance state for channel $i$,
-so that $p_{t,i}=n_{t,i}/d_{t,i}$. Partition the sequence into gain chunks
-$\mathcal{I}_m=\{\ell_m,\ldots,r_m\}$ of length at most $C_g$. Within each chunk, the token-local
-M\"obius matrices in \eqref{eq:diag-cov-scan} are reduced in temporal order to
+so that $p_{t,i}=n_{t,i}/d_{t,i}$. With $u_{t,i}=\mu k_{t,i}^2/r_t$, the covariance update is
+represented by
+\begin{equation}
+  \ve{M}_{t,i}
+  =\begin{bmatrix}
+    \alpha_{t,i}^2 & \omega_{t,i} \\
+    u_{t,i}\alpha_{t,i}^2 & 1+u_{t,i}\omega_{t,i}
+  \end{bmatrix},
+  \qquad
+  \ve{z}_{t,i}=\ve{M}_{t,i}\ve{z}_{t-1,i}.
+  \label{eq:chunk-gain-covariance-mobius}
+\end{equation}
+This is \eqref{eq:kla-box-mobius} with the information scale made explicit. Partition the sequence
+into gain chunks $\mathcal{I}_m=\{\ell_m,\ldots,r_m\}$ of length at most $C_g$. Within each chunk,
+the token-local M\"obius matrices are reduced in temporal order to
 \begin{equation}
   \overline{\ve{M}}_{m,i}
   =\ve{M}_{r_m,i}\ve{M}_{r_m-1,i}\cdots\ve{M}_{\ell_m,i}.
@@ -2270,13 +2282,14 @@ The normalized state obeys an ordinary two-key delta rule,
 \end{equation}
 Let $\ve{K}$, $\ve{K}^{(\kappa)}$, $\ve{Q}$, $\ve{V}$, and $\ve{\Gamma}$ stack the chunk's
 rows $\ve{k}_r^{\tr}$, $\ve{\kappa}_r^{\tr}$, $\ve{q}_r^{\tr}$, $\ve{v}_r^{\tr}$, and
-$\ve{\gamma}_r^{\tr}$, respectively, and define
+$\ve{\gamma}_r^{\tr}$, respectively. Let $\tau$ denote the query scale, with
+$\tau=d_k^{-1/2}$ in our implementation and $\tau=1$ when it is absorbed into $\ve{q}_r$. Define
 \begin{equation}
   \overline{\ve{K}}=\ve{\Gamma}\odot\ve{K},
   \qquad
   \overline{\ve{K}}^{(\kappa)}=\ve{K}^{(\kappa)}\oslash\ve{\Gamma},
   \qquad
-  \overline{\ve{Q}}=\ve{\Gamma}\odot\ve{Q}.
+  \overline{\ve{Q}}=\tau\ve{\Gamma}\odot\ve{Q}.
   \label{eq:chunk-memory-scaled-keys}
 \end{equation}
 The compact WY factors are
@@ -2297,9 +2310,9 @@ The compact WY factors are
 \end{aligned}
   \label{eq:chunk-memory-wy}
 \end{equation}
-Here $\ve{T}$ is strictly lower triangular; in practice, $\ve{W}$ and $\ve{U}$ are obtained by a
-unit-lower-triangular solve rather than by materializing $\ve{A}$. Define the final-decay-adjusted
-write matrix and the inclusive causal query--write matrix by
+Here $\ve{T}$ is strictly lower triangular. The implementation computes and stores $\ve{A}$ with a
+tiled unit-lower-triangular solve, then forms $\ve{W}$ and $\ve{U}$. Define the
+final-decay-adjusted write matrix and the inclusive causal query--write matrix by
 \begin{equation}
 \begin{aligned}
   \left[\ve{K}_{\mathrm{tail}}^{(\kappa)}\right]_{r,:}
