@@ -752,7 +752,7 @@ production-submission gate.  Train-smoke, distributed checkpoint/resume, and mul
 soak/attestation remained for that baseline at the time of sealing.  The next section records the
 later shared-DT candidate and its separate, still-open qualification.
 
-\section{Shared-DT engineering status as of September 4, 2026}
+\section{Shared-DT engineering status as of September 6, 2026}
 \label{sec:shared-dt-status}
 
 This section records a newer production candidate and does not revise the closed E2 result above.
@@ -3420,6 +3420,8 @@ The repair is committed on branch
 \pathcode{codex/rdiag-shared-dt-validator-seal-fix-20260905} as
 \pathcode{0a87fe50a47228c90a72d233615bee422fd2fe7a} (tree
 \pathcode{a911270714350b23987e13ffb44070fbe45d1e8d}) and is pushed at that exact remote SHA.
+The corresponding clean worktree is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/source_worktrees/rdiag_shared_dt_validator_seal_fix_20260905}.
 Its immutable 4,266-file snapshot is
 \pathcode{source_snapshots/rdiag_shared_dt_late_angle_scale_0a87fe50a47228c90a72d233615bee422fd2fe7a};
 the source-manifest SHA-256 is
@@ -3427,11 +3429,59 @@ the source-manifest SHA-256 is
 An independent private Git reconstruction verified the entire snapshot, and both the live worktree
 and snapshot passed the frozen 596-test host suite plus helper compilation and all four runner
 syntax checks.  Independent specification, code-quality, scientific, and operational reviews found
-no remaining issue and approved the strict full S7 repetition.  No S6 closure is reused.  The exact
+no remaining issue in the frozen S7 diagnostic/validator contract and approved the strict full S7
+repetition.  No S6 closure is reused.  The exact
 registered commands, without extra \pathcode{sbatch} options, were submitted from the clean S7
 worktree as actual-anchor preflight job \pathcode{1847596} and numerical preflight job
 \pathcode{1847597}; their scheduler \pathcode{SubmitLine} values bind the S7 snapshot, commit,
-manifest, worktree, and, for the anchor, the unchanged data manifest.
+manifest, worktree, and, for the anchor, the unchanged data manifest.  Anchor job
+\pathcode{1847596} completed \pathcode{0:0} on
+\pathcode{h200-112-045,h200-128-233} in 42 minutes 57 seconds.  Root, batch, extern, and all 13
+numbered steps completed with exact task vector
+\pathcode{2,2,2,2,2,16,2,2,2,16,2,2,2}; both 16-rank arms proved strict boundary-838 restore,
+zero data/forward/update activity, unchanged model and optimizer Merkle roots, preserved RNG, and
+exact historical/candidate scale behavior $0.25\rightarrow0.25$ and
+$0.25\rightarrow0.125\rightarrow0.25$.  Its 82 inventoried/83 physical artifacts are sealed, its
+result is \pathcode{VALID}, and its accepted closure is
+\pathcode{diagnostic_runs/late_angle_scale_anchor_preflight_0a87fe50a472_1847596_accepted_closure.json},
+SHA-256 \pathcode{171d985217f5e119f7037a6742531838f608e65a1d502a4a7a40db46e39f4fc6}.
+Numerical job \pathcode{1847597} completed \pathcode{0:0} on \pathcode{h200-128-233} in 2 minutes
+19 seconds; all three H=16 historical-identity, candidate forward/VJP, and one-step live-moment
+tests passed.  Its seven inventoried/eight physical artifacts are sealed, its result is
+\pathcode{VALID}, and its accepted closure is
+\pathcode{diagnostic_runs/late_angle_scale_numerical_preflight_0a87fe50a472_1847597_accepted_closure.json},
+SHA-256 \pathcode{d4e33bdc0f5093fbe893323be31669470f32b358d0f3f9002a2a1dd0fc9844ec}.
+Both closures pass live-query, offline, and retained-record validation with identical projections.
+They were sealed serially with the reviewed operator-side tool
+\pathcode{operator_tools/rdiag_preflight_closure_b6aeea289545a0d8d7b4fd27d447ae9dfc4b96001748b34fbb94ee882bebf11a.py},
+whose SHA-256 is encoded in its filename; the same frozen bytes first reproduced both accepted S6
+closure digests and then reproduced each S7 closure without \pathcode{--seal} after publication.
+Independent scientific and operational Action-89 reviews returned \pathcode{APPROVED}.  A fresh
+4,266-file private reconstruction then reverified the S7 snapshot.  The mode-0400, single-link
+operator record is
+\pathcode{diagnostic_runs/late_angle_scale_launch_0a87fe50a472_operator_record.json}, SHA-256
+\pathcode{1aa59e8e0b0487c49636d2271f9abca567746219a594e6db014678bd41087957}.
+The two accepted preflight closures and this operator record all explicitly carry
+\pathcode{authorizing=false}: they authorize only the frozen diagnostic repetition, never a
+production-training launch.  The record's exact 12-token
+main command, with no \pathcode{sbatch} option, was submitted once as job \pathcode{1847784}; the
+scheduler-recorded \pathcode{SubmitLine}, worktree, source, data, and both closure pins match the
+operator record.  It began running at 00:40:07 UTC on
+\pathcode{h200-053-020,h200-140-109}.  Its run root is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/diagnostic_runs/late_angle_scale_0a87fe50a472_1847784}.
+The job remains \pathcode{RUNNING}; no main result, accepted closure, or fresh-node validator exists
+yet, and that validator has not been submitted.
+
+A broader preparatory 539-test host baseline also exposed one pre-existing, platform-sensitive
+test-harness defect: 531 tests pass and seven skip, while
+\pathcode{test_retention_journal_resumes_partially_deleted_generation} fails on Lustre.  The test
+globally intercepts every directory-relative deletion of \pathcode{model.pth}; because Lustre
+rejects \pathcode{renameat2(RENAME_NOREPLACE)} with \pathcode{EINVAL}, the injection fires during
+the claim-and-copy staging cleanup before pointer commit rather than during the intended
+post-commit retention cleanup.  The resulting ordinary checkpoint error is therefore correct;
+the future v2 branch must scope the injection to the retained victim directory's device/inode and
+assert the new pointer before the resume check.  This host-test repair is separate from the frozen
+S7 diagnostic source and does not alter the in-flight experiment.
 
 The completed prerequisites and diagnostics are the forward localization in job \pathcode{1836996}, the reviewed
 shared-DT-only warp-8 RMSNorm-forward control, its passing bounded smoke in job
@@ -3439,21 +3489,32 @@ shared-DT-only warp-8 RMSNorm-forward control, its passing bounded smoke in job
 \pathcode{1837446}, followed by accepted trigger capture \pathcode{1838750} and independent
 validator \pathcode{1838966}, the valid matched intervention \pathcode{1839531}, and its fresh-node
 validator \pathcode{1840069}.  The remaining
+implementation surfaces for the additive version are
+\pathcode{lit_gpt/rdiag_shared_dt_kla.py}, \pathcode{lit_gpt/config.py},
+\pathcode{lit_gpt/model.py}, \pathcode{lit_gpt/rdiag_shared_dt_rmsnorm.py},
+\pathcode{lit_gpt/rdiag_shared_dt_training_health.py}, \pathcode{lit_gpt/rdiag_checkpoint.py},
+\pathcode{pretrain.py}, \pathcode{scripts/train/rdiag_kla/rdiag_recipe.py}, and the adjacent
+campaign, source-gate, qualification, authorization, job-control, run-guard, supervisor, and
+evaluation modules.  These changes must be made in a new worktree based on the validator-accepted
+S7 commit; the frozen S7 worktree above must remain untouched.  The remaining
 sequence is:
 \begin{enumerate}[leftmargin=1.8em]
-  \item complete the in-flight S7 numerical and actual-anchor preflights, retain and review their
-        new closures, then run one S7-bound six-arm allocation and its fresh-node validator; the
-        S6 in-job result remains non-authorizing corroboration only;
+  \item complete in-flight S7 six-arm job \pathcode{1847784}, then run its fresh-node validator and
+        require a fully sealed accepted closure; the S6 in-job result remains non-authorizing
+        corroboration only;
   \item only if the S7 validator accepts the exact repeatability, isolation, liveness, health, and
         prospective effect-size evidence, implement and freeze the additive
         \pathcode{shared_dt_v2} source, then rerun all six gates, including an entirely fresh
         3300-update soak;
-  \item build aggregate-v3 only after all six recursive seals validate, then recompute and pin the
-        aggregate, all recipe digests, and all exact execution-manifest
-        digests for that final source; and
-  \item create the separate required production snapshot and invoke the
-        \pathcode{prepare-fresh} mode of \pathcode{submit_rdiag_shared_dt.py} only for the new
-        versioned \pathcode{rdiag_kla_shared_dt_v2_750M} with train configuration
+  \item build a fresh v2 aggregate only after all six v2 recursive seals validate, then compute and
+        pin the parallel v2 recipe, catalog, aggregate, and exact execution-manifest digests for
+        that final source while keeping every existing v1 canonical byte sequence and pin
+        unchanged; and
+  \item create the separate required production snapshot and invoke the \pathcode{prepare-fresh}
+        mode of a future exact-family v2 submitter (preferably
+        \pathcode{submit_rdiag_shared_dt_v2.py}; the current
+        \pathcode{submit_rdiag_shared_dt.py} remains v1-only) only for the new versioned
+        \pathcode{rdiag_kla_shared_dt_v2_750M} with train configuration
         \pathcode{tsz128x4k_50B}; retain the supervisor-enforced \pathcode{standard},
         \pathcode{niah_single_1}, \pathcode{niah_single_1_8k}, \pathcode{niah_single_2},
         \pathcode{niah_single_2_8k}, \pathcode{niah_single_3}, and
@@ -3466,15 +3527,16 @@ trigger-capture, matched-intervention, and source-matched replacement-candidate 
 Jobs \pathcode{1846561} and \pathcode{1847039} returned provisional valid passes, but validators
 \pathcode{1846728} and \pathcode{1847464} respectively failed before validation and after
 scientific validation but before evidence sealing; neither cycle is externally accepted.  From
-this point, the optimistic path requires one complete S7 source-bound candidate cycle followed by
+this point, the optimistic path requires completion of the already-submitted S7 source-bound
+candidate cycle followed by
 at least six fresh qualification GPU workloads before production launch.  Production training
 would follow those gates.  Since the
 demonstrated six-gate control plane expands its six
 scientific gates to 20 Slurm jobs (six preparation jobs, two H200 control/submit allocations, six
-gate workloads, and six external attestors), after the already-submitted S7 preflight pair the
-comparable operational lower bound is at least 22 further scheduler submissions before production
-submission: S7 main, S7 validator, and the 20-job gate control plane.  A held-out replication would
-increase that count.
+gate workloads, and six external attestors), after submitted main job \pathcode{1847784} the
+comparable operational lower bound is at least 21 further scheduler submissions before production
+submission: its fresh-node validator and the 20-job gate control plane.  A held-out replication
+would increase that count.
 Failed attempts \pathcode{1838085} and
 \pathcode{1838250} did not satisfy the trigger-capture stage.  This count excludes retries, additional
 discriminator arms, implementation-time GPU checks, held-out causal replication, and production
