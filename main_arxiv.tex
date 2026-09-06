@@ -95,7 +95,7 @@ repeatedly confirmed.
 We argue that uncertainty is the missing state variable in this model. The recurrent memory can be viewed as an
 estimate of a latent, non-stationary key--value map. Each token supplies a noisy observation of
 that map at one key, while the learned transition describes how the map persists or drifts between
-observations. This is precisely an online filtering problem, where, under linear--Gaussian
+observations. This is an online filtering problem, where, under linear--Gaussian
 assumptions, the Kalman filter~\citep{kalman1960new} is the optimal recursive estimator.
 It tracks both the memory
 estimate and its covariance, balancing memory uncertainty against observation noise to set the
@@ -104,18 +104,20 @@ greater write strength in uncertain directions and less where past evidence shou
 From this observation, we introduce
 \emph{Kalman Delta Networks (KDNs)}, which track both the memory state and its uncertainty,
 allowing each update to balance accumulated evidence against observation reliability.
-DeltaNet, Gated DeltaNet, and KDA emerge as covariance-free approximations that retain different
+From this perspective, DeltaNet, Gated DeltaNet, and KDA emerge as covariance-free approximations that retain different
 memory transitions while omitting this uncertainty recursion.
 
 The exact Kalman update, however, is not a practical linear-attention layer. It
 carries a dense $d_k\times d_k$ covariance per head, and its gain depends on a state-dependent
-Riccati recurrence that is poorly suited to efficient parallel scans. To make the filter tractable,
-we restrict the transition, process noise, and predictive covariance to diagonal form. Nevertheless,
-each measurement update still yields an exact posterior with a dense covariance. We therefore derive an
-online mean-field variational update that projects this posterior back onto the diagonal family by
-minimizing reverse KL. Conditional on the retained diagonal predictive prior, this projection
-preserves the exact one-step posterior mean. The
-resulting \emph{Diagonal KDN} maintains one uncertainty value per key channel and admits an
+Riccati recurrence that is poorly suited to efficient parallel scans. To make it tractable,
+we impose diagonal structure on the transition, process noise, and predictive covariance. Despite
+this restriction, each Kalman update still yields a dense posterior covariance. We therefore derive
+an online mean-field variational update that projects the posterior back onto the diagonal
+family by minimizing reverse KL. Conditional on the retained diagonal predictive prior, this
+projection preserves the exact one-step posterior mean. To mitigate excessive overwrite under this
+mean-field approximation, we introduce an information-scaling factor that calibrates the retained
+uncertainty. The resulting
+\emph{Diagonal KDN} maintains one uncertainty value per key channel and admits an
 associative scan with $O(d_k)$ auxiliary state, while \emph{Isotropic KDN} further ties these values
 to a single uncertainty scalar per head, requiring only $O(1)$ auxiliary state.
 
@@ -130,9 +132,12 @@ aggregate~\citep{hsieh2024ruler} at both scales.
 Our contributions are:
 
 \begin{itemize}[leftmargin=1.4em,itemsep=3pt,topsep=2pt]
-  \item \textbf{An uncertainty-aware view of associative memory and delta rules.} We show that DeltaNet, Gated DeltaNet, and
-  KDA recover the Kalman residual update after replacing its covariance-derived gain with a
-  token-predicted gain that does not track uncertainty accumulated across observations.
+  \item \textbf{A principled state-space view of delta-based models.} We cast the delta rule as an
+  innovation update in a linear--Gaussian state-space model, connecting delta-based recurrent
+  mixers to the Mamba lineage~\citep{gu2023mamba}. DeltaNet, Gated DeltaNet, and KDA use
+  identity, scalar, and diagonal transitions, respectively; unlike Mamba's control-driven additive
+  input write, they correct a predicted key--value map with a key-conditioned residual, while using
+  a token-predicted rather than covariance-derived gain.
   \item \textbf{A hardware-efficient algorithm for uncertainty-aware associative memory.} We derive Diagonal KDN through online
   variational inference and introduce Isotropic and Diagonal variants with $O(1)$ and $O(d_k)$
   uncertainty state per head, respectively. Their uncertainty updates admit an associative gain
@@ -279,11 +284,13 @@ the predicted memory and yields a principled gain for incorporating new evidence
 \begin{figure}[t]
   \centering
   \includegraphics[width=0.92\textwidth]{figures/approximate.pdf}
+  \vspace{-2mm}
   \caption{One step of Kalman Associative Memory update and the mean-field variational
   \mbox{approximation} of Diagonal KDN. Prediction preserves diagonality; the exact update yields a
   dense posterior; reverse-KL projection restores diagonality without changing its mean. The
   starred pair $(\ve{S}_t^\star,\ve{P}_t^\star)$ is the optimal posterior of
-  Proposition~\ref{prop:kalman-associative-memory}.
+  Proposition~\ref{prop:kalman-associative-memory}, while $(\ve{S}_t,\ve{P}_t)$ is the
+  variational approximation given in Proposition~\ref{prop:diag-variational-inference}.
   % \htl{should the starred pairs be related to equ28? }
   }
   \label{fig:kdn-variational-approximation}
@@ -300,8 +307,9 @@ $\ve{S}_t\in\R^{d_k\times d_v}$ defining the associative map
 \end{equation}
 The query read is $\ve{o}_t=\mc M_t(\ve{q}_t)=\ve{S}_t^{\tr}\ve{q}_t$. The streaming token provides one
 supervised measurement of this map: under key $\ve{k}_t$, the memory should return value $\ve{v}_t$,
-i.e.\ $\mc M_t(\ve{k}_t)\approx \ve{v}_t$. This is exactly the shape of a state-space model: an
-unobserved state evolves over time, and each token reveals a noisy linear projection of it.
+i.e.\ $\mc M_t(\ve{k}_t)\approx \ve{v}_t$. This is the shape of a state-space
+model~\citep{gu2023mamba}, in which an unobserved state evolves over time, and each token reveals a
+noisy linear projection of it.
 
 \paragraph{Latent state.}
 Let $\widetilde{\ve{S}}_t$ be the latent associative map the recurrent state is trying to track. The
@@ -376,15 +384,13 @@ the filtering law
 $\widetilde{\ve{S}}_t\mid\mathcal{F}_t
 \sim\N_{\mathrm{col}}(\ve{S}_t,\ve{P}_t)$, where
 $\ve{S}_t=\E[\widetilde{\ve{S}}_t\mid\mathcal{F}_t]$ and
-$\ve{P}_t\in\R^{d_k\times d_k}$ is the common key-space posterior covariance.
+$\ve{P}_t\in\R^{d_k\times d_k}$ is the common key-space covariance.
 
 Tracking $\ve{P}_t$ is necessary because each token observes the associative map only at one key
 direction $\ve{k}_t$, and the value $\ve{v}_t$ is noisy. After many tokens, some key directions are
 well supported by past measurements, while others remain uncertain or have become stale
 because of drift. High uncertainty means the current token should be allowed to edit the
-memory strongly; 
-\htl{but smaller $\alpha$ will get smaller $\hat{p}$, which seems to contradict this statement, especially given that $\alpha_t$ and $w_t$ are independent (equ38). Not sure if I understand correctly}
-low uncertainty means the prior memory should resist a noisy measurement.
+memory strongly; low uncertainty means the prior memory should resist a noisy measurement.
 
 \paragraph{Predict.}
 At step $t-1$, the filter has posterior mean $\ve{S}_{t-1}$ and covariance $\ve{P}_{t-1}$.
@@ -408,58 +414,43 @@ innovation are
   \ve{\delta}_t = \ve{v}_t-\widehat{\ve{v}}_t .
   \label{eq:kalman-innovation}
 \end{equation}
-The vector $\ve{\delta}_t$ is the innovation: the part of the observed value that the predicted
-memory does not explain.
+The vector $\ve{\delta}_t$ is the innovation: the part of the observed value not explained by the
+predicted memory.
 
 \paragraph{Update.}
-Because the predictive memory and the observed value are jointly Gaussian, the posterior mean in
-\eqref{eq:online-filtering-objective} lies in the affine residual family. Introduce a candidate
-write direction $\ve{\kappa}_t$ through
+For each value coordinate $j$, the predicted memory column $\widetilde{\ve{s}}_{t,j}$ and scalar
+observation $v_{t,j}$ are jointly Gaussian. Conditioned on $(\mathcal{F}_{t-1},\ve{k}_t)$,
 \begin{equation}
-  \ve{S}_t(\ve{\kappa}_t)
-  =\widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr}.
-  \label{eq:kalman-residual-write}
+  \begin{bmatrix}
+    \widetilde{\ve{s}}_{t,j} \\ v_{t,j}
+  \end{bmatrix}
+  \sim
+  \N\!\left(
+  \begin{bmatrix}
+    \widehat{\ve{s}}_{t,j} \\ \ve{k}_t^{\tr}\widehat{\ve{s}}_{t,j}
+  \end{bmatrix},
+  \begin{bmatrix}
+    \widehat{\ve{P}}_t & \widehat{\ve{P}}_t\ve{k}_t \\
+    \ve{k}_t^{\tr}\widehat{\ve{P}}_t
+    & r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t
+  \end{bmatrix}
+  \right).
+  \label{eq:kalman-joint-coordinate}
 \end{equation}
-Its estimation-error covariance is
-\begin{equation}
-  \ve{P}_t(\ve{\kappa}_t)
-  =
-  (\ve{I}-\ve{\kappa}_t \ve{k}_t^{\tr})\widehat{\ve{P}}_t
-  (\ve{I}-\ve{\kappa}_t \ve{k}_t^{\tr})^{\tr}
-  + r_t\,\ve{\kappa}_t\ve{\kappa}_t^{\tr}.
-  \label{eq:kalman-candidate-error-covariance}
-\end{equation}
-Since all $d_v$ value coordinates share this covariance, minimizing the conditional mean-squared
-error is equivalent to minimizing the posterior uncertainty, measured by the trace of the error
-covariance:
+Applying the Gaussian conditioning formula to each pair and stacking the columnwise posteriors gives
 \begin{equation}
 \begin{aligned}
-  \ve{\kappa}_t^\star
-  &=\arg\min_{\ve{\kappa}_t}
-    \E\!\left[
-      \left.\|\widetilde{\ve{S}}_t-\ve{S}_t(\ve{\kappa}_t)\|_F^2
-      \,\right|\,\mathcal{F}_{t-1},\ve{k}_t
-    \right] \\
-  &=\arg\min_{\ve{\kappa}_t}
-    \Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right).
-\end{aligned}
-  \label{eq:kalman-tracking-objective}
-\end{equation}
-Solving this objective and dropping the star gives the Kalman gain
-\begin{equation}
-  \ve{\kappa}_t = \frac{\widehat{\ve{P}}_t \ve{k}_t}
-  {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t \ve{k}_t}.
-  \label{eq:kalman-gain}
-\end{equation}
-The gain assigns greater weight to key-space directions that remain uncertain under
-$\widehat{\ve{P}}_t$ and to observations with smaller noise $r_t$. Substituting it into
-\eqref{eq:kalman-residual-write} gives the posterior mean and covariance,
-\begin{equation}
+  \widetilde{\ve{S}}_t\mid\mathcal{F}_t
+  &\sim\N_{\mathrm{col}}\!\left(\ve{S}_t,\ve{P}_t\right), \\
+  \text{where}\qquad
   \ve{S}_t
-  = \widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr}
-  = \E\!\left[\widetilde{\ve{S}}_t\mid\mathcal{F}_t\right],
+  &=\widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr},
   \qquad
-  \ve{P}_t=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t .
+  \ve{P}_t=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t, \\
+  \ve{\kappa}_t
+  &=\frac{\widehat{\ve{P}}_t\ve{k}_t}
+  {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}.
+\end{aligned}
   \label{eq:kalman-update}
 \end{equation}
 Thus the posterior mean is a residual write: the filter adds only the part of the observed value
@@ -491,9 +482,8 @@ The following proposition summarizes this optimal recursion.
 ]
 Under the linear--Gaussian state-space model in
 \eqref{eq:mem-update-dynamics}--\eqref{eq:mem-update-observation}, the solution to the online
-MMSE filtering problem in \eqref{eq:online-filtering-objective} is the Kalman update below;
-equivalently, its gain minimizes the posterior uncertainty in
-\eqref{eq:kalman-tracking-objective}. Given the memory estimate $\ve{S}_{t-1}$ and uncertainty
+MMSE filtering problem in \eqref{eq:online-filtering-objective} is the Kalman update below.
+Given the memory estimate $\ve{S}_{t-1}$ and uncertainty
 $\ve{P}_{t-1}$ before token $t$, the filter first predicts how the memory drifts under the process
 model
 $\ve{D}_t$ and process noise $\ve{\Omega}_t$. After observing the key--value pair
@@ -530,13 +520,13 @@ The update above separates two modeling choices: the transition $\ve{D}_t$, whic
 the memory changes before the token is written, and the gain $\ve{\kappa}_t$, which decides the
 key-space direction and strength of the residual write. Delta-rule linear attention is the
 fixed-gain special case of this filter. If we discard the covariance recursion and use an
-isotropic surrogate $\widehat{\ve{P}}_t\approx b_t \ve{I}$ for the predicted uncertainty, then
+isotropic surrogate $\widehat{\ve{P}}_t\approx \widehat b_t \ve{I}$ for the predicted uncertainty, then
 \begin{equation}
   \ve{\kappa}_t
   =
   \frac{\widehat{\ve{P}}_t \ve{k}_t}{r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t \ve{k}_t}
   \approx
-  \frac{b_t}{r_t+b_t\|\ve{k}_t\|_2^2}\,\ve{k}_t
+  \frac{\widehat b_t}{r_t+\widehat b_t\|\ve{k}_t\|_2^2}\,\ve{k}_t
   \equiv
   \beta_t \ve{k}_t .
   \label{eq:fixed-gain-approx}
@@ -601,7 +591,7 @@ $\mathcal{D}_{++}^{d_k}=\{\diag(\ve{p}):\ve{p}\in\R_{++}^{d_k}\}$ and require
   \label{eq:diag-cov-info}
 \end{equation}
 Write $\ve{P}_{t-1}=\diag(\ve{p}_{t-1})$. The covariance prediction then stays in the diagonal
-family and costs only $O(d_k)$ memory,
+family:
 \begin{equation}
   \widehat{\ve{P}}_t=\diag(\widehat{\ve{p}}_t),
   \qquad
@@ -617,11 +607,12 @@ Conditioned on this diagonal predictive covariance, the Kalman gain is still exa
   \label{eq:diag-kalman-gain}
 \end{equation}
 Thus the process model and process noise that predict the memory also determine how strongly each
-key channel is written. The difficulty appears after the measurement: even though
-$\widehat{\ve{P}}_t$ is diagonal, the exact posterior is
+key channel is written. Although $\widehat{\ve{P}}_t$ is diagonal, the exact posterior is
 \begin{equation}
   \ve{P}_t^\star
-  =(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t .
+  =(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t
+  =\left(\widehat{\ve{P}}_t^{-1}
+  +\frac{\ve{k}_t\ve{k}_t^{\tr}}{r_t}\right)^{-1}.
   \label{eq:diag-exact-info-update}
 \end{equation}
 This rank-one correction is generally dense, thus immediately taking the exact posterior outside
@@ -724,26 +715,25 @@ Because the retained covariance is diagonal, each channel evolves independently.
     {u_{t,i}\alpha_{t,i}^2p_{t-1,i}+1+u_{t,i}\omega_{t,i}}.
   \label{eq:diag-cov-mobius}
 \end{equation}
-Its token-local matrix is
+Representing each M\"obius update by a $2\times2$ matrix turns composition into matrix
+multiplication and yields the associative scan
 \begin{equation}
-  \ve{M}_{t,i}
-  =\begin{bmatrix}
-    \alpha_{t,i}^2 & \omega_{t,i}\\
-    u_{t,i}\alpha_{t,i}^2 & 1+u_{t,i}\omega_{t,i}
-  \end{bmatrix}.
-  \label{eq:diag-cov-mobius-matrix}
-\end{equation}
-Because M\"obius matrices compose by multiplication, their prefix products recover every
-covariance state through the associative scan
-\begin{equation}
-  \begin{bmatrix}n_{t,i}\\d_{t,i}\end{bmatrix}
-  =\ve{M}_{t,i}
-    \begin{bmatrix}n_{t-1,i}\\d_{t-1,i}\end{bmatrix},
-  \qquad
-  p_{t,i}=\frac{n_{t,i}}{d_{t,i}},
-  \qquad
-  \begin{bmatrix}n_{0,i}\\d_{0,i}\end{bmatrix}
-  =\begin{bmatrix}1\\1\end{bmatrix}.
+  \begin{gathered}
+    \ve{M}_{t,i}
+    =\begin{bmatrix}
+      \alpha_{t,i}^2 & \omega_{t,i}\\
+      u_{t,i}\alpha_{t,i}^2 & 1+u_{t,i}\omega_{t,i}
+    \end{bmatrix},
+    \quad
+    \begin{bmatrix}n_{t,i}\\d_{t,i}\end{bmatrix}
+    =\ve{M}_{t,i}
+      \begin{bmatrix}n_{t-1,i}\\d_{t-1,i}\end{bmatrix},
+    \quad
+    p_{t,i}=\frac{n_{t,i}}{d_{t,i}},
+    \quad
+    \begin{bmatrix}n_{0,i}\\d_{0,i}\end{bmatrix}
+    =\begin{bmatrix}1\\1\end{bmatrix}.
+  \end{gathered}
   \label{eq:diag-cov-scan}
 \end{equation}
 Thus the approximation reduces the uncertainty state from a dense $d_k\times d_k$ matrix to
@@ -751,17 +741,13 @@ $d_k$ scalars and replaces the sequential Riccati recursion with an associative 
 logarithmic parallel depth.
 
 \paragraph{Information scaling.}
-The online variational approximation discards cross-channel
-correlations when it projects each dense posterior back to a product Gaussian, inheriting the
-familiar coordinatewise overconfidence of reverse-KL mean field~\citep{blei2017variational}.
-Those correlations record that a \emph{joint} key direction has already been observed. Their loss
-can make the diagonal approximation appear overconfident in every individual channel while
-remaining too uncertain along that joint direction. As a result, an immediately repeated
-key---or a later key with energy on the same coordinates---can trigger an excessively strong
-residual write (see the second column of Figure~\ref{fig:kdn-overwrite}, corresponding to
-$\mu=1$). We address this overwrite failure by
-separating the strength of the present write from the information passed forward to protect it.
-Specifically, we use an information scale $\mu>0$ to scale only the post-write precision increment:
+Projecting each dense posterior to a product Gaussian discards cross-channel correlations and
+inherits the coordinatewise overconfidence of reverse-KL mean field~\citep{blei2017variational}.
+These correlations encode observed \emph{joint} key directions; without them, the approximation can
+be overconfident in individual channels yet too uncertain along those directions. Consequently, a
+repeated key, or a later key with energy on the same coordinates, can trigger an excessively strong
+residual write (Figure~\ref{fig:kdn-overwrite}, second column; $\mu=1$). To mitigate this overwrite,
+we apply an information scale $\mu>0$ only to the post-write precision increment:
 \begin{equation}
   \ve{u}_t
   =\frac{\mu}{r_t}\,\ve{k}_t\odot\ve{k}_t,
@@ -783,12 +769,14 @@ empirical analyses.
 \begin{figure}[t]
   \centering
   \includegraphics[width=0.92\textwidth]{figures/kdn_overwrite_distributions.pdf}
+  \vspace{-4mm}
   \caption{Effective-write distributions at initialization (top) and after 50B training tokens
   (bottom) for parameter-matched 750M KDA and Diagonal KDN models with
   $\mu\in\{1,\sqrt{d_k},d_k\}$. For normalized KDA keys,
   $\beta_t^{\mathrm{eff}}=\beta_t$; for Diagonal KDN,
   $\beta_t^{\mathrm{eff}}=\ve{k}_t^{\tr}\ve{\kappa}_t$. Dashed lines mark pooled means.}
   \label{fig:kdn-overwrite}
+  \vspace{-2mm}
 \end{figure}
 
 Combining this calibrated covariance scan with the Kalman residual write yields the Diagonal
@@ -909,13 +897,13 @@ prediction, uncertainty-derived gain, and memory update are
 \begin{aligned}
   a_t
   &=\frac{1}{d_k}\sum_{i=1}^{d_k}\alpha_{t,i}^2,
-  &
+  \quad
   \widehat b_t
-  &=a_t b_{t-1}+\omega_t,
-  \\[3pt]
+  =a_t b_{t-1}+\omega_t,
+  \quad
   \beta_t
-  &=\frac{\widehat b_t}{r_t+\widehat b_t\|\ve{k}_t\|_2^2},
-  &
+  =\frac{\widehat b_t}{r_t+\widehat b_t\|\ve{k}_t\|_2^2},
+  \\[3pt]
   \ve{S}_t
   &=(\ve{I}-\beta_t\ve{k}_t\ve{k}_t^{\tr})\ve{D}_t\ve{S}_{t-1}
     +\beta_t\ve{k}_t\ve{v}_t^{\tr}.
@@ -1053,8 +1041,10 @@ Diagonal KDN $+$ SWA
 \end{tabular}%
 }
 \caption{In-context retrieval accuracy (\%) on RULER single- and multi-key needle-in-a-haystack
-tasks~\citep{hsieh2024ruler}. Best per column within each block in \textbf{bold}, second best
-\underline{underlined}.}
+tasks~\citep{hsieh2024ruler}. We use $25$-word context increments and deterministic random essay
+windows rather than $500$-word increments and fixed prefixes; every model receives the same $500$
+samples per cell, with matched keys, values, and needle depths. Best per column within each block in
+\textbf{bold}, second best \underline{underlined}.}
 \label{tab:pretrain-niah}
 \end{table}
 
@@ -1067,13 +1057,13 @@ tasks~\citep{hsieh2024ruler}. Best per column within each block in \textbf{bold}
 Model & SWDE & SQuAD & FDA & TriviaQA & NQ & DROP & Avg. \\
 \midrule
 \multicolumn{8}{@{}l}{\emph{Recurrent 1.3B / 100B}}\\
+KDA~\citeyearpar{kimiteam2025kimilinear}
+  & 28.77 & \textbf{38.70} & \underline{27.97} & 61.97
+  & \textbf{24.11} & 21.03 & \underline{33.76} \\
 Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3}
   & 26.34 & 36.35 & 22.52 & 60.90 & 21.98 & 20.89 & 31.50 \\
 Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3}
   & 24.93 & 36.71 & 25.25 & 61.02 & 23.50 & 21.99 & 32.23 \\
-KDA~\citeyearpar{kimiteam2025kimilinear}
-  & 28.77 & \textbf{38.70} & \underline{27.97} & 61.97
-  & \textbf{24.11} & 21.03 & \underline{33.76} \\
 GDN-2~\citeyearpar{hatamizadeh2026gdn2}
   & 29.90 & 35.64 & 21.16 & 61.49 & 23.34 & 20.99 & 32.09 \\
 \rowcolor{blue!8}
@@ -1089,14 +1079,14 @@ Diagonal KDN
 \multicolumn{8}{@{}l}{\emph{Hybrid 1.3B / 100B}}\\
 Transformer~\citeyearpar{vaswani2017attention} (2K SWA)
   & 36.08 & 42.43 & 52.68 & 62.09 & 25.40 & 21.47 & 40.02 \\
+KDA~\citeyearpar{kimiteam2025kimilinear} $+$ SWA
+  & \underline{51.08} & 43.10 & 57.86 & 65.17
+  & \underline{28.22} & \textbf{25.11} & 45.09 \\
 Mamba-3 (SISO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
   & 36.27 & 43.37 & 58.95 & 64.57 & 26.70 & 22.47 & 42.06 \\
 Mamba-3 (MIMO)~\citeyearpar{lahoti2026mamba3} $+$ SWA
   & 42.55 & 43.33 & \underline{64.85} & \textbf{65.88}
   & \textbf{28.44} & \underline{23.53} & 44.76 \\
-KDA~\citeyearpar{kimiteam2025kimilinear} $+$ SWA
-  & \underline{51.08} & 43.10 & 57.86 & 65.17
-  & \underline{28.22} & \textbf{25.11} & 45.09 \\
 GDN-2~\citeyearpar{hatamizadeh2026gdn2} $+$ SWA
   & 47.80 & 42.73 & 63.22 & 62.38 & 26.10 & 23.19 & 44.24 \\
 \rowcolor{blue!8}
@@ -1120,7 +1110,7 @@ second best \underline{underlined}.}
 \section{Experiments}
 \label{sec:experiments}
 
-To evaluate the effectiveness of our proposed KDN mixers, we reproduce the $1.3$B/$100$B training setup of
+To evaluate the effectiveness of our proposed KDN mixers, we use the $1.3$B/$100$B training setup of
 GDN-2~\citep{hatamizadeh2026gdn2} and extend the same controlled protocol to $750$M. Within
 each comparison, we hold the data, surrounding backbone, optimization recipe, and evaluation
 protocol fixed while matching model capacity.
@@ -1131,29 +1121,31 @@ protocol fixed while matching model capacity.
 \paragraph{Pretraining and evaluation datasets.}
 We pretrain all models from scratch on FineWeb-Edu~\citep{penedo2024fineweb} at two scales:
 $750$M parameters on $50$B tokens and $1.3$B parameters on $100$B tokens. We evaluate language
-modeling with perplexity on WikiText and LAMBADA, and zero-shot
-reasoning with LAMBADA, PIQA, HellaSwag, WinoGrande, ARC-easy, and ARC-challenge. We evaluate
+modeling with perplexity on WikiText~\citep{merity2017pointer} and
+LAMBADA~\citep{paperno2016lambada}, and zero-shot reasoning with
+LAMBADA~\citep{paperno2016lambada}, PIQA~\citep{bisk2020piqa},
+HellaSwag~\citep{zellers2019hellaswag}, WinoGrande~\citep{sakaguchi2020winogrande}, and
+ARC-Easy and ARC-Challenge~\citep{clark2018arc}. We evaluate
 in-context retrieval on the single- and multi-key needle-in-a-haystack tasks from
-RULER~\citep{hsieh2024ruler}. For RULER, we fit essay contexts in $25$-word rather than $500$-word
-increments, draw a deterministic random window from each essay rather than using its fixed opening
-prefix, and seed all keys, values, and needle depths so every model receives the same $500$ samples
-per cell. We additionally evaluate real-world retrieval on the six
-cloze-formatted tasks released with Just Read Twice (JRT)~\citep{arora2024justreadtwice}:
-SWDE, SQuAD, FDA, TriviaQA, Natural Questions, and DROP.
+RULER~\citep{hsieh2024ruler}. Following Just Read Twice (JRT)~\citep{arora2024justreadtwice},
+we additionally evaluate real-world retrieval on six cloze-formatted tasks: SWDE~\citep{lockard2019openceres},
+SQuAD~\citep{rajpurkar2018squad}, FDA~\citep{arora2023evaporate},
+TriviaQA~\citep{joshi2017triviaqa}, Natural Questions~\citep{kwiatkowski2019natural}, and
+DROP~\citep{dua2019drop}.
 
 \paragraph{Model architectures.}
-\vspace{-2mm}
 \begin{wrapfigure}{r}{0.52\textwidth}
-  \vspace{-0.5\baselineskip}
+  \vspace{-5mm}
   \centering
   \includegraphics[width=0.96\linewidth]{figures/kdn_layer.pdf}
-  \vspace{-2mm}
+  \vspace{-3mm}
   \caption{Kalman Delta Network architectures.}
   \label{fig:kdn-layer-architecture}
-  \vspace{-1.0\baselineskip}
+  \vspace{-5mm}
 \end{wrapfigure}
-To isolate mixer effectiveness across recurrent-only and hybrid settings, we use the same
-recurrent-only and hybrid configurations as GDN-2~\citep{hatamizadeh2026gdn2}.
+The KDN mixer builds on KDA~\citep{kimiteam2025kimilinear}, replacing its $\beta_t$ gate with
+process noise $\ve{\omega}_t$ and observation noise $r_t$. To isolate the mixer, we adopt the
+recurrent-only and hybrid layer and model architectures of GDN-2~\citep{hatamizadeh2026gdn2}.
 This controlled choice might not be optimal; determining the best recurrent-to-attention layer
 ratio requires a dedicated ablation, as performed for KDA in Kimi
 Linear~\citep{kimiteam2025kimilinear}.
@@ -1187,13 +1179,11 @@ Throughout the main experiments, Diagonal KDN uses the fixed information scale $
 \label{sec:experimental-results}
 
 \paragraph{Language modeling and commonsense reasoning.}
-Table~\ref{tab:pretrain-lm} shows that, in the state-matched recurrent-only comparisons, the KDN
-variants achieve the two highest average accuracies at both scales while also improving perplexity
-over all baselines. Diagonal KDN ranks first at both scales, with Isotropic KDN close behind. In the
-hybrid setting, Diagonal KDN $+$ SWA again has the highest average, ahead of KDA $+$ SWA, and every
-recurrent--attention hybrid outperforms the attention-only Transformer, consistent with prior
-observations in Mamba-3 and
-GDN-2~\citep{lahoti2026mamba3,hatamizadeh2026gdn2}.
+Table~\ref{tab:pretrain-lm} shows that both KDN variants outperform all recurrent-only baselines in
+perplexity and achieve the two highest average accuracies at both scales, with Diagonal KDN leading
+and Isotropic KDN close behind. Among hybrid models, Diagonal KDN $+$ SWA achieves the highest
+average accuracy, followed by KDA $+$ SWA; all recurrent--attention hybrids outperform the
+attention-only Transformer.
 
 \paragraph{In-context retrieval.}
 Table~\ref{tab:pretrain-niah} shows that Diagonal KDN achieves the highest aggregate among
@@ -1212,10 +1202,10 @@ average, while the Diagonal KDN $+$ SWA ranks second and leads FDA.
 \label{sec:ablation-runtime}
 
 \paragraph{Information scale.}
-\begin{wraptable}{r}{0.46\textwidth}
+\begin{wraptable}{r}{0.42\textwidth}
   \vspace{-0.8\baselineskip}
   \centering
-  \small
+  \footnotesize
   \setlength{\tabcolsep}{4.5pt}
   \begin{tabular}{@{}lccc@{}}
     \toprule
@@ -1245,10 +1235,9 @@ is small and metric-dependent.
 
 \paragraph{Observation and process noise.}
 
-\begin{wraptable}{r}{0.50\textwidth}
-  \vspace{-0.8\baselineskip}
+\begin{wraptable}{r}{0.49\textwidth}
   \centering
-  \small
+  \footnotesize
   \setlength{\tabcolsep}{2.5pt}
   \begin{tabular}{@{}lccc@{}}
     \toprule
@@ -1304,11 +1293,17 @@ DeltaNet, Gated DeltaNet, Comba, RWKV-7, and KDA
 \citep{yang2023gated,schlag2021linear,yang2024gdn,hu2025comba,
 peng2025rwkv7,kimiteam2025kimilinear}; FoX, DeltaFormer, and PaTH-FoX carry related forgetting,
 associative correction, and multiplicative positional encoding to exponential-kernel attention
-\citep{,zhong2025understanding,yang2025path}. GDN-2 further decouples erase and
-write~\citep{hatamizadeh2026gdn2}.
+\citep{lin2025forgetting,zhong2025understanding,yang2025path}. GDN-2 further decouples erase and
+write~\citep{hatamizadeh2026gdn2}. Preconditioned DeltaNet shows that inverse-Gram
+preconditioning turns DeltaNet into an exact online least-squares solver and develops
+scan-compatible diagonal variants for DeltaNet, GDN, and KDA~\citep{tumma2026preconditioned}.
+This exact update is the static, fixed-noise limit of Kalman Associative Memory. Its practical
+model uses bounded diagonal curvature with a separate token-predicted gain, whereas KDN propagates
+predictive covariance through learned stochastic dynamics and derives the innovation gain jointly
+from uncertainty and observation noise.
 
 \paragraph{State-space sequence mixers and Bayesian memory.}
-Structured SSMs form a complementary lineage: S4 makes long-range continuous-time dynamics
+Structured SSMs provide a complementary approach to fixed-memory sequence mixing: S4 makes long-range continuous-time dynamics
 tractable via structured convolutions, while S5 recasts them as a scan-parallel MIMO
 recurrence~\citep{gu2022efficiently,smith2023simplified},
 Mamba adds input selectivity~\citep{gu2023mamba}, Mamba-2 derives attention--SSM duality and SSD
@@ -1323,20 +1318,25 @@ vector-valued, key-conditioned measurements; its exact posterior covariance is d
 and shared across value channels, with isotropic and diagonal KDNs as scan-compatible approximations.
 
 % =============================================================================
-\section{Discussion and Conclusion}
+\section{Conclusion and Future Work}
 \label{sec:discussion-conclusion}
 
-We reformulate recurrent key--value memory as a linear--Gaussian state-space model and introduce Kalman Delta Networks (KDNs). In this formulation, the recurrent memory estimates a latent, non-stationary key--value map, the transition describes how this map persists or drifts, and each token supplies a noisy, key-conditioned observation. This perspective unifies the DeltaNet lineage: DeltaNet, Gated DeltaNet, and KDA correspond to identity, scalar, and diagonal transitions, respectively, but replace the covariance-derived Kalman gain with a token-predicted gain. It also gives the delta-rule residual a probabilistic interpretation: the residual is the Kalman innovation, namely the part of the observed value not explained by the predicted memory.
+In this work, we bridge delta-rule recurrent mixers and state-space models by reformulating recurrent
+key--value memory as a linear--Gaussian dynamical system over a latent, non-stationary key--value
+map. This view gives the delta-rule residual write a principled interpretation as the Kalman
+innovation: the part of the observed value not explained by the predicted memory. Unlike the Mamba
+lineage~\citep{gu2023mamba}, whose state update uses a control-driven additive input, these models
+correct a predicted key--value map with a key-conditioned residual but use a token-predicted rather
+than covariance-derived gain. Building on this view, KDN derives the gain from propagated
+uncertainty and observation noise.
 
 To make uncertainty-aware filtering practical, we derive scan-compatible Isotropic and Diagonal KDNs and introduce information scaling to limit future overwrite of stored associations. In parameter-matched recurrent-only pretraining at 750M and 1.3B parameters, both variants achieve lower WikiText and LAMBADA perplexity and higher mean six-task zero-shot accuracy than every evaluated recurrent baseline. Diagonal KDN also attains the highest aggregate RULER score at both scales.
 
 These models are steps toward, rather than full realizations of, Kalman Associative Memory. Exact
 filtering maintains a dense key-space covariance and a state-dependent Riccati update, whereas the
 isotropic and diagonal approximations compress this covariance to preserve parallel training. A future direction is to extend diagonal decay with the damped rotations used by Mamba-3
-\citep{lahoti2026mamba3}, allowing stored associations to rotate as well as decay. Unlike Mamba-3's
-additive input write, a rotational KDN would continue to propagate uncertainty and apply a
-covariance-derived, key-conditioned innovation correction. Making this richer transition and
-covariance update scan-efficient remains open.
+\citep{lahoti2026mamba3}, allowing stored associations to rotate as well as decay. Making this richer
+transition and covariance update scan-efficient remains open.
 
 
 \bibliography{main}
@@ -1373,8 +1373,7 @@ The linear--Gaussian state-space model is
 \end{align}
 The current model quantities $\ve{D}_t$, $\ve{\Omega}_t$, $r_t$, and $\ve{k}_t$ are treated as
 known when the gain is selected.
-At the end of step $t-1$, the Kalman filter represents the posterior over the latent
-memory as a Gaussian,
+Under these Gaussian assumptions, the filtering posterior at step $t-1$ is
 \begin{equation}
   p(\widetilde{\ve{S}}_{t-1}\mid \mc F_{t-1})
   =
@@ -1402,7 +1401,7 @@ Because both factors are linear--Gaussian, the predicted distribution is Gaussia
   \N_{\mathrm{col}}(\widehat{\ve{S}}_t,\widehat{\ve{P}}_t).
   \label{eq:predicted-prior}
 \end{equation}
-Its mean and covariance are the exact Kalman prediction:
+Evaluating this Gaussian integral gives the exact Kalman prediction step:
 \begin{equation}
   \widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1},
   \qquad
@@ -1411,223 +1410,103 @@ Its mean and covariance are the exact Kalman prediction:
   \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t.
   \label{eq:kam-predict}
 \end{equation}
-Thus $\widehat{\ve{S}}_t$ is a point estimate, but specifically the \emph{predicted prior
-mean} of $\widetilde{\ve{S}}_t$ conditioned on $\mc F_{t-1}$. It is not yet the point estimate of
-$p(\widetilde{\ve{S}}_t\mid \mc F_t)$, because the current pair
-$(\ve{k}_t,\ve{v}_t)$ has not been used. The covariance $\widehat{\ve{P}}_t$ is not a point
-estimate; it is the predicted uncertainty around that mean.
-The predicted read and innovation are
+At step $t$, we observe the key--value pair $(\ve{k}_t,\ve{v}_t)$, where
+$\ve{k}_t^{\tr}$ is the known observation map.
+Reading the current predicted memory at $\ve{k}_t$ gives the expected value
+$\widehat{\ve{v}}_t=\widehat{\ve{S}}_t^{\tr}\ve{k}_t$. Since the actual observation is
+$\ve{v}_t$, the innovation is its difference from this memory prediction:
 \begin{equation}
-  \widehat{\ve{v}}_t=\widehat{\ve{S}}_t^{\tr}\ve{k}_t,
-  \qquad
   \ve{\delta}_t=\ve{v}_t-\widehat{\ve{v}}_t.
   \label{eq:kam-innovation}
 \end{equation}
 
-First consider one value coordinate $j$.
-Let $\widetilde{\ve{s}}_{t,j}$ be column $j$ of the latent memory and
-let $v_{t,j}$ be coordinate $j$ of the observed value. The measurement model is
+The columnwise predictive state and isotropic observation noise make the pairs
+$(\widetilde{\ve{s}}_{t,j},v_{t,j})$ conditionally independent across $j$. Conditioned on
+$(\mc F_{t-1},\ve{k}_t)$, each pair has joint distribution
 \begin{equation}
-  v_{t,j}
-  =
-  \ve{k}_t^{\tr}\widetilde{\ve{s}}_{t,j}+e_{t,j},
-  \qquad
-  e_{t,j}\sim\mathcal{N}(0,r_t).
-  \label{eq:single-value-coordinate-observation}
-\end{equation}
-Treating the current key as the known observation map, the predicted distribution before the
-value measurement is
-\begin{equation}
-  \widetilde{\ve{s}}_{t,j} \mid \mc F_{t-1},\ve{k}_t
+  \begin{bmatrix}
+    \widetilde{\ve{s}}_{t,j} \\ v_{t,j}
+  \end{bmatrix}
   \sim
-  \mathcal{N}(\widehat{\ve{s}}_{t,j},\widehat{\ve{P}}_t).
-  \label{eq:single-coordinate-prior}
+  \N\!\left(
+  \begin{bmatrix}
+    \widehat{\ve{s}}_{t,j} \\ \ve{k}_t^{\tr}\widehat{\ve{s}}_{t,j}
+  \end{bmatrix},
+  \begin{bmatrix}
+    \widehat{\ve{P}}_t & \widehat{\ve{P}}_t\ve{k}_t \\
+    \ve{k}_t^{\tr}\widehat{\ve{P}}_t & \gamma_t
+  \end{bmatrix}
+  \right),
+  \qquad
+  \gamma_t:=r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t.
+  \label{eq:kam-joint-column}
 \end{equation}
-The observation $v_{t,j}$ is one scalar. Its predicted mean is
-$\ve{k}_t^{\tr}\widehat{\ve{s}}_{t,j}$, so the part of the observation not already predicted
-by the prior is the scalar residual
-\begin{equation}
-  \delta_{t,j}
-  =
-  v_{t,j}-\ve{k}_t^{\tr}\widehat{\ve{s}}_{t,j}.
-  \label{eq:single-coordinate-innovation}
-\end{equation}
-Conditioned on $(\mc F_{t-1},\ve{k}_t)$, the pair
-$(\widetilde{\ve{s}}_{t,j},v_{t,j})$ is jointly Gaussian. By the Gaussian conditional-mean identity,
-its MMSE estimator lies in the affine residual family. We therefore consider the columnwise
-family
-$\ve{s}_{t,j}(\ve{\kappa}_t)
-=\widehat{\ve{s}}_{t,j}+\ve{\kappa}_t\delta_{t,j}$, where the candidate gain
-$\ve{\kappa}_t$ maps the residual into $\mathbb{R}^{d_k}$ and depends only on
-$(\mc F_{t-1},\ve{k}_t)$. Because every value coordinate shares the same observation map,
-predictive covariance, and noise variance, the optimizing gain is common across columns.
-Stacking the columnwise estimates gives
-\begin{equation}
-  \ve{S}_t(\ve{\kappa}_t)
-  =
-  \widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr}.
-  \label{eq:kam-candidate-write}
-\end{equation}
-To identify this gain, let $\widehat{\ve{\epsilon}}_{t,j}
-=\widetilde{\ve{s}}_{t,j}-\widehat{\ve{s}}_{t,j}$ be the prediction error for value coordinate $j$.
-Conditioned on
-$\mc F_{t-1}$ and the current observation map $\ve{k}_t$, it has zero mean and covariance
-$\widehat{\ve{P}}_t$. Moreover,
-$\delta_{t,j}=\ve{k}_t^{\tr}\widehat{\ve{\epsilon}}_{t,j}+e_{t,j}$, so the error after the
-candidate correction is
+Applying the Gaussian conditioning formula gives
 \begin{equation}
 \begin{aligned}
-  \ve{\epsilon}_{t,j}(\ve{\kappa}_t)
-  &:=\widetilde{\ve{s}}_{t,j}-\ve{s}_{t,j}(\ve{\kappa}_t) \\
-  &=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})
-    \widehat{\ve{\epsilon}}_{t,j}-\ve{\kappa}_t e_{t,j}.
+  \widetilde{\ve{s}}_{t,j}\mid\mc F_t
+  &\sim
+  \N\!\left(
+    \widehat{\ve{s}}_{t,j}+\ve{\kappa}_t\delta_{t,j},
+    \ve{P}_t
+  \right), \\
+  \ve{\kappa}_t
+  &=\frac{\widehat{\ve{P}}_t\ve{k}_t}{\gamma_t},
+  &
+  \ve{P}_t
+  &=\widehat{\ve{P}}_t
+    -\frac{\widehat{\ve{P}}_t\ve{k}_t\ve{k}_t^{\tr}\widehat{\ve{P}}_t}
+    {\gamma_t}.
 \end{aligned}
-  \label{eq:kam-candidate-error}
+  \label{eq:kam-column-conditioning}
 \end{equation}
-The measurement noise is zero-mean and independent of the prediction error. Consequently, the
-cross terms vanish, and every value coordinate has conditional error covariance
+The posterior remains factorized, with a common gain and covariance across value coordinates.
+Stacking the columnwise posteriors therefore yields
 \begin{equation}
-\begin{aligned}
-  \ve{P}_t(\ve{\kappa}_t)
-  &:={}
-  \E\!\left[
+  \widetilde{\ve{S}}_t\mid\mc F_t
+  \sim
+  \N_{\mathrm{col}}\!\left(
+    \widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr},
+    \ve{P}_t
+  \right),
+  \qquad
+  \ve{P}_t
+  =(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t.
+  \label{eq:kam-stacked-posterior}
+\end{equation}
+This directly establishes the posterior mean and covariance.
+
+It remains to verify the equivalent minimum-MSE characterization. For any candidate gain
+$\ve{g}\in\mathbb{R}^{d_k}$, define
+$\ve{S}_t(\ve{g})=\widehat{\ve{S}}_t+\ve{g}\ve{\delta}_t^{\tr}$ and
+\begin{equation}
+  J_t(\ve{g})
+  :=\E\!\left[
     \left.
-    \ve{\epsilon}_{t,j}(\ve{\kappa}_t)
-    \ve{\epsilon}_{t,j}(\ve{\kappa}_t)^{\tr}
+    \|\widetilde{\ve{S}}_t-\ve{S}_t(\ve{g})\|_F^2
     \,\right|\,\mc F_{t-1},\ve{k}_t
-  \right] \\
-  &=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})
-  \widehat{\ve{P}}_t
-  (\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})^{\tr}
-  +r_t\ve{\kappa}_t\ve{\kappa}_t^{\tr}.
-\end{aligned}
-  \label{eq:kam-candidate-cov}
+  \right].
+  \label{eq:kam-mse-objective}
 \end{equation}
-Using $\|\ve{A}\|_F^2=\sum_j\|\ve{a}_j\|_2^2$ and
-$\|\ve{x}\|_2^2=\Trace(\ve{x}\ve{x}^{\tr})$, we obtain
+Using the predictive covariance and independence of the observation noise, direct expansion and
+completion of the square give
 \begin{equation}
 \begin{aligned}
-  &\E\!\left[
-    \left.
-    \|\widetilde{\ve{S}}_t-\ve{S}_t(\ve{\kappa}_t)\|_F^2
-    \,\right|\,\mc F_{t-1},\ve{k}_t
-  \right] \\
-  &\qquad={}
-  \sum_{j=1}^{d_v}
-  \Trace\!\left(
-    \E\!\left[
-      \left.
-      \ve{\epsilon}_{t,j}(\ve{\kappa}_t)
-      \ve{\epsilon}_{t,j}(\ve{\kappa}_t)^{\tr}
-      \,\right|\,\mc F_{t-1},\ve{k}_t
-    \right]
-  \right) \\
-  &\qquad={}
-  d_v\Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right).
+  J_t(\ve{g})
+  &=d_v\Big[
+    \Trace(\widehat{\ve{P}}_t)
+    -2\ve{g}^{\tr}\widehat{\ve{P}}_t\ve{k}_t
+    +\gamma_t\ve{g}^{\tr}\ve{g}
+  \Big] \\
+  &=d_v\Big[
+    \Trace(\ve{P}_t)
+    +\gamma_t\|\ve{g}-\ve{\kappa}_t\|_2^2
+  \Big].
 \end{aligned}
-  \label{eq:kam-mse-trace-identity}
+  \label{eq:kam-mse-completed-square}
 \end{equation}
-Here the conditioning includes the known key but not $\ve{v}_t$, because the MSE averages over
-the current measurement when selecting the gain. Since $d_v>0$ is constant with respect to
-$\ve{\kappa}_t$,
-\begin{equation}
-\begin{aligned}
-  &\arg\min_{\ve{\kappa}_t}
-  \E\!\left[
-    \left.
-    \|\widetilde{\ve{S}}_t-\ve{S}_t(\ve{\kappa}_t)\|_F^2
-    \,\right|\,\mc F_{t-1},\ve{k}_t
-  \right] \\
-  &\qquad={}
-  \arg\min_{\ve{\kappa}_t}
-  \Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right).
-\end{aligned}
-  \label{eq:kam-trace-objective}
-\end{equation}
-Expanding the trace gives
-\begin{equation}
-  \Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right)
-  =
-  \Trace(\widehat{\ve{P}}_t)
-  -2\ve{\kappa}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t
-  +
-  \big(r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t\big)
-  \ve{\kappa}_t^{\tr}\ve{\kappa}_t .
-  \label{eq:kam-trace-expanded}
-\end{equation}
-Because $r_t>0$ and $\widehat{\ve{P}}_t\succeq0$, this quadratic is strictly convex. Taking its
-gradient with respect to $\ve{\kappa}_t$ and setting it to zero therefore yields the unique
-minimizer
-\begin{equation}
-\begin{aligned}
-  \ve{0}
-  &=\nabla_{\ve{\kappa}_t}\Trace\!\left(\ve{P}_t(\ve{\kappa}_t)\right) \\
-  &=-2\widehat{\ve{P}}_t\ve{k}_t
-    +2\big(r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t\big)\ve{\kappa}_t,
-  \\
-  &\therefore\qquad
-  \boxed{
-    \ve{\kappa}_t
-    =\frac{\widehat{\ve{P}}_t\ve{k}_t}
-    {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}
-  }.
-\end{aligned}
-  \label{eq:kam-optimal-gain}
-\end{equation}
-It remains to show that the optimizer over the affine residual family is also the unrestricted
-posterior mean. For each value coordinate, let
-\begin{equation}
-  \ve{\epsilon}_{t,j}^{+}
-  :=\widetilde{\ve{s}}_{t,j}-\ve{s}_{t,j}(\ve{\kappa}_t).
-  \label{eq:kam-optimal-error}
-\end{equation}
-Using
-$\operatorname{Cov}(\widehat{\ve{\epsilon}}_{t,j},\delta_{t,j}\mid
-\mc F_{t-1},\ve{k}_t)=\widehat{\ve{P}}_t\ve{k}_t$
-and the optimality condition in \eqref{eq:kam-optimal-gain},
-\begin{equation}
-\begin{aligned}
-  &\operatorname{Cov}(\ve{\epsilon}_{t,j}^{+},\delta_{t,j}\mid
-    \mc F_{t-1},\ve{k}_t) \\
-  &\qquad={}
-  \widehat{\ve{P}}_t\ve{k}_t
-  -\ve{\kappa}_t
-   \big(\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t+r_t\big)
-  =\ve{0}.
-\end{aligned}
-  \label{eq:kam-optimal-orthogonality}
-\end{equation}
-Conditioned on $(\mc F_{t-1},\ve{k}_t)$, the pair
-$(\ve{\epsilon}_{t,j}^{+},\delta_{t,j})$ is jointly Gaussian because both variables are affine
-functions of the Gaussian prediction error and measurement noise. Equation
-\eqref{eq:kam-optimal-orthogonality} therefore implies conditional independence and
-\begin{equation}
-  \E[\ve{\epsilon}_{t,j}^{+}\mid
-      \mc F_{t-1},\ve{k}_t,\delta_{t,j}]=\ve{0}.
-  \label{eq:kam-optimal-zero-conditional-error}
-\end{equation}
-Since $\delta_{t,j}$ and $v_{t,j}$ carry the same information given
-$(\mc F_{t-1},\ve{k}_t)$, and the predictive prior and likelihood factorize across memory columns,
-\begin{equation}
-  \ve{s}_{t,j}
-  :=\widehat{\ve{s}}_{t,j}+\ve{\kappa}_t\delta_{t,j}
-  =\E[\widetilde{\ve{s}}_{t,j}\mid\mc F_t].
-  \label{eq:single-coordinate-kalman-correction}
-\end{equation}
-The same gain applies to every value coordinate because they share
-$\widehat{\ve{P}}_t$ and $r_t$. Stacking the coordinatewise posterior means gives
-\begin{equation}
-  \ve{S}_t
-  :=\E[\widetilde{\ve{S}}_t\mid\mc F_t]
-  =\widehat{\ve{S}}_t
-  +\ve{\kappa}_t
-  \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr}.
-  \label{eq:kam-residual-write}
-\end{equation}
-At this gain, \eqref{eq:kam-candidate-cov} is the exact posterior covariance. Using
-$\widehat{\ve{P}}_t\ve{k}_t
-=\ve{\kappa}_t(r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t)$ reduces its Joseph form to
-$(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t$.
+Since $\gamma_t>0$, this objective has the unique minimizer
+$\ve{g}=\ve{\kappa}_t$, establishing the minimum-MSE characterization.
 Therefore the exact Kalman Associative Memory update is
 \begin{equation}
 \begin{aligned}
@@ -1655,9 +1534,6 @@ Therefore the exact Kalman Associative Memory update is
 \end{aligned}
 \label{eq:kam-optimal-update}
 \end{equation}
-This is the reference update. The remaining question is which part of it can be made
-tractable and scan-computable without losing the link between uncertainty, transition, and
-write strength.
 \end{proof}
 
 \subsection{Proof of the online diagonal variational update}
@@ -2416,7 +2292,7 @@ chunk-local work and retain only a short recurrence across chunks.
 Let $\ve{z}_{t,i}=[n_{t,i},d_{t,i}]^{\tr}$ be the homogeneous covariance state for channel $i$,
 so that $p_{t,i}=n_{t,i}/d_{t,i}$. Partition the sequence into gain chunks
 $\mathcal{I}_m=\{\ell_m,\ldots,r_m\}$ of length at most $C_g$. Within each chunk, the token-local
-M\"obius matrices in \eqref{eq:diag-cov-mobius-matrix} are reduced in temporal order to
+M\"obius matrices in \eqref{eq:diag-cov-scan} are reduced in temporal order to
 \begin{equation}
   \overline{\ve{M}}_{m,i}
   =\ve{M}_{r_m,i}\ve{M}_{r_m-1,i}\cdots\ve{M}_{\ell_m,i}.

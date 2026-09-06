@@ -2893,9 +2893,545 @@ or Minor issue and \pathcode{Ready: Yes}; the independent specification review r
 \pathcode{ACCEPTED}.  Eleven newly focused adversarial cases pass, the specification review's nine
 focused functions pass as 15 parameterized cases, and the complete host file now has 152 passing
 tests with the same nine deliberately red assertions reserved for later-boundary persistence,
-final artifact closure, and runner postchecks.  The candidate safety-stop and complete-liveness
-slice is now the current implementation task.  No numerical or result-bearing GPU job has yet been
-accepted from this worktree.
+final artifact closure, and runner postchecks.  The candidate finite-norm safety-stop half of the
+next slice was implemented at \pathcode{838c236...}, hardened at \pathcode{156098f...}, and
+accepted at \pathcode{d72e10e5a886300af42f3cf83d95ec5ada5380d6}.  It preserves exact scalar dtype
+through the rank norm collective, continues at equality 10, stops only candidate arms for finite
+norm strictly above 10, and retains the historical continuation of old-scale and no-rotation
+controls.  Rank disagreement, finite negative values, and rank-agreed NaN, positive infinity, and
+negative infinity have distinct terminal reasons.  Every no-step terminal retains complete
+preclip and named-gradient evidence, proves the full real gradient inventory was cleared, skips
+AdamW and counter commit, and binds unchanged model and optimizer roots to the authoritative prior
+state while accounting only for the scheduled learning-rate change.  Review found and repaired a
+float32 threshold collapse, a forgeable one-leaf cleared-gradient record, an invalid cross-boundary
+optimizer comparison across LR scheduling, a missing no-rotation availability converse, and an
+initially unbound equal optimizer-root pair.  Final specification and quality reviews report no
+remaining finding, \pathcode{ACCEPTED}, and \pathcode{Ready: Yes}; 23 focused tests and 178 host
+tests passed at that checkpoint.
+
+The complete liveness half was implemented through commits \pathcode{d72fcd2...},
+\pathcode{6db3ade...}, \pathcode{d2891f7...}, \pathcode{de6e919...},
+\pathcode{47547ca...}, \pathcode{35a5f31...}, \pathcode{68846ec...},
+\pathcode{d0a19b3...}, and accepted at
+\pathcode{0d28a268295dde0dc534230b6f62d763b400001b}.  It records exact compact frontend
+counts for all 32 layer--microbatch observations at boundaries 839--846, exact candidate
+four-category gradient liveness, and replica-factor-two Adam \pathcode{exp_avg}/\pathcode{exp_avg_sq}
+liveness over the real sparse FSDP ownership pattern.  Three coordinated optimizer phase gates
+prevent pre-step, raw-step, and post-health collective skew; empty shards contribute zeros, while
+nonempty shards require exact FP32 state, optimizer membership, and step equal to the current
+boundary.  Both no-rotation repeats are checked across all ranks and observed boundaries, including
+uncommitted terminal boundaries, with exact-zero rotational activations and gradients and live
+radial gradients.  Review exposed and repaired numeric type aliases, incomplete first-boundary
+metadata binding, impossible count tuples, conditional collective ordering, stale optimizer state,
+unfaithful empty-shard tests, a single-repeat isolation path, and a nonfinite residual-gradient
+false acceptance.  Final reviews returned \pathcode{ACCEPTED} and \pathcode{Ready: Yes}; 56
+focused implementation tests, 74 independent focused regressions, and 221 full-host tests pass.
+Eight deliberately red assertions remain for analytics/artifact closure and runner postchecks.
+The repeatability and historical-reproduction checkpoint was then implemented at
+\pathcode{759b752...} and accepted after the exact-rank-type repair
+\pathcode{94f83dc5a94e0862fe12cad2dea79b731245f9e0}.  All three old-scale, candidate,
+and no-rotation repeat pairs now compare the complete rank record while excluding only the
+repeat-specific arm label.  The accepted job-1839531 controls are projected from their already
+sealed bytes into an ordered $3\times16$ digest record of 3,472 canonical bytes with SHA-256
+\pathcode{c65a7608683b10403ffae4a6eebe106fa2b16e3d403206b434d429f95d1a54da}; the
+four current control arms make all 64 rankwise comparisons, while candidate arms have no
+historical comparator.  Review found that Python equality had allowed rank zero to be represented
+as \pathcode{False} or \pathcode{0.0}; exact integer typing and paired-candidate regressions close
+that gap.  Independent reviews now report \pathcode{Ready: Yes}.  The focused repeat/history and
+arm-result reviews pass 25 and 16 checks respectively, and the full host file has 231 passing
+tests.  The same eight deliberately red assertions remain: seven belong to the final 226-file
+artifact closure and one to runner source postchecking.  The boundary-839 scale and decision
+checkpoint was implemented at
+\pathcode{ac0c55eb5f5cc6788f4da9d296f3346e7cb4a8d7}, completed at
+\pathcode{f7ed6c88941820ddcf4289be5a20c0cc688a5eba}, and accepted after the final
+post-AdamW consensus repair
+\pathcode{838b04566ec5347946b9e7be7f747f088af25a0f}.  Candidate arms now retain the
+live layer-0 record of twice the raw angle at boundary 839; exact per-rank and per-microbatch tensor
+records prove common DT/alpha inputs and the preregistered half-angle relation without comparing
+layers 1--15 after their hidden states diverge.  Canonical A1 estimands preserve signed zero and
+exact endpoint behavior, distinguish the sole instantaneous boundary from longitudinal outcomes,
+and report the ordered eight-ratio median/p95 together with loss, gradient-category, angle-maximum,
+and DT-tail descriptives.  The pure outcome classifier applies
+\pathcode{INVALID_EVIDENCE} $>$ \pathcode{VALID_FAIL_SAFETY} $>$
+\pathcode{VALID_FAIL_CRITERION} $>$ \pathcode{VALID_PASS}, while every summary remains
+non-authorizing.  Review found and repaired partial-prefix indexing, finite-sum overflow, omitted
+descriptives, inconsistent status/reason combinations, and rankwise-repeated but globally
+inconsistent safety norms, including the post-AdamW path.  Final independent reviews report
+\pathcode{Ready: Yes}; 247 host tests pass and the same eight deliberately red assertions remain.
+The artifact-sealing and invocation-identity checkpoint was then completed at
+\pathcode{79222cf0f750a71c3d06e4506b81426f1f42fb44}.  Structurally malformed or partial
+evidence remains exceptional and cannot produce a trusted summary, whereas structurally complete
+semantic contradictions seal only the non-authorizing status \pathcode{INVALID_EVIDENCE}.  The
+main closure is now derived as 10 fixed files plus 36 files for each of six arms: 226 inventoried
+files and 227 physical files including \pathcode{artifact-inventory.json}; the historical matched
+closure remains pinned at 118/119.  Final validation reads sealed captures, rederives the scientific
+status, revalidates the closure after rederivation, and reports that status separately from validator
+success.  Invocation and summary identity now bind the design, matched validator, both preflight
+closures, exact intervention constants, two-node/16-rank execution contract, retained runner, and
+source manifest without reopening the runner between hashing and contract validation.  The three
+named acceptance tests and seven focused sealing tests pass; the full host file reports 257 passes
+and only the deliberately deferred runner source-postcheck assertion.  An initial independent
+review found no remaining issue in this slice, but a stricter immutable review found two blockers:
+complete, structurally valid source/anchor/RNG/scale contradictions still escaped as structural
+exceptions instead of sealed \pathcode{INVALID_EVIDENCE}, and final validation bracketed reopened
+files rather than rederiving from the exact bytes checked by the inventory.  Those repairs and
+direct identity-mutation regressions were completed and independently accepted at
+\pathcode{3f94176c94d8c383b0723f1e8d915ab0e10fc28c}, then integrated on top of the
+runner work as \pathcode{bbe9868...}.  Every semantic input is now parsed from the first bounded,
+inventory-verified capture; a second pass checks only post-derivation integrity.  Complete
+source/prerequisite, anchor, first-forward RNG, scale, and CUDA-device contradictions become
+deterministic invalid-evidence facts, while malformed shape/count/token/hook evidence still fails
+externally.  The integrated full host suite passes all 269 tests.
+
+The main-runner portion of that next task was completed and independently accepted at
+\pathcode{0ce13479ef78c854b5060609f1e4b20deb66b2ea}.  It expands the diagnostic to the
+frozen six-arm order and derives the exact 29-step task vector from the runner's actual successful
+control flow; adversarial duplicate arm, prerequisite, and cleanup calls are rejected.  Scientific
+candidate stops remain zero-exit evidence-bearing outcomes so every arm runs, whereas the first
+operational failure is preserved through owned-root cleanup and suppresses summary, inventory, and
+the sole completion marker.  Current, trigger, and matched sources are reconstructed on both nodes;
+the full accepted prerequisite chain and both preflight closures are checked before every arm and
+again in the source postcheck, while the in-job final validation deliberately uses retained mode.
+The focused runner/parser set passes 13 tests, the full host file passes all 264 tests, and shell
+syntax, Python compilation, and diff checks pass.  This commit does not implement or run either
+preflight or the result-bearing six-arm GPU allocation.  Numerical, actual-anchor, and fresh-node
+validator surfaces are therefore the current implementation task.  No numerical or result-bearing
+GPU job has yet been accepted from this worktree.
+
+The numerical-preflight host implementation was independently accepted at
+\pathcode{417fe21644000c72f91e5f39946c0de5394e11a3} and integrated as
+\pathcode{3617d40...}.  Its one-H200 runner is source-bound, network-scrubbed, uses private
+node-local caches, and seals seven inventoried files plus the inventory.  Exactly three H200 tests
+are collected at $H=16$, key/value width 128, and rotary width 64: a bitwise direct-$0.25$
+historical replay through forward, VJP, parameters, and AdamW state; a candidate-$0.125$ comparison
+to the independent FP32 literal recurrence; and an update/schema/liveness check for hidden, angle,
+DT, and Adam moments.  Review found and repaired stale gradient accumulation between historical
+branches.  The integrated host suite passes all 270 tests, the H200 module collects exactly three
+nodes, and shell/Python checks pass.  These are host-side contracts only; the three numerical tests
+had not yet run on an H200 at that implementation checkpoint; their subsequent S1 execution is
+recorded below.
+
+The actual-anchor preflight was independently accepted at
+\pathcode{ae328418d406eaeb099e48a7a441399044d8aae8} and integrated as
+\pathcode{25e63fb...}.  Its two fresh 16-rank process groups use a metadata-only anchor resolver
+and sentinel loaders: no retained batch is opened, no loader is iterated, and no forward or
+optimizer update occurs.  Each rank proves one strict \pathcode{Fabric.load}, exact accepted
+checkpoint identity, rederived model/optimizer Merkle equality, ordered state topology before
+installation and after restoration, all 16 layer overrides, and selected-device-only CUDA RNG
+preservation.  Review added dynamic guards for all three file-open APIs, bound every row to the
+candidate source and pre-inventory digest, and rejected forged Merkle roots/leaves.  The runner has
+the exact 13-step topology and 82/83 closure.  Its standalone full host suite passes 266 tests; after
+integration with the semantic, runner, and numerical slices, all 272 host tests pass.  The
+first S1 actual-anchor allocation and its fail-closed result are recorded below.
+
+The fresh-node validator was independently accepted at
+\pathcode{357febcab395e07e72c6b393c28b98848a27ea05} and integrated as
+\pathcode{7d92a8f214a081c5bfeb3b39c07fe3db60217929}.  It accepts the exact
+12-argument source/data/target/preflight tuple, waits for the target job to become terminal,
+reconstructs all three source roots, validates the target closure in
+\pathcode{fresh-recursive} mode, and preserves every sealed scientific status rather than requiring
+\pathcode{VALID_PASS}.  Its scheduler parser binds root and unfiltered queries, canonical task
+strings, job names, two-node membership, per-step task counts, raw resource allocation, timestamps,
+and the exact 29-step topology.  Review repaired final-marker cleanup ordering, NodeList and
+cross-query gaps, and raw extern-step \pathcode{AllocTRES} comparison.  The validator's own
+mode-0400 evidence closure is checked before its sole stdout marker.  Frozen host verification
+passes 4/4 and 13/13 focused science batches, 4/4 runner contracts, and the complete 284-test host
+suite; the four accepted regression suites pass 126, 69, 52, and 48 tests respectively.
+
+The canonical branch was pushed and immutable snapshot S1 was materialized at
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/source_snapshots/}\\
+\pathcode{rdiag_shared_dt_late_angle_scale_7d92a8f214a081c5bfeb3b39c07fe3db60217929}.
+Its Git tree is \pathcode{d060cd04a60ad201cc75238f5de3a8fd3c20ef83}; its 4,266-file
+\pathcode{SOURCE_MANIFEST.json} has SHA-256
+\pathcode{1368bb987edcd3957e9b6d2cdc5a16f9268030da97f056a41829201d4672312d}.
+Snapshot-local checks reproduce the live counts exactly, and a fresh private-copy verification
+passes all 4,266 entries.  Numerical attempt \pathcode{1844567} passed all three H200 tests but is
+not accepted because its scheduler \pathcode{SubmitLine} began with bare \pathcode{sbatch}, rather
+than the exact frozen \pathcode{/usr/bin/sbatch} executable.  The byte-identical replacement job
+\pathcode{1844573} completed \pathcode{0:0} on one H200 in 2 minutes 18 seconds: all three tests
+passed with zero skips, scheduler stderr was empty, the sole completion marker was present, and all
+seven inventoried/eight physical artifact hashes matched.  Its accepted closure is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/diagnostic_runs/}\\
+\pathcode{late_angle_scale_numerical_preflight_7d92a8f214a0_1844573_accepted_closure.json},
+SHA-256 \pathcode{fe613ec2fb146cce7f52f906fdd42cb65278f7e24ed7be12f0032e51539950bb}.
+Both live-query and retained-record validators pass that closure.  Actual-anchor preflight job
+\pathcode{1844581} then ran from the same immutable snapshot on nodes
+\pathcode{h200-115-025,h200-126-216}.  The root and batch records failed \pathcode{1:0} after
+12 minutes 56 seconds; extern completed, preliminary steps \pathcode{.0}, \pathcode{.1}, and
+\pathcode{.2} completed, and cleanup step \pathcode{.3} completed.  No anchor arm or rank record,
+summary, inventory, or completion marker was published.  The fail-closed exception was
+\pathcode{LateAngleScaleError: accepted matched prerequisite projection changed}.  Investigation
+reproduced the mismatch on the host: the already validated matched source identity has six fields,
+including integer \pathcode{file_count=4257}, while the strict downstream expected projection
+listed only the other five.  This is an internal provenance-schema defect rather than a numerical,
+checkpoint, kernel, or optimization observation.  The minimal remediation adds the pinned file
+count to both expected matched-source projections and adds a realistic regression asserting exact
+six-field equality; it does not change either preflight runner, the intervention, the optimizer,
+the acceptance criteria, or the scheduler topology.  The red regression reproduced the exact
+projection failure, affected focused tests pass, and the complete host file passes all 284 tests
+with ten warnings.  Independent review found no scoped issue and returned \pathcode{READY}.  The
+repair is published as commit \pathcode{17e82ca154f0c22543cb5424fe876d1d832284b8}, tree
+\pathcode{394d9b82910c1bc830561f325b9540d45c10a5a8}.  Per the frozen plan's remediation
+rule, this accepted source change makes S1 and its numerical closure ineligible for later gates.
+The never-before-existing immutable S2 snapshot is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/source_snapshots/}\
+\pathcode{rdiag_shared_dt_late_angle_scale_17e82ca154f0c22543cb5424fe876d1d832284b8};
+its 4,266-file manifest has SHA-256
+\pathcode{5f5cf4ee079c69f37e1ecb01fed9f1a04d79677f215edaf1eeb612b5f94b4e8b}.
+The canonical worktree and S2 independently reproduce focused counts 4 and 13, four runner-contract
+passes, all 284 host tests with ten warnings, and the four accepted regression counts 126, 69, 52,
+and 48.  Python compilation and all four shell syntax checks pass; the live source diff/scope checks
+are clean, and a fresh private copy verifies every one of S2's 4,266 manifest entries.  Numerical
+preflight job \pathcode{1844729} completed \pathcode{0:0} on \pathcode{h200-246-014} in 2 minutes
+44 seconds.  All three tests passed with zero skips; root, batch, and extern are the only scheduler
+rows and all completed \pathcode{0:0}; stderr is empty; the sole marker is present; and all seven
+inventoried/eight physical artifact hashes match.  Its canonical mode-0400 accepted closure is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/diagnostic_runs/}\
+\pathcode{late_angle_scale_numerical_preflight_17e82ca154f0_1844729_accepted_closure.json},
+SHA-256 \pathcode{4e22001f66832c1f4d150992732ea98670e84442ae48ea6c81426243d1bd47c2}.
+Independent retained, live-query, scheduler-byte, live-log, mode, and artifact audits return
+\pathcode{APPROVED}.  The first S2 actual-anchor attempt, job \pathcode{1844730}, correctly passed
+the repaired prerequisite projection and began its first per-node recursive revalidation on
+\pathcode{h200-132-171,h200-134-017}.  During monitoring, however, an unauthorized diagnostic
+\pathcode{srun} added scheduler step \pathcode{.4}; because this makes the preregistered exact
+13-step topology unattainable, the attempt was cancelled after 18 minutes 20 seconds and is
+ineligible regardless of its payload.  It produced no accepted closure and contributes no
+scientific observation.  Clean replacement job \pathcode{1844962} was submitted from the
+byte-identical S2 tuple and ran on \pathcode{h200-152-154,h200-186-088}.  It passed immutable-source
+reconstruction, runtime identity, the repaired initial prerequisite projection, and the old-scale
+per-node recursive prerequisite recheck.  Its first 16-rank strict restore then failed collectively
+before any forward, update, retained-batch read, or rank evidence publication with
+\pathcode{LateAngleScaleError: shared-DT scale-layer count changed}; root and batch ended
+\pathcode{1:0}, extern and cleanup completed, and no result, inventory, marker, or accepted closure
+was emitted.  Strict \pathcode{Fabric.load} and the model/optimizer Merkle checks had already
+succeeded.  The cause is deterministic wrapper aliasing: Lightning's \pathcode{_FabricModule}
+registers the same GPT below both \pathcode{_forward_module} and \pathcode{_original_module}, while
+the helper scanned \pathcode{named_modules(remove_duplicate=False)} over the wrapper.  It therefore
+observed 32 paths for the 16 logical mixers.  Existing forward-determinism code already establishes
+the correct contract: resolve the semantic GPT from \pathcode{fabric_model.module}, canonicalize
+the exact FSDP wrapper components, and retain a bijection between 16 semantic paths and 16 object
+identities.  A faithful host reproduction confirms 32 raw paths and 16 unique objects.  C2/S2 and
+its otherwise valid numerical closure are now stale for authorization.  The test-first repair
+resolves and binds the semantic \pathcode{fabric_model.module} root, strips only exact
+\pathcode{_fsdp_wrapped_module} path components, and requires a bijection between the ordered
+forward and semantic inventories.  Regressions cover the installed Lightning wrapper, nested FSDP
+blocks, same-object aliases, canonical-name collisions, incomplete/mismatched/duplicated roots,
+decoy owner graphs, and missing layers.  Two independent re-reviews returned \pathcode{READY}; 17
+focused tests and all 288 host tests pass.  The change is published as commit
+\pathcode{711155e9a685dfbdd5a4c11954017e4b6b583ee6}, tree
+\pathcode{7e3dd18b8baa9a522e86a574a0ebf74fd625a59b}.  Immutable S3 is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/source_snapshots/}\
+\pathcode{rdiag_shared_dt_late_angle_scale_711155e9a685dfbdd5a4c11954017e4b6b583ee6};
+its 4,266-file manifest SHA-256 is
+\pathcode{8eafc98de7ed172ec0142a9a3160df6d076755f4f291bef140ca40b730130223}.
+The canonical worktree and S3 reproduce focused counts 4 and 13, four runner tests, all 288 host
+tests with ten warnings, and regression counts 126, 69, 52, and 48; compilation, shell syntax,
+scope, and a fresh 4,266-file private-copy verification pass.  S3 numerical preflight
+\pathcode{1845249} completed \pathcode{0:0} on \pathcode{h200-246-014} in 2 minutes 44 seconds:
+all three tests passed with zero skips, only root/batch/extern were present, stderr was empty, and
+all seven inventoried/eight physical artifacts matched.  Its canonical accepted closure is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/diagnostic_runs/}\
+\pathcode{late_angle_scale_numerical_preflight_711155e9a685_1845249_accepted_closure.json},
+SHA-256 \pathcode{6d98106493f257e94ac8c466b79e7106c4a2cd70a1434ba0664eaf2ff291ebd5};
+live, retained, and record validators pass, and an independent byte-level audit returns
+\pathcode{APPROVED}.  S3 anchor preflight \pathcode{1845250} ran on
+\pathcode{h200-005-176,h200-246-014} for 23 minutes 18 seconds.  Its source reconstruction,
+two-node topology, runtime identity, initial prerequisite, old-scale recursive prerequisite, and
+cache-preparation steps all completed, but the first 16-rank no-forward arm failed on every rank;
+root and batch ended \pathcode{FAILED 1:0}, extern and both cleanup steps completed, and scheduler
+stderr contained only the resulting task-exit reports.  No rank payload, result, inventory,
+completion marker, or accepted closure exists.  The fail-closed exception was
+\pathcode{LateAngleScaleError: anchor preflight state-dict topology is incomplete}.  Strict anchor
+load, model/optimizer Merkle equality, and the repaired 16-owner angle-scale discovery had already
+succeeded, so this remains a pre-forward infrastructure failure rather than a numerical result.
+
+The exact mismatch is now independently evidenced and reproduced with Lightning's installed
+\pathcode{\_FabricModule}.  Its inherited \pathcode{named\_parameters()} traverses the execution
+graph and emits names such as
+\pathcode{\_forward\_module.\_fsdp\_wrapped\_module.transformer.h.0.\_fsdp\_wrapped\_module.attn.rdiag\_angle\_proj.weight},
+whereas its overridden \pathcode{state\_dict()} delegates to the original module and the accepted
+checkpoint key is
+\pathcode{transformer.h.0.attn.rdiag\_angle\_proj.weight}.  The topology recorder mixed those two
+namespaces, leaving their name sets disjoint; its validator correctly rejected them.  The host
+suite already contained a faithful Fabric/FSDP alias fixture, but exercised it only through
+scale-owner discovery; the topology tests used either a bare layer or hand-built matching names.
+The C4 repair resolves the same validated semantic root used by the state dictionary,
+removes only path components exactly equal to \pathcode{\_fsdp\_wrapped\_module}, rejects every
+canonical-name collision, and uses the resulting names consistently for parameters, buffers,
+state dictionary, optimizer groups, and initialized optimizer slots.  The forward graph must bind
+the semantic root exactly once and expose the identical ordered canonical object inventory;
+non-deduplicating enumeration rejects parameter/buffer aliases, optimizer groups cannot duplicate
+or introduce parameters, and optimizer state cannot survive outside a known group.  The generic
+collector still permits a deliberate partial optimizer used by the numerical oracle, while the
+anchor-record validator separately retains its exact full-partition requirement.  New regressions
+exercise an installed Fabric wrapper with a persistent buffer, two AdamW groups and sparse live
+slots, the actual nested-FSDP namespace difference, canonical collisions, aliases, missing and
+duplicate group membership, orphan state, mismatched roots, and forward decoys.  Ten focused
+topology/owner/numerical checks pass, and two independent adversarial re-reviews return
+\pathcode{READY}.  Live-worktree verification reports 293 host tests with ten warnings and the
+accepted regression counts 126, 69, 52, and 48; both changed paths pass the scope and diff checks.
+The repair is published as commit
+\pathcode{f869d5e6db5f9f8863c6ffaeb03bc4814bbf2bd1}, tree
+\pathcode{b442e6570d9fb962875888a608394c96ff5cd565}.  Its never-before-used immutable S4 root is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/source_snapshots/}\
+\pathcode{rdiag_shared_dt_late_angle_scale_f869d5e6db5f9f8863c6ffaeb03bc4814bbf2bd1}; the
+4,266-file source-manifest SHA-256 is
+\pathcode{a14f398377ea72c3f9674887fe59c04c408d796262784f2a9bce773cfb7ca7df}.
+Snapshot-local focused and static checks pass; its complete suites reproduce 293 host tests with
+ten warnings and regression counts 126, 69, 52, and 48.  A fresh private execution tree rebuilt
+from Git independently verifies all 4,266 manifest entries.  C4 invalidates S3 and its otherwise
+valid numerical closure, so fresh S4 numerical job \pathcode{1845517} and actual-anchor job
+\pathcode{1845518} were submitted through the frozen absolute \pathcode{/usr/bin/sbatch}
+interfaces.  Numerical job \pathcode{1845517} completed \pathcode{0:0} on
+\pathcode{h200-246-014} in 2 minutes 45 seconds: its only scheduler rows are root, batch, and
+extern; all three tests passed with zero skips, seven warnings, one completion marker, empty
+scheduler stderr, and an exact seven-file inventory/eight-file physical closure.  Its independently
+requeried, mode-0400 accepted closure is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/diagnostic_runs/}\
+\pathcode{late_angle_scale_numerical_preflight_f869d5e6db5f_1845517_accepted_closure.json},
+SHA-256 \pathcode{ae422425c386787c639adb37d608d6396418676fbe62cc52ba7b8fc06a88fb0c};
+both retained and live-query validators pass.  Actual-anchor job \pathcode{1845518} then completed
+\pathcode{0:0} on \pathcode{h200-005-176,h200-186-088} in 42 minutes 11 seconds.  Its root,
+batch, extern, and all 13 numbered steps completed \pathcode{0:0}; the exact numbered-step task
+vector is
+\pathcode{2,2,2,2,2,16,2,2,2,16,2,2,2}.  Both 16-rank arms strictly loaded the accepted
+checkpoint without opening a retained batch or executing a forward or update.  All 32 rank
+records prove equal loaded/restored model and optimizer Merkle roots, stable canonical
+parameter/buffer/optimizer topology, exact 16-layer scale installation and restoration, unchanged
+CUDA RNG, and complete cleanup.  The closure contains 82 inventoried/83 physical artifacts,
+exactly one completion marker, and empty scheduler stderr.  Its independently requeried mode-0400
+accepted closure is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/diagnostic_runs/}\
+\pathcode{late_angle_scale_anchor_preflight_f869d5e6db5f_1845518_accepted_closure.json},
+SHA-256 \pathcode{d381c5770cbe2f545b67cb2bb1432ecc537640d4ad3846f76c3c1a001edc9f79};
+retained, live-query, and scheduler-record validators pass, and independent scientific and
+operational reviews both return \pathcode{APPROVED}.  A second private-tree revalidation of S4
+then reproduced all 4,266 source-manifest entries.  The frozen launch tuple is retained as
+\pathcode{diagnostic_runs/late_angle_scale_launch_f869d5e6db5f_operator_record.json}, SHA-256
+\pathcode{8f09aa03fcb23238cb10ac5b4f98e8153adfb56a9111701e41ef7e8183a6e93c}.
+Exactly one result-bearing six-arm allocation, job \pathcode{1845784}, was submitted through the
+frozen absolute \pathcode{/usr/bin/sbatch} interface from the clean canonical worktree.  It requests
+two nodes and 16 H200 ranks.  It ran on \pathcode{h200-186-088,h200-193-042} for 1 hour
+44 minutes 13 seconds.  All 29 numbered steps completed \pathcode{0:0} with exact task vector
+\pathcode{2,2,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2},
+including all six 16-rank arms, their prerequisite rechecks and cache cleanups, the final two-node
+source/prerequisite postcheck, and private-root cleanup.  All 96 rank records were emitted.  Both
+candidate repeats completed all eight updates through boundary 846, were exactly repeat-equal,
+and had finite live angle/DT/decay gradients and Adam moments.  Both no-rotation repeats were
+exactly repeat-equal, with all rotational activations and gradients zero and radial gradients live.
+Both old-scale repeats were exactly equal, and all 64 current control records exactly reproduced
+the accepted historical semantic projections.
+
+The root job nevertheless ended \pathcode{FAILED 1:0} during local post-step summarization, so
+these payload observations are not an accepted result.  The producer writes the real full
+18-field \pathcode{RDiagCheckpointIdentity.as_dict()} into each initial-state record, while the
+structural summary validator and its synthetic fixture still required an obsolete five-field
+subset.  Consequently rank zero of \pathcode{old_scale_a1} raised
+\pathcode{LateAngleScaleError: initial anchor identity schema changed}.  An independent audit
+confirms that all 96 full identities are identical, equal the authoritative trigger identity, and
+that all 96 complete initial states equal the corresponding retained anchor state.  Fail-closed
+handling suppressed \pathcode{summary.json}, \pathcode{artifact-inventory.json}, and the completion
+marker; the run retained 225 partial top-level artifacts, and no fresh-node validator was
+submitted.  This is classified \pathcode{INVALID_EVIDENCE} due to a diagnostic-validator schema
+defect, not as an infrastructure or scientific failure.  Twice-queried scheduler root and
+all-step records were byte-stable with SHA-256 values
+\pathcode{f0df12e06291b684c3507389c7c6fd62b722c99f3b4937d8b16b4c94dd83ba67} and
+\pathcode{81bec94ea18ae59a5f3e60292242b77257b7465e8d1ed7f53ba6e10b67286d01}.
+Live stdout and stderr SHA-256 values are respectively
+\pathcode{6f7722c57b87d6d2b856fb55cbb531034bbeb37034ce34b6f3c5aeef03836479} and
+\pathcode{6baf9c9b5af503ee95eed862edc3d151b6eff79b8e5c1aacf9692db771c58b7d};
+the pre/post prerequisite inventories are byte-identical at SHA-256
+\pathcode{7f869aaf25307e73546f14e709f6bab4aab03de846d2adf81511e75cc76c5d53}.
+No conventional accepted scheduler record was invented for this failed topology.
+
+The test-first remediation replaces the stale fixture with the real 18-field schema,
+adds a producer-to-validator round trip plus missing/extra/type/hash-alias regressions, and leaves
+semantic equality to the later retained-anchor comparison.  Its RED test reproduced the exact
+failure; the repaired focused set passes 29 tests and all 96 retained initial states validate.
+Two independent exact-diff reviews return \pathcode{READY}; the final live-worktree suite has 299
+passes with ten warnings, the four accepted regression suites pass 126, 69, 52, and 48 tests, and
+the four runner contracts, Python compilation, shell syntax, diff, and scope checks pass.  The
+repair is published as commit
+\pathcode{9f5ec8c806f79731f2f1cd5339cde93eaf5fbf20}, tree
+\pathcode{e9bcd490bd96e55e0b6ddc640c430844ffef8ec2}.  Immutable S5 is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/source_snapshots/}\
+\pathcode{rdiag_shared_dt_late_angle_scale_9f5ec8c806f79731f2f1cd5339cde93eaf5fbf20}; its
+4,266-file manifest SHA-256 is
+\pathcode{edcfd78431d8d4c152768f905834a5872bb0a8bf549d0839daa5681a7636b061}.
+A private tree rebuilt from Git verifies every S5 manifest entry.  This source change requires
+fresh numerical and actual-anchor preflights and a fresh candidate allocation; S4 and job
+\pathcode{1845784} cannot authorize a later stage.  Fresh S5 numerical preflight
+\pathcode{1846328} and actual-anchor preflight \pathcode{1846329} were submitted through the
+frozen absolute \pathcode{/usr/bin/sbatch} interfaces.  Numerical job \pathcode{1846328}
+completed \pathcode{0:0} on \pathcode{h200-112-045} in 2 minutes 35 seconds: all three H200
+tests passed with zero skips, only root/batch/extern were present, stderr was empty, and all seven
+inventoried/eight physical artifacts matched.  Its accepted closure is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/diagnostic_runs/}\
+\pathcode{late_angle_scale_numerical_preflight_9f5ec8c806f7_1846328_accepted_closure.json},
+SHA-256 \pathcode{44390184226902be6a4fd7488f7752555e1fdefbf45d097a828ae2e798b20fc9};
+live-query, offline, and retained-record validators pass.  Actual-anchor job
+\pathcode{1846329} completed \pathcode{0:0} on
+\pathcode{h200-101-019,h200-186-088} in 43 minutes 30 seconds.  Its root, batch, extern, and
+all 13 numbered steps completed \pathcode{0:0} with exact task vector
+\pathcode{2,2,2,2,2,16,2,2,2,16,2,2,2}.  Across both arms, all 32 ranks strictly restored the
+accepted boundary-838 checkpoint without opening data, executing a forward, or applying an
+update.  The candidate changed only the installed 16-layer multiplier and effective scale from
+\pathcode{1}/\pathcode{0.25} to \pathcode{0.5}/\pathcode{0.125}; model and optimizer Merkle roots,
+state topology, and device RNG were restored exactly, and cleanup completed.  The pre/post
+prerequisite inventories are byte-identical at SHA-256
+\pathcode{fa0943d2f98c6c0dede5b6e89e5f6c30a63fdb57dd996c899711a0123bb0d669}; the closure has
+82 inventoried/83 physical mode-0400 single-link artifacts, exactly one completion marker, and
+empty scheduler stderr.  Its accepted closure is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/diagnostic_runs/}\
+\pathcode{late_angle_scale_anchor_preflight_9f5ec8c806f7_1846329_accepted_closure.json}, SHA-256
+\pathcode{63f4e61d8c531ad1b0702185bf49a1485bea9c24941f89a8622aaf477cc22970}; live-query,
+offline, and retained-record validation all pass.  Independent scientific and operational
+reviews return \pathcode{APPROVED}, including a replay of all 96 S4 rank records through the S5
+repair.  A final private Git reconstruction again verified all 4,266 S5 manifest entries.  The
+one-shot operator record is
+\pathcode{diagnostic_runs/late_angle_scale_launch_9f5ec8c806f7_operator_record.json}, SHA-256
+\pathcode{d3d0347bb47117e179a42d05692ed01e7e891ab26a4969e82d3ed22cb04e3dfd}.
+Exactly one S5 six-arm allocation, job \pathcode{1846561}, was then submitted through its recorded
+12-token absolute \pathcode{/usr/bin/sbatch} interface from the clean canonical worktree.  It
+completed \pathcode{0:0} on \pathcode{h200-101-019,h200-186-088} in 1 hour 46 minutes 18 seconds.
+Root, batch, extern, and all 29 numbered steps completed \pathcode{0:0} with exact task vector
+\pathcode{2,2,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2}.
+All six arms completed eight updates through boundary 846; all three A1/A2 repeat projections are
+exact, all four control records reproduce their accepted historical projections, intervention
+isolation passes, and all candidate gradient and Adam-moment liveness observations are live.  The
+pre-registered classifier returns non-authorizing \pathcode{VALID_PASS}.  At the sole primary
+instantaneous boundary, candidate/no-rotation norm ratio is
+\pathcode{1.2335551366597468}, below the locked \pathcode{1.25} maximum.  Candidate norm is below
+old-scale norm at every boundary and never exceeds the unchanged limit of 10; the boundary-839
+candidate and old-scale norms are respectively \pathcode{0.6969801187515259} and
+\pathcode{1.4238522052764893}.  This remains one captured state/window: only boundary 839 is an
+instantaneous counterfactual, while later boundaries compare paired longitudinal branches.
+The exact artifact closure is 226 inventoried/227 physical mode-0400 single-link files.  Its
+inventory and summary SHA-256 values are
+\pathcode{7d9e81dc67e0f1e1610135fb8ab994697afdf289b0ebd48f12b4677490f83938} and
+\pathcode{7ea9caa4d6b3ecf731df73cd8fe0aaaebdbf3c5cd9e43129fd4175ecbde0672b}; scheduler stderr is
+empty and stdout SHA-256 is
+\pathcode{0a5915dec9377b9745c9d75523d7380d52cea8f10dc976e4f7f4a24c3580f4d3}.
+Fresh-node validator job \pathcode{1846728} was submitted with
+\pathcode{h200-101-019,h200-186-088} explicitly excluded.  It correctly landed on the fresh node
+\pathcode{h200-052-125}, but failed \pathcode{2:0} after one second before creating a validation
+root or numbered step.  Its sole stderr line is
+\pathcode{target run root does not bind commit and job ID}; stdout is empty.  The submitted target
+path and job ID are correct.  The frozen runner instead placed \pathcode{'\_'} inside one outer
+double-quoted expected-path expansion, so Bash retained the apostrophes literally and every valid
+target path fails that comparison.  This is a validator control-plane defect, not contrary
+scientific evidence, but it leaves job \pathcode{1846561} unaccepted.  The repair must add a
+behavioral shell regression, replace that expression with braced adjacent expansions, freeze a
+new source version, and repeat the source-bound preflights, six-arm allocation, and fresh-node
+validator.  No production implementation or authorization is claimed.
+
+The validator repair is now frozen as S6 on branch
+\pathcode{codex/rdiag-shared-dt-late-angle-validator-fix-20260905} at commit
+\pathcode{3d9c20f4e1019d6e1117604e94622ed46bc06084} (tree
+\pathcode{bcba0c6c7f1780326cf018f70c1811c8ba8c5ee2}).  Relative to S5, the diff
+contains only the one-line braced target-path expansion and a behavioral host regression that
+extracts and executes the actual two-line guard.  The S5 expression rejects its valid target with
+status 2; the repaired expression accepts that target while retaining rejection of wrong commit,
+job, and suffix values.  Numerical-preflight, anchor-preflight, six-arm, helper, and H200-test
+bytes are unchanged.  The immutable S6 snapshot is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/}\
+\pathcode{source_snapshots/rdiag_shared_dt_late_angle_scale_3d9c20f4e1019d6e1117604e94622ed46bc06084};
+its 4,266-entry manifest has SHA-256
+\pathcode{85d1a7f8de3de4274df8904cce2f119ee88b900f5063fa6bf14efff515d325c8}.
+Independent private Git reconstructions before and after testing verified every entry.  The frozen
+snapshot passed 595 host regressions, helper compilation, and all four runner syntax checks.
+Independent scientific and operational launch reviews both returned \pathcode{APPROVED}; a
+reviewer's discarded test attempt wrote temporary pytest state into the live worktree only because
+the host temporary filesystems were full, then correctly failed the source-closure guard.  Those
+artifacts were moved intact to a recoverable diagnostic quarantine, the canonical worktree was
+restored clean, and the post-test private reconstruction passed.  The first S6 submission attempt
+mistakenly added the operator-only \pathcode{--parsable} option to both \pathcode{sbatch}
+commands.  Because the frozen scheduler validator requires exact equality with the registered
+six-token numerical and eight-token anchor command lines, jobs \pathcode{1846846} and
+\pathcode{1846847} were immediately classified ineligible and canceled; the former never
+allocated, while the latter stopped after 81 seconds during preliminary step 2, before any result,
+inventory, completion marker, or accepted closure.  The four retained preliminary anchor files do
+not constitute result evidence.  The exact registered interfaces, with no extra option, were then
+submitted as replacement numerical job \pathcode{1846871} and actual-anchor job
+\pathcode{1846872}.  Their scheduler \pathcode{SubmitLine} fields exactly match the frozen
+contracts.  Numerical job \pathcode{1846871} completed \pathcode{0:0} on
+\pathcode{h200-067-061} in 2 minutes 34 seconds with the expected root/batch/extern-only topology,
+three passing H200 tests, its sole completion marker, and empty stderr.  Its eight physical/seven
+inventoried artifacts are mode-0400 single-link files, and the result is non-authorizing
+\pathcode{VALID}.  Live-query, offline, and retained-record validation all accept its source-bound
+closure
+\pathcode{diagnostic_runs/late_angle_scale_numerical_preflight_3d9c20f4e101_1846871_accepted_closure.json},
+SHA-256 \pathcode{004867fe85bbce178b861095dde71b9a68f5c8873214c1c095093ff227fc8093}.
+Anchor job \pathcode{1846872} completed \pathcode{0:0} on
+\pathcode{h200-067-061,h200-128-233} in 44 minutes 28 seconds.  Root, batch, extern, and all
+13 numbered steps completed cleanly with exact task vector
+\pathcode{2,2,2,2,2,16,2,2,2,16,2,2,2}.  Both 16-rank arms completed their strict
+restore-only checks; the pre/post prerequisite inventories are byte-identical at SHA-256
+\pathcode{f8801e1163bf859bf420bb9dc25f0565e4a74e034fd92998300db03781e2eccd}.
+Its 82 inventoried/83 physical artifacts are all mode-0400 single-link files, its sole completion
+marker is present, and scheduler stderr is empty.  Live-query, offline, and retained-record
+validation all accept its source-bound closure
+\pathcode{diagnostic_runs/late_angle_scale_anchor_preflight_3d9c20f4e101_1846872_accepted_closure.json},
+SHA-256 \pathcode{46d5ef721929457f3ccfbb3ad814461d06d8b3d24350442430498018cd4bb387}.
+No S5 closure was reused.  Final scientific and operational Action89 reviews both returned
+\pathcode{APPROVED}.  The mode-0400, single-link one-shot operator record is
+\pathcode{diagnostic_runs/late_angle_scale_launch_3d9c20f4e101_operator_record.json}, SHA-256
+\pathcode{4c68809091d51cecf35344e32b5a31c0946b5c8166eca1b963da0b2c33285275}.
+A final private Git reconstruction again verified all 4,266 S6 manifest entries.  The exact
+12-token main interface, with no \pathcode{sbatch} option, was then submitted once as job
+\pathcode{1847039}; its scheduler-recorded command matches the operator record.  It completed
+\pathcode{0:0} on \pathcode{h200-129-161,h200-130-169} in 1 hour 47 minutes 8 seconds.  Root,
+batch, extern, and exactly numbered steps 0--28 completed cleanly with task vector
+\pathcode{2,2,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2}.
+The retained non-authorizing summary reports \pathcode{VALID_PASS}: all six arms completed eight
+updates, A1/A2 repeatability matched, topology and boundary-839 intervention isolation passed,
+all locked criteria are true, causal interpretation is allowed, and every failure-reason list is
+empty.  At the instantaneous boundary 839, candidate, historical-scale, and no-rotation norms are
+respectively \pathcode{0.6969801187515259}, \pathcode{1.4238522052764893}, and
+\pathcode{0.5650174021720886}; the candidate/no-rotation ratio is
+\pathcode{1.2335551366597468}, below its preregistered 1.25 ceiling.  The candidate is below the
+historical scale and below the norm-10 ceiling at all boundaries 839--846.  Its 226 inventoried
+members plus the inventory are exact mode-0400, single-link files; inventory, summary, invocation,
+and unchanged pre/post input-inventory SHA-256 values are respectively
+\pathcode{373f6c6d20d50e5e616403d4963433a6d6f7f1630fdeca291fa5de0fd2dd6adf},
+\pathcode{99e35928cb6e7d510b55c431747ad445241aad59793d1774f9a42a9d5bf7de00},
+\pathcode{3f085cbd42ec6125a4fbb2f76b1f45a3311fe7e38534690cb0f06e3fec0c9582}, and
+\pathcode{e28296916695c549b2ecb75f94fd1bf491e6be380338a530023c8378df6b063b}.
+The completion marker occurs once and scheduler stderr is empty.  Fresh-node validator job
+\pathcode{1847464} was then submitted with both main-job nodes explicitly excluded and ran on
+\pathcode{h200-017-170}.  Its recursive scientific validation completed: the retained
+\pathcode{validation-result.json} reports \pathcode{VALID} and revalidates all 226 artifacts,
+prerequisites, anchor, and source; the subsequently written \pathcode{acceptance-result.json}
+reports the target's \pathcode{VALID_PASS}.  Their SHA-256 values are respectively
+\pathcode{84ff545fb479a089f547e8fec9c654b66c975ba6d2627a8685cfeed88e6c8c83} and
+\pathcode{71ee18f943f3c121dbe9f0d2a899839a8be48c4c2bf69ad0218434e92baae6c6}.
+The validator nevertheless ended \pathcode{FAILED 1:0} after 11 minutes 35 seconds during final
+sealing.  The frozen runner invoked \pathcode{/usr/bin/printf -v}; \pathcode{-v} is a Bash-builtin
+option, not a coreutils option.  External printf therefore returned zero while writing the two
+bytes \pathcode{-v} to stdout and a warning to stderr, did not assign
+\pathcode{COMPLETION_MARKER}, and the next expansion failed as an unbound variable.  The partial
+root contains six of the required nine files and lacks its completion marker, scheduler-log hash
+record, and evidence hash closure.  It is consequently \pathcode{INVALID_EVIDENCE}; the two
+pre-seal JSON files are forensic corroboration only, not an accepted closure.  A focused
+executable regression reproduces the exact warning and unbound-variable failure on S6.  The S7
+repair replaces only that command with \pathcode{builtin printf -v} and adds the regression; the
+focused test, surrounding validator-contract tests, Python compilation, and Bash syntax check pass.
+The repair is committed on branch
+\pathcode{codex/rdiag-shared-dt-validator-seal-fix-20260905} as
+\pathcode{0a87fe50a47228c90a72d233615bee422fd2fe7a} (tree
+\pathcode{a911270714350b23987e13ffb44070fbe45d1e8d}) and is pushed at that exact remote SHA.
+Its immutable 4,266-file snapshot is
+\pathcode{source_snapshots/rdiag_shared_dt_late_angle_scale_0a87fe50a47228c90a72d233615bee422fd2fe7a};
+the source-manifest SHA-256 is
+\pathcode{065f6b6094b064f66975acdcb41745a4d94a8c58ee92a5ae51aca0be941ea02d}.
+An independent private Git reconstruction verified the entire snapshot, and both the live worktree
+and snapshot passed the frozen 596-test host suite plus helper compilation and all four runner
+syntax checks.  Independent specification, code-quality, scientific, and operational reviews found
+no remaining issue and approved the strict full S7 repetition.  No S6 closure is reused.  The exact
+registered commands, without extra \pathcode{sbatch} options, were submitted from the clean S7
+worktree as actual-anchor preflight job \pathcode{1847596} and numerical preflight job
+\pathcode{1847597}; their scheduler \pathcode{SubmitLine} values bind the S7 snapshot, commit,
+manifest, worktree, and, for the anchor, the unchanged data manifest.
 
 The completed prerequisites and diagnostics are the forward localization in job \pathcode{1836996}, the reviewed
 shared-DT-only warp-8 RMSNorm-forward control, its passing bounded smoke in job
@@ -2905,36 +3441,41 @@ validator \pathcode{1838966}, the valid matched intervention \pathcode{1839531},
 validator \pathcode{1840069}.  The remaining
 sequence is:
 \begin{enumerate}[leftmargin=1.8em]
-  \item test the narrow, checkpoint-compatible preserve-rotation candidate that changes the
-        effective angle scale from $H^{-1/2}$ to $0.5H^{-1/2}$ against repeated old-scale and
-        connected-zero controls at the same boundary-838 anchor; this test is separately
-        preregistered and non-authorizing;
-  \item only if that candidate passes its exact repeatability, isolation, liveness, health, and
-        prospective effect-size requirements, freeze its source and rerun all six gates, including
-        an entirely fresh 3300-update soak;
+  \item complete the in-flight S7 numerical and actual-anchor preflights, retain and review their
+        new closures, then run one S7-bound six-arm allocation and its fresh-node validator; the
+        S6 in-job result remains non-authorizing corroboration only;
+  \item only if the S7 validator accepts the exact repeatability, isolation, liveness, health, and
+        prospective effect-size evidence, implement and freeze the additive
+        \pathcode{shared_dt_v2} source, then rerun all six gates, including an entirely fresh
+        3300-update soak;
   \item build aggregate-v3 only after all six recursive seals validate, then recompute and pin the
         aggregate, all recipe digests, and all exact execution-manifest
         digests for that final source; and
   \item create the separate required production snapshot and invoke the
-        \pathcode{prepare-fresh} mode of \pathcode{submit_rdiag_shared_dt.py} only for
-        \pathcode{rdiag_kla_shared_dt_v1_750M} with train configuration
+        \pathcode{prepare-fresh} mode of \pathcode{submit_rdiag_shared_dt.py} only for the new
+        versioned \pathcode{rdiag_kla_shared_dt_v2_750M} with train configuration
         \pathcode{tsz128x4k_50B}; retain the supervisor-enforced \pathcode{standard},
         \pathcode{niah_single_1}, \pathcode{niah_single_1_8k}, \pathcode{niah_single_2},
         \pathcode{niah_single_2_8k}, \pathcode{niah_single_3}, and
         \pathcode{niah_multikey_1} evaluation modes.
 \end{enumerate}
 Job \pathcode{1835824}'s scientific failure invalidated the prior nine-workload lower bound;
-jobs \pathcode{1836996}, \pathcode{1837446}, \pathcode{1838750}, and \pathcode{1839531} have now
-completed the localization, replacement generation-zero, trigger-capture, and matched-intervention
-workloads.  From this point, even the optimistic path requires at least seven more successful
-scientific GPU workloads before production launch: one late-anchor candidate probe and the six
-fresh qualification gates.  Production training would be the eighth.  Since the
+jobs \pathcode{1836996}, \pathcode{1837446}, \pathcode{1838750}, \pathcode{1839531}, and
+\pathcode{1847039} have now completed the localization, replacement generation-zero,
+trigger-capture, matched-intervention, and source-matched replacement-candidate workloads.
+Jobs \pathcode{1846561} and \pathcode{1847039} returned provisional valid passes, but validators
+\pathcode{1846728} and \pathcode{1847464} respectively failed before validation and after
+scientific validation but before evidence sealing; neither cycle is externally accepted.  From
+this point, the optimistic path requires one complete S7 source-bound candidate cycle followed by
+at least six fresh qualification GPU workloads before production launch.  Production training
+would follow those gates.  Since the
 demonstrated six-gate control plane expands its six
 scientific gates to 20 Slurm jobs (six preparation jobs, two H200 control/submit allocations, six
-gate workloads, and six external attestors), the comparable operational lower bound is at least
-24 future scheduler jobs before production submission: one numerical preflight, one actual-anchor
-FSDP preflight, one candidate allocation, one candidate validator, and the 20-job gate control
-plane.  A held-out replication would increase that count.  Failed attempts \pathcode{1838085} and
+gate workloads, and six external attestors), after the already-submitted S7 preflight pair the
+comparable operational lower bound is at least 22 further scheduler submissions before production
+submission: S7 main, S7 validator, and the 20-job gate control plane.  A held-out replication would
+increase that count.
+Failed attempts \pathcode{1838085} and
 \pathcode{1838250} did not satisfy the trigger-capture stage.  This count excludes retries, additional
 discriminator arms, implementation-time GPU checks, held-out causal replication, and production
 requeues.
