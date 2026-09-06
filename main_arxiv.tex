@@ -82,44 +82,48 @@ knows which associations future queries will need. An update that is too timid p
 information; one that is too aggressive destroys useful memory.
 
 Delta-rule mixers make these edits more selective. DeltaNet first reads what the memory predicts
-for the current key and writes only the residual~\citep{schlag2021linear,yang2024parallelizing}.
-Gated DeltaNet~\citep{yang2024gdn} and KDA~\citep{kimiteam2025kimilinear} further decay stored
-content at scalar or channel-wise rates to prevent stale associations from persisting and
-interfering with future writes. However, their write strength is learned directly from the current
-token embedding, as the recurrent state contains no explicit record of how strongly past
-observations support an existing association. The model therefore cannot distinguish whether a
-large residual should
-revise a tentative association or be discounted because the existing association has been
-repeatedly confirmed.
+for the current key and writes only the residual~\citep{schlag2021linear,yang2024parallelizing},
+an update commonly interpreted as one online gradient step on the instantaneous squared prediction
+loss of a fast-weight memory. Gated DeltaNet~\citep{yang2024gdn} and
+KDA~\citep{kimiteam2025kimilinear} retain this residual write while adding Mamba-style state-space
+transitions~\citep{gu2023mamba,dao2024transformers} that decay stored content at scalar or
+channel-wise rates. Their transition and write
+are therefore typically understood through different lenses: state-space dynamics and online
+optimization, respectively. More importantly, their write gain is predicted from the current token
+representation rather than derived from explicit confidence in the stored association.
+Consequently, these models have no explicit mechanism for deciding whether a large residual should
+revise a tentative association or be discounted because the association has been repeatedly
+confirmed.
 
-We argue that uncertainty is the missing state variable in this model. The recurrent memory can be viewed as an
-estimate of a latent, non-stationary key--value map. Each token supplies a noisy observation of
-that map at one key, while the learned transition describes how the map persists or drifts between
-observations. This is an online filtering problem, where, under linear--Gaussian
-assumptions, the Kalman filter~\citep{kalman1960new} is the optimal recursive estimator.
-It tracks both the memory
-estimate and its covariance, balancing memory uncertainty against observation noise to set the
-strength of each correction. Each correction retains the familiar residual delta-write form, with
-greater write strength in uncertain directions and less where past evidence should be protected.
-From this observation, we introduce
-\emph{Kalman Delta Networks (KDNs)}, which track both the memory state and its uncertainty,
-allowing each update to balance accumulated evidence against observation reliability.
-From this perspective, DeltaNet, Gated DeltaNet, and KDA emerge as covariance-free approximations that retain different
-memory transitions while omitting this uncertainty recursion.
+\textbf{In this paper,} we provide a unified view of the recurrent updates in delta-rule mixers through a
+linear--Gaussian state-space formulation, under which uncertainty emerges as their missing state
+variable. Specifically, we model the recurrent memory as an estimate of a latent, non-stationary
+key--value map. Each token supplies a noisy observation of that map at one key, while the learned
+transition describes how the map persists or drifts between observations. Under linear--Gaussian
+assumptions, the Kalman filter~\citep{kalman1960new} is the optimal recursive estimator that
+propagates both the memory estimate and its covariance, balancing memory uncertainty against
+observation noise to determine the correction gain. The resulting update retains the familiar
+residual delta-write form while assigning greater
+weight to new evidence when the memory is uncertain and protecting associations supported by
+repeated observations. This formulation leads to \emph{Kalman Associative Memory}, which
+generalizes delta-rule mixers through explicit covariance tracking. DeltaNet, Gated DeltaNet, and
+KDA thus emerge as covariance-free approximations that retain different memory transitions while
+omitting this uncertainty recursion.
 
 The exact Kalman update, however, is not a practical linear-attention layer. It
 carries a dense $d_k\times d_k$ covariance per head, and its gain depends on a state-dependent
-Riccati recurrence that is poorly suited to efficient parallel scans. To make it tractable,
-we impose diagonal structure on the transition, process noise, and predictive covariance. Despite
-this restriction, each Kalman update still yields a dense posterior covariance. We therefore derive
-an online mean-field variational update that projects the posterior back onto the diagonal
-family by minimizing reverse KL. Conditional on the retained diagonal predictive prior, this
-projection preserves the exact one-step posterior mean. To mitigate excessive overwrite under this
-mean-field approximation, we introduce an information-scaling factor that calibrates the retained
-uncertainty. The resulting
-\emph{Diagonal KDN} maintains one uncertainty value per key channel and admits an
-associative scan with $O(d_k)$ auxiliary state, while \emph{Isotropic KDN} further ties these values
-to a single uncertainty scalar per head, requiring only $O(1)$ auxiliary state.
+Riccati recurrence that is poorly suited to efficient parallel scans. To make uncertainty-aware
+filtering practical, we introduce \emph{Kalman Delta Networks (KDNs)}, a family of scan-compatible
+approximations to Kalman Associative Memory. We develop two special cases. \emph{Diagonal KDN}
+imposes diagonal structure on the transition, process noise, and predictive covariance. Because
+each exact update still yields a dense posterior covariance, we derive an online mean-field
+variational update that projects the posterior back onto the diagonal family by minimizing reverse
+KL. Conditional on the retained diagonal predictive prior, this projection preserves the exact
+one-step posterior mean. To mitigate excessive overwrite under this approximation, we introduce an
+information-scaling factor that calibrates the retained uncertainty. Diagonal KDN maintains one
+uncertainty value per key channel and requires $O(d_k)$ auxiliary state per head, whereas
+\emph{Isotropic KDN} uses an isotropic covariance approximation, tying these values to a single
+uncertainty scalar per head and requiring only $O(1)$ auxiliary state.
 
 Empirically, under parameter-matched recurrent-only pretraining on
 FineWeb-Edu~\citep{penedo2024fineweb}, both KDN variants achieve lower WikiText and LAMBADA
@@ -246,6 +250,23 @@ $\ve{D}_t=\diag(\ve{\alpha}_t)$, giving each key channel its own decay rate
   scalar gate $\beta_t$ predicted from the current token. Because this gate does not depend on
   the evidence accumulated in memory, it cannot distinguish a well-supported association from
   an uncertain one.
+
+\paragraph{Mamba state-space models.}
+The Mamba family uses the selective linear state-space recurrence
+\begin{equation}
+  \ve{h}_t
+  = \ve{A}_t\ve{h}_{t-1}+\ve{B}_t\ve{x}_t,
+  \qquad
+  \ve{o}_t=\ve{C}_t^{\tr}\ve{h}_t,
+  \label{eq:mamba-ssm}
+\end{equation}
+where $\ve{A}_t$, $\ve{B}_t$, and $\ve{C}_t$ control retention, writing, and reading. Mamba-1
+makes these operations input-dependent~\citep{gu2023mamba}, while Mamba-2 connects the resulting
+selective recurrence to structured masked attention through state-space
+duality~\citep{dao2024transformers}. Mamba-3 adds exponential--trapezoidal discretization,
+complex-valued dynamics, and SISO and MIMO variants~\citep{lahoti2026mamba3}. Unlike the delta-rule
+mixers above, Mamba adds the control $\ve{B}_t\ve{x}_t$ directly rather than applying a
+key-conditioned residual correction.
 
 \paragraph{Notation.}
 In the following sections, $\widetilde{\ve{S}}_t$ denotes the latent random memory,
@@ -439,18 +460,20 @@ observation $v_{t,j}$ are jointly Gaussian. Conditioned on $(\mathcal{F}_{t-1},\
 \end{equation}
 Applying the Gaussian conditioning formula to each pair and stacking the columnwise posteriors gives
 \begin{equation}
-\begin{aligned}
+\begin{alignedat}{3}
   \widetilde{\ve{S}}_t\mid\mathcal{F}_t
-  &\sim\N_{\mathrm{col}}\!\left(\ve{S}_t,\ve{P}_t\right), \\
-  \text{where}\qquad
+  &\sim\N_{\mathrm{col}}\!\left(\ve{S}_t,\ve{P}_t\right),
+  \qquad\text{where}\qquad &
   \ve{S}_t
   &=\widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr},
-  \qquad
-  \ve{P}_t=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t, \\
+  \qquad &
+  \ve{P}_t
+  &=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t, \\
+  &&
   \ve{\kappa}_t
   &=\frac{\widehat{\ve{P}}_t\ve{k}_t}
   {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}.
-\end{aligned}
+\end{alignedat}
   \label{eq:kalman-update}
 \end{equation}
 Thus the posterior mean is a residual write: the filter adds only the part of the observed value

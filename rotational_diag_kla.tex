@@ -120,7 +120,9 @@ angular content:
   \theta_{thj} &= \theta_{0,hj}+\sum_{s=1}^{t}\Delta\theta_{shj}pmod{2\pi}.
   \label{eq:m3-phase}
 \end{align}
-The cumulative phase is positive.  For every selected adjacent pair, the SISO kernel applies the
+The cumulative phase is positive.  Its Triton loop accumulates in FP32, but the combined training
+wrapper casts raw angles to BF16 and materializes phase and final carry in that input dtype; this is
+not an FP32-storage guarantee.  For every selected adjacent pair, the SISO kernel applies the
 same $R(+\theta_{thj})$ to $Q_t$ and $K_t$.  Consequently the same-token dot product is unchanged,
 whereas a cross-token term obtains the relative rotation
 \begin{equation}
@@ -159,10 +161,13 @@ reverse cumulative sum.  It produces both
     &=\sum_j\overline{\Delta\theta}_{thj}\,\pi\tanh(e_{tj}).
 \end{align}
 Here the sum over $h$ is the backward of the head expansion of the shared raw angle rows.  The
-combined implementation explicitly adds
-$\overline{DT}^{\mathrm{angle}}$ to the $DT$ gradient from the radial SSM dynamics.  This is a
-coherent choice for a shared physical discretization clock, but it is intentionally not the RDiag
-E2 gradient contract.
+combined implementation explicitly adds $\overline{DT}^{\mathrm{angle}}$ to the direct
+trapezoidal-write $DT$ cotangent; ordinary autograd subsequently adds the
+$A\,\overline{ADT}$ contribution through $ADT=A\,DT$.  This is a coherent choice for a shared
+physical discretization clock, but it is intentionally not the RDiag E2 gradient contract.
+The Mamba-2/Mamba-3 comparison here is architectural, not a matched causal rotation ablation:
+Mamba-3 also removes Mamba-2's convolutional path, makes $A$ token-dependent, normalizes and
+biases $B/C$, and changes the write discretization.
 
 \section{RDiag KLA with the E2 bounded clock}
 \label{sec:rdiag}
@@ -373,7 +378,9 @@ Concretely, RDiag should take the following from Mamba-3:
         dense recurrent rotation;
   \item use a bounded angular rate $\pi\tanh(e)$ and one token/head clock broadcast over pair modes;
   \item share the compact angle projection across heads, while permitting head-specific timing;
-  \item accumulate phase and streaming carry in FP32, with a specified modular reduction contract;
+  \item use FP32 phase arithmetic and, unlike the installed training wrapper, retain the
+        materialized phase and streaming carry in FP32 under a specified modular reduction
+        contract;
   \item treat every dependency of a shared clock explicitly in backward and test cancellation-heavy
         reductions against the executable reference; and
   \item retain half- or full-prefix rotary layouts rather than forcing every key lane to rotate.
@@ -783,37 +790,62 @@ form
 \begin{equation}
   \alpha_{th}=\exp\!\left[-\exp(A_{\log,h})DT_{th}\right],
 \end{equation}
-and its bias-free pair-angle projection follows the installed Mamba-3 construction,
+and its bias-free pair-angle projection follows the installed Mamba-3 construction with an
+additional versioned head scale.  For the b37 v2 candidate,
 \begin{equation}
-  \delta_{thj}=\pi\tanh(e_{tj})DT_{th},
+  e_{tj}=(W_{\rm angle}x_t)_j,\qquad
+  e^{\rm eff}_{tj}=0.5H^{-1/2}e_{tj},\qquad
+  \delta_{thj}=\pi\tanh(e^{\rm eff}_{tj})DT_{th},
   \qquad
   \phi_{thj}=-\sum_{s\leq t}\delta_{shj},
   \label{eq:shared-dt-phase}
 \end{equation}
 with one angle value per token/pair broadcast over heads, a headwise $DT$, a cumulative phase scan,
 and the corresponding negative reverse-suffix backward.  This is the literal RDiag source
-convention; installed Mamba-3 uses the positive scan.  The difference is the exact gauge
-$W_{\rm angle}\mapsto-W_{\rm angle}$ and therefore cannot explain a gradient-norm change.
+convention; installed Mamba-3 uses the positive scan.  The two parameterized model families are
+related by the gauge transform $W_{\rm angle}\mapsto-W_{\rm angle}$; exact continuation of an Adam
+checkpoint also negates that parameter's first moment.  This rules out a structural sign error, but
+flipping only the scan sign at one fixed, untransformed checkpoint can change outputs and gradient
+norms.
 The relevant difference from the E2 model is instead that the angle and $DT$ paths remain live and
 the same shared $DT$ controls radial decay and rotation.
+Writing $s_H=0.5H^{-1/2}$ for v2 and bars for cotangents, the exact phase branch contributes
+\begin{align}
+  \overline{\delta}_{thj}
+    &=-\sum_{u\geq t}\overline{\phi}_{uhj},\\
+  \overline e_{tj}
+    &=s_H\pi\operatorname{sech}^2(s_He_{tj})
+      \sum_h DT_{th}\overline{\delta}_{thj},\\
+  \overline{DT}^{\,\mathrm{phase}}_{th}
+    &=\pi\sum_j\tanh(s_He_{tj})\overline{\delta}_{thj}.
+  \label{eq:shared-dt-vjp}
+\end{align}
+The first expression exposes the reverse suffix accumulation, the second the head reduction, and
+the third the phase contribution added to the radial $DT$ gradient.  Existing aggregate category
+norms do not separately observe those three effects.
 
 \subsection{Issue, diagnosis, and completed work}
 
 \paragraph{Two distinct problems were found.}
 First, the original per-microbatch global-gradient limit of 10 was not a valid gate: all 24 measured
 model/batch observations exceeded 10, including stock DiagKLA at 14.001--14.232.  Stock DiagKLA and
-the bounded-clock layer were also architecture-mismatched controls.  Second, the shared angle
-projection creates genuine coherent amplification when its output is broadcast over all recurrent
-heads and differentiated through the cumulative rotation.  This is a model-parameterization issue,
-not evidence of a faulty radial or phase kernel.
+the bounded-clock layer were also architecture-mismatched controls.  Second, matched interventions
+localize genuine amplification to the live shared-angle cumulative-rotation branch.  Its output is
+broadcast over recurrent heads and its VJP contains both a head reduction and a reverse temporal
+suffix sum, but the retained evidence does not yet separately measure head coherence, suffix
+growth, or the phase contribution to the shared-DT gradient.  This is evidence for a
+model-parameterization or optimization issue, not for a faulty radial or phase kernel, while the
+exact causal decomposition remains open.
 
 On the same eight real FineWeb batches, the unmodified shared-DT model produced global norms
 34.596--45.300 (median 38.758), versus a DiagKLA median of 14.096.  Disabling rotation returned the
 median to 14.180, while detaching only the angle path gave 18.035 and zero angle initialization
 still gave 25.593.  A phase-only $DT$ cap of 0.1 was insufficient.  Scaling the effective angle
 preactivation by $1/\sqrt{16}=0.25$ gave median 16.765 and shared/Diag median and 95th-percentile
-nearest-rank ratios 1.191 and 1.261, with live angle and $DT$ gradients.  These interventions isolate
-head-shared cumulative rotation as the amplification source.
+nearest-rank ratios 1.191 and 1.261, with live angle and $DT$ gradients.  These interventions
+localize amplification to head-shared cumulative rotation, but do not alone identify which of its
+head sum, suffix accumulation, angle VJP, or phase-to-$DT$ VJP is sufficient for the late
+instability.
 
 \paragraph{Completed engineering work.}
 The Mamba-2/Mamba-3 source audit, exact H200 measurement, rotation/gradient ablations, matched-
@@ -3466,11 +3498,35 @@ The two accepted preflight closures and this operator record all explicitly carr
 production-training launch.  The record's exact 12-token
 main command, with no \pathcode{sbatch} option, was submitted once as job \pathcode{1847784}; the
 scheduler-recorded \pathcode{SubmitLine}, worktree, source, data, and both closure pins match the
-operator record.  It began running at 00:40:07 UTC on
-\pathcode{h200-053-020,h200-140-109}.  Its run root is
+operator record.  It ran from 00:40:07 UTC for 1 hour 43 minutes 44 seconds on
+\pathcode{h200-053-020,h200-140-109} and completed \pathcode{0:0}.  Root, batch, extern, and all
+29 numbered steps completed with exact task vector
+\pathcode{2,2,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2,16,2,2,2}; the completion
+marker occurs exactly once and scheduler stderr is empty.  Its run root is
 \pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/diagnostic_runs/late_angle_scale_0a87fe50a472_1847784}.
-The job remains \pathcode{RUNNING}; no main result, accepted closure, or fresh-node validator exists
-yet, and that validator has not been submitted.
+All 96 rank records report eight committed updates at boundaries 839--846, terminal completion,
+and no global non-finite loss decision.  The non-authorizing summary reports
+\pathcode{VALID_PASS}, exact A1/A2 repeatability, valid boundary-839 scale isolation, matched
+topology, causal interpretation allowed, and empty criterion/evidence failure lists.  Its SHA-256
+is \pathcode{ba980ce6045b0ec84ab31ca4b37a4ecc56414240b82388397afb19584668d438}; the 226-member
+artifact inventory SHA-256 is
+\pathcode{774fb297aec553de0e0ab3e335d5f835626a99c636c387c31c71357f3501ccfc}, and the pre/post
+input inventories are byte-identical at SHA-256
+\pathcode{62ce767d73abd2b8528444db5f11215a8eb1bda5c4c3188e5e181a4db6457f42}.
+After an independent terminal audit recomputed every inventory member, fresh-node validator job
+\pathcode{1848162} was submitted with the main nodes as its sole scheduler exclusion.  It completed
+\pathcode{0:0} in 11 minutes 46 seconds on the disjoint node \pathcode{h200-178-069}.  The exact
+nine-file validation root is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v1/diagnostic_runs/late_angle_scale_0a87fe50a472_1847784_independent_validation};
+all members are mode-0400, single-link files, and its evidence list recomputes exactly (list-file
+SHA-256 \pathcode{779d58728154d0e12de6315bd6196be64e697d1d5fc712858f813d647b16afc7}).
+The validation result is \pathcode{VALID} at SHA-256
+\pathcode{6cc0a46b2f801bf40eaa315fad49f9e3788911bf50b0b6b1125cdcc38a96c036}; the acceptance result
+is \pathcode{ACCEPTED} at SHA-256
+\pathcode{d33a913fa67915812e5f548b790fe20d24ad672fe29bf4fef422971fbdc87542}.  Validator stdout is
+exactly the sole completion-marker line and stderr is empty.  Independent replay therefore accepts
+S7 commit \pathcode{0a87fe50a47228c90a72d233615bee422fd2fe7a} as the implementation base.  The closure remains
+explicitly \pathcode{authorizing=false}: it permits v2 implementation work, not production training.
 
 A broader preparatory 539-test host baseline also exposed one pre-existing, platform-sensitive
 test-harness defect: 531 tests pass and seven skip, while
@@ -3481,7 +3537,7 @@ the claim-and-copy staging cleanup before pointer commit rather than during the 
 post-commit retention cleanup.  The resulting ordinary checkpoint error is therefore correct;
 the future v2 branch must scope the injection to the retained victim directory's device/inode and
 assert the new pointer before the resume check.  This host-test repair is separate from the frozen
-S7 diagnostic source and does not alter the in-flight experiment.
+S7 diagnostic source and does not alter the completed and externally validated experiment.
 
 The completed prerequisites and diagnostics are the forward localization in job \pathcode{1836996}, the reviewed
 shared-DT-only warp-8 RMSNorm-forward control, its passing bounded smoke in job
@@ -3495,26 +3551,488 @@ implementation surfaces for the additive version are
 \pathcode{lit_gpt/rdiag_shared_dt_training_health.py}, \pathcode{lit_gpt/rdiag_checkpoint.py},
 \pathcode{pretrain.py}, \pathcode{scripts/train/rdiag_kla/rdiag_recipe.py}, and the adjacent
 campaign, source-gate, qualification, authorization, job-control, run-guard, supervisor, and
-evaluation modules.  These changes must be made in a new worktree based on the validator-accepted
-S7 commit; the frozen S7 worktree above must remain untouched.  The remaining
-sequence is:
+evaluation modules.  These changes were made in a new worktree based on the validator-accepted
+S7 commit; the frozen S7 worktree above remains untouched.  That worktree was created
+on branch \pathcode{codex/rdiag-shared-dt-v2-20260906} at
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v2/source_worktrees/rdiag_shared_dt_v2_implementation_20260906},
+with initial HEAD exactly \pathcode{0a87fe50a47228c90a72d233615bee422fd2fe7a}.
+The implementation plan is
+\pathcode{docs/plans/2026-09-06-rdiag-shared-dt-v2-production-plan.md} in that worktree.
+The live namespace-aware execution ledger is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v2/releases/v2_b37b3c4d4205ccb04ade7000cb7f3b16c42ca547/OPERATOR_STATUS.md};
+its empirically corrected allocation count supersedes the static estimate frozen in the source plan.
+All implementation and host-verification slices are frozen in reviewed source commit
+\pathcode{b37b3c4d4205ccb04ade7000cb7f3b16c42ca547}, tree
+\pathcode{4c2b2bd8cb645d342c0e605a926ccb474c961024}, and the exact pushed branch above.  The immutable
+qualification snapshot is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v2/releases/v2_b37b3c4d4205ccb04ade7000cb7f3b16c42ca547/qualification_source_parent/source_b37b3c4d4205ccb04ade7000cb7f3b16c42ca547};
+its 4290-file source manifest has SHA-256
+\pathcode{94207969a5281d42064006e7b9b177438bfba6589eb27eb4841e78a243628211}.  Independent reopening
+revalidated the commit, manifest digest, and complete file closure.  Lustre used the documented
+retained-complete-read-only publication fallback, so this qualification snapshot is immutable but
+is not itself a production snapshot or authorization.  The earlier Lustre-only checkpoint-test
+failure was repaired by forcing the
+\pathcode{renameat2(RENAME_NOREPLACE)} fallback, scoping the injected unlink failure to the
+retained victim generation's device/inode, and proving that the new pointer resolves before
+retention reconciliation.  The complete checkpoint file then reported 81 passes and three skips;
+after the versioned identity integration, the combined checkpoint, generation, and pretrain suite
+reported 128 passes and three skips.  The additive layer accepts only the exact
+\pathcode{shared_dt_v1} and \pathcode{shared_dt_v2} strings, retains the v1 scale
+$H^{-1/2}$, and assigns v2 the sole changed scalar $0.5H^{-1/2}$ at the existing raw-angle
+multiplication site before the unchanged FP32 \pathcode{tanh}.  Four field-identical v2 configs,
+apart from name and clock mode, dispatch to the same layer; tests establish identical parameters,
+buffers, RNG consumption, optimizer topology, and parameter counts.  The RMSNorm policy,
+first-update health, checkpoint-run, and first-update-marker identities now have explicit v2-family
+schemas.  Crossed model-name/mode, schema/mode, v1/v2 resume, and string-subclass aliases fail
+closed before Lightning payload loading, while pinned v1 canonical checkpoint and health bytes
+remain unchanged.  Independent core/health and checkpoint/pretrain reviews both returned
+\pathcode{APPROVED}; no file below \pathcode{lit_gpt/kla_ops/} changed.  Parallel v2
+recipe/catalog identities, separate H200 numerical and train-smoke harnesses, all four qualification
+gates, six-seal aggregation, exact authorization, run guard, supervisor, dedicated v2 submitter,
+and full seven-mode evaluation path are implemented.  Exact family maps choose one v1 or v2
+runner and reject crossed schemas, model names, checkpoints, manifests, seals, and string
+subclasses before side effects.  The existing v1 submitter and runner remain byte-identical to the
+accepted base.
+
+The first full broad run on Lustre reported 1125 passes, seven skips, and three failures.  Root-cause
+tracing found test assumptions rather than production-code defects: one source-snapshot assertion
+assumed atomic no-replace rename instead of the documented retained-read-only Lustre fallback, a
+data-manifest test requested a 1 ms mtime mutation on a whole-second-resolution mount, and a
+pretraining source assertion still expected the retired cross-family recipe lookup.  The tests now
+validate both snapshot publication success dispositions, force and verify a distinct filesystem
+timestamp, and require manifest-schema-to-family-to-recipe lookup.  The merged regressions pass
+3/3 on Lustre; the clean full rerun reports 1132 passes and three skips.  All 55 changed or new
+Python files compile, the new JSON parses, eight shell or sbatch files pass syntax checks,
+\pathcode{git diff --check} is clean, and \pathcode{lit_gpt/kla_ops/} still has no diff.  An
+independent whole-diff review found no critical or important issue and returned \pathcode{READY}.
+The 266.7 GiB corpus/tokenizer closure was first hashed inside the Codex UID namespace into
+data-manifest SHA-256
+\pathcode{adc7ad730a1d4dfcf16721733bcfca93d70c8108d7a7ec7f6eabafd3d66e3466}.  Production-H200
+campaign \pathcode{b76e18cce1d842618b910ed164dfa9b2}, execution digest
+\pathcode{3cb5cab2c3b671e25322222fb3f50de4bbff445ae55aa35a93c6e9352aafa90f}, was submitted as
+one-H200 job \pathcode{1849816}; it failed closed in 31 seconds before the scientific test.
+Diagnostic job \pathcode{1849835} established the exact namespace crossing: the manifest recorded
+data and tokenizer owner UID/GID 0, whereas the compute node correctly observed UID/GID 741838.
+No data bytes or source identity differed.  Compute-side manifest regeneration job
+\pathcode{1849849} completed in 44m35s and produced corrected manifest SHA-256
+\pathcode{47e8650e20025ce8dc3d2f261b25f1493b991b34f466e644b7eb7795659641e7}.  Compute-side
+preparer \pathcode{1850489} then completed and created fresh campaign
+\pathcode{4234b79ab0a8440f9e1532ae0baf59c8}, execution digest
+\pathcode{0fad65d66b54fc5d618378a1ff6c686f564f684cc32eac5683826c98639a2e53}.  Its exact emitted
+submission became workload \pathcode{1850491}, which completed in 29m09s on
+\pathcode{h200-046-019}; both numerical cases passed, and all source, runtime, cleanup, and result
+checks returned zero.  Fresh external attestor \pathcode{1850765}, submitted with that workload node
+excluded, completed in 46m26s on the disjoint node \pathcode{h200-042-061}.  It rehashed the full
+corpus and published the read-only production-H200 seal with SHA-256
+\pathcode{65fbe8abc741b2f2f08e4f3d5536e28178b161bd219c6a29b6e284a1529cc463}.  Independent
+third-node control job \pathcode{1851164} then reopened the seal on \pathcode{h200-004-175} and
+returned \pathcode{VALID_PASS}.  The production-H200 gate is therefore accepted.  Compute-side
+preparers \pathcode{1851167}--\pathcode{1851171} all completed \pathcode{0:0} and emitted immutable
+execution manifests for the same campaign.  Their exact submission vectors became train-smoke,
+checkpoint-fault, authenticated-resume, gradient-A/B, and two-node 3300-update-soak workloads
+\pathcode{1851172}--\pathcode{1851176}.  Train-smoke job \pathcode{1851172} and checkpoint-fault job
+\pathcode{1851173} completed \pathcode{0:0} in 8m42s and 4m52s, respectively, and each published a
+mode-0400 passing result.  Their node-excluding external attestors
+\pathcode{1851298} and \pathcode{1851291} completed \pathcode{0:0} on
+\pathcode{h200-094-088} and published the train-smoke and checkpoint-fault seals with SHA-256
+\pathcode{fa8812b932666aa3c654c5e724236c31ff057c844d7c71b497034156842ad830} and
+\pathcode{3e15913d33b459ae293f1dbcd0542ede550b778deb211b2fcc3e755da60eada4}, respectively.
+The two-node soak \pathcode{1851176} ran on
+\pathcode{h200-053-020,h200-124-110}; it subsequently failed closed \pathcode{1:0} after 22m33s.
+Its authenticated journal contains 904 sequential finite updates through iteration 1808 with zero
+health failures; the next update was rejected because its pre-clip global gradient exceeded the
+declared limit 10.  The sole retained scientific artifact is that mode-0400 journal, with SHA-256
+\pathcode{ddefb5c6d8d15eab251ed84523f021dc19a6a5b1c7e4198eee6e5657ea0fcd0e}.
+Cleanup completed, but no soak result or seal was published.  This is a scientific
+gate rejection, not a scheduler failure, and the attempt will neither be attested nor reused.  Resume
+\pathcode{1851174} and gradient-A/B \pathcode{1851175} started together at
+\pathcode{2026-09-06T09:23:02Z} on \pathcode{h200-094-088} and
+\pathcode{h200-052-125}, respectively; both first reverified the immutable b37 source snapshot.
+Gradient-A/B completed \pathcode{0:0} in 6m21s with passing result SHA-256
+\pathcode{68734fcfcf78dfcbecc74b179a35d0fc3a79b5cbdc5edb835107c8bc00fd007c}; its disjoint-node
+attestor \pathcode{1851656} then completed \pathcode{0:0} on \pathcode{h200-053-020} and published
+seal SHA-256 \pathcode{85ea2ced80e2e43bedff943edd2f40e5160ff8676b07bc8304c484be65a7eac9}.
+Authenticated resume completed \pathcode{0:0} in 12m10s after both its fresh and authenticated
+resumed segments passed, publishing result SHA-256
+\pathcode{05ae105d9e81e13439cf77b2d1fdacf9a8c8f7e571e580dd01317fc1247e4f86}; its node-excluding
+attestor \pathcode{1851744} completed \pathcode{0:0} on \pathcode{h200-048-224} and published seal
+SHA-256 \pathcode{6b57da131dcc81a89f45ddcf34ac46d3e6ec930a14088bb88a475b5da54160aa}.
+Thus five of six external gate seals are accepted; only a scientifically acceptable replacement soak
+lacks a seal.  No production training job is submitted; the state remains non-authorizing.
+
+One production-launch integration risk is now explicit.  Final \pathcode{prepare-fresh} must run in
+the namespace that observes the compute-authored numeric UID/GID data witness, while its frozen
+source verifier also performs an authenticated \pathcode{git ls-remote}.  That Git subprocess
+intentionally removes every proxy variable.  A read-only reproduction of its exact sanitized query
+on the login side timed out after 35 seconds, whereas the earlier proxy-routed remote query passed.
+Compute-side exact-verifier probe \pathcode{1851318} then failed \pathcode{1:0} after 25 seconds on
+\pathcode{h200-094-088} at the sanitized authenticated \pathcode{git ls-remote}, with empty stdout.
+Together with the login-side timeout, this closes the environment search: no tested namespace can
+both reobserve the compute-owned data witness and satisfy the frozen network check.  The
+qualification workloads remain valid evidence, but production launch now requires a reviewed source
+correction and complete requalification; no verifier bypass is allowed.
+A separate correction worktree developed a short-lived Ed25519 SSHSIG witness
+that binds the authenticated remote ref to the exact commit, tree, source manifest, campaign,
+aggregate, execution manifest, and launch mode, with an immutable one-use nonce claim.  Independent
+review first found two pre-submission races: freshness after nonce burn and binding the held claim
+directory to the same control-root inode through submission.  The first repair passed 64 focused
+and 240 adjacent host tests, and an explicit-config, proxy-scoped read-only query against the exact
+b37 branch succeeded in pueue task \pathcode{4531}.  A second independent review correctly rejected
+that revision because public-repository \pathcode{git ls-remote} need not invoke the credential
+helper, the validated GitHub configuration pathname remained mutable before child execution, and
+freshness was not yet the last check at the actual \pathcode{sbatch} spawn boundary.  A direct
+one-call GitHub GraphQL prototype in pueue task \pathcode{4533} did prove authenticated viewer
+\pathcode{ngocbh} and returned the exact b37 branch, commit, and tree.  The current repair therefore
+replaces \pathcode{ls-remote} with that authenticated query, supplies it from a private stable
+snapshot of \pathcode{hosts.yml}, isolates GitHub CLI state/cache writes in the same transient
+directory, and moves freshness into the final pre-spawn callback.  Final independent review returned
+\pathcode{READY}: 69 focused and 286 focused-plus-adjacent tests pass, compilation and diff checks
+are clean, and post-fix authenticated pueue task \pathcode{4540} returned the exact pushed branch,
+commit, and tree without leaving a caller-directory state artifact.  The correction is committed
+and pushed on branch \pathcode{codex/rdiag-shared-dt-v2-remote-witness-20260906} at commit
+\pathcode{eea823e3dcdcb051ff256299a196a888f39b6ea0}, tree
+\pathcode{e5a75ea5f2fa93442795f340bc9251fc35bb1e1a}.  A second reviewed commit then closed the
+pre-freeze and launch-control gaps: canonical per-gate submit evidence, exact argv/comment/digest
+rederivation, all-user exact-name scheduler checks, active-lease-bound v2 adoption, protected path
+lineages, aggregate-output race closure, and planner/submitter parity.  That 12-file change is
+committed and remotely verified at
+\pathcode{c721817db9fbf8f7dff4c48850c15be34ef45549}, tree
+\pathcode{c6cbf2620f6124ebf130a256befa6325ff001eaf}; 122 focused/bounded/remote tests and 147
+legacy-adjacent tests pass, with one expected skip.  This is not a production authorization: the
+new source still requires an evidence-supported stability correction and a completely fresh
+qualification campaign rather than an amendment to b37 evidence.
+
+The non-authorizing update-905 capture implementation is independently reviewed and frozen on
+branch \pathcode{codex/rdiag-shared-dt-v2-soak905-diagnostic-20260906} at commit
+\pathcode{b1b46f491f274a349728cf77255cce9a9028054e}, tree
+\pathcode{263c9dab0e0fc4cccc9000abfba34a536801a779}.  Its four diagnostic-only files passed 22
+focused and 166 focused-plus-adjacent host tests; production model, pretraining, launcher, and soak
+gate files have zero diff from b37.  The immutable 4,294-file snapshot is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v2/}\
+\pathcode{diagnostic_source_snapshots/soak905_b1b46f491f274a349728cf77255cce9a9028054e},
+with source-manifest SHA-256
+\pathcode{c97683c8c23c980d4fd6bfa1a22d7c3629a8c38ecc8dbd6a99bcca50da99816d}.
+It retains every boundary, the exact crossing microbatches and their pre-forward RNG states,
+gradient categories and top parameters, a pre-update anchor, and eight committed successors while
+preserving clipping at 1.0.  Two-node 16-H200 job \pathcode{1852006} completed \pathcode{0:0} in
+20m16s on \pathcode{h200-130-169,h200-231-137}, with immutable-source verification on both nodes
+before and after capture.  A field-by-field comparison of boundary, iteration, global pre-clip
+norm, health-failure count, and alpha counts found diagnostic boundaries 1--904 bit-for-bit
+identical to all 904 retained rows of failed production soak \pathcode{1851176}.  Boundary 905
+then reproduced the finite pre-clip norm \pathcode{10.604082107543945}.  Clipping kept every
+parameter and health observation finite, but the eight-successor window rules out a harmless
+one-batch excursion: boundaries 908--913 crossed again and boundary 913 reached
+\pathcode{2458.377197265625}; seven of boundaries 905--913 would fail the declared limit 10.  At
+the first crossing, reconstructed category norms were 6.36818 for the rotational-angle weights,
+4.34821 for DT weights, and 7.27711 for all other parameters, with the layer-9 angle projection the
+largest retained parameter contribution.  This is reproducible escalating training instability,
+not scheduler failure; whether its trigger is data-specific or v2-scale-specific is not established
+by this run alone.
+
+The completed non-authorizing closure contains 141 mode-0400 inventoried files totaling
+15,555,765,453 bytes.  Its journal SHA-256 is
+\pathcode{37572adf7e3594238ab87fde27318d2ca20f011dd14b7cc399e4678adec875aa}, its anchor-manifest
+SHA-256 is \pathcode{e30b4432d0e8e1b53fa41b83048be173c29dec4e5b1c2b5d8dcd2ec0bc040abf}, its summary
+SHA-256 is \pathcode{6e882b60495cfd1131365a280022156a43e8faf178fafe68fc481eca27ab1a41}, and its closed
+inventory SHA-256 is \pathcode{e3276e7489e0798509077e87c4822b89e260ef372a08efbfa1d7c727575faae3}.
+The summary is explicitly \pathcode{authorizing:false} with status
+\pathcode{completed_crossing_window}; it cannot issue a production result or seal.  Exact
+anchor-restored \pathcode{v2-A1}, \pathcode{v1-scale}, and \pathcode{v2-A2} replay was therefore
+run to isolate the effect of the rotational scalar.
+
+That replay is now implemented, independently reviewed, committed, and pushed on the same
+diagnostic branch at commit \pathcode{016a5ab9018774fae6ddd303c946b832e2a188a6}, tree
+\pathcode{01b74f1ad623c3c58762e5f9f6066d2acbc4c638}.  Relative to capture commit
+\pathcode{b1b46f491f274a349728cf77255cce9a9028054e}, it adds exactly a replay plan, helper, isolated
+Slurm runner, and host test; no production source changes.  The 33 combined capture/replay host
+tests pass, and independent review returned \pathcode{READY} after an initial capture-only writer
+schema mismatch was repaired.  Its immutable 4,298-file snapshot is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v2/}\
+\pathcode{diagnostic_source_snapshots/soak905_replay_016a5ab9018774fae6ddd303c946b832e2a188a6},
+with source-manifest SHA-256
+\pathcode{0abe22cf6c395902dcbb41bedff97486d9d36e6babd6366a3d03e400498db6b4}.  External-bootstrap
+source verification passed, as did all 31 snapshot-applicable tests; the two deselected tests
+require a live Git worktree.  Two-node, 16-H200 replay job \pathcode{1852750} completed
+\pathcode{0:0} in 5m22s on \pathcode{h200-153-168,h200-252-145}, with both capture nodes excluded.
+Both v2 references were bit-exact to each other and to every rank of the captured boundary-905
+backward, and no optimizer step was executed.  At effective angle scale 0.125, the reconstructed
+global norm was \pathcode{10.604082390132142}; changing only to the older 0.25 scale raised it to
+\pathcode{12.423034238808185}, a factor of 1.17153.  The corresponding angle, decay, DT-bias,
+DT-weight, and other category norms changed from 6.36818, 0.08549, 0.14930, 4.34821, and 7.27711
+to 6.55957, 0.10176, 0.21774, 5.37835, and 9.07301.  Thus the larger v1 scale causally worsens this
+boundary, but the present v2 scale still violates the production limit and is not acceptable.
+The non-authorizing summary, validation, and closed-inventory SHA-256 values are respectively
+\pathcode{82c22cee330756b2527bbc77e6fa39a2ad40f417042ec548a16039a2cc8914ed},
+\pathcode{1a575a7c565bbae0896402be7e6d9affb70040f9f0d6bc8de0782b4d538dd7ee}, and
+\pathcode{5ae2c8adaff6d531c4a74919235c9402d46ca46b78d60f8c3e13a7e7da892ce5}.
+
+The next non-authorizing discriminator is implemented, reviewed, committed, and pushed, but is not
+a source correction.  It is isolated in worktree
+\pathcode{rdiag_shared_dt_v2_stability_screen_20260906} on branch
+\pathcode{codex/rdiag-shared-dt-v2-stability-screen-20260906}, based exactly on replay commit
+\pathcode{016a5ab9018774fae6ddd303c946b832e2a188a6}.  Its four-file diagnostic-only delta is frozen
+at commit \pathcode{470d3af6126ea45181c5e8b6e4bb1caa98e1ec34}, tree
+\pathcode{e4b201f25748d9d81a5647c1d1f096d1f33ca22b}; independent review returned \pathcode{READY}
+with no Critical or Important findings.  The final adjacent suite passed 43 tests with one known
+base-inherent deselection.  The immutable 4,302-file source snapshot is
+\pathcode{diagnostic_source_snapshots/stability_screen_470d3af6126ea45181c5e8b6e4bb1caa98e1ec34},
+with source-manifest SHA-256
+\pathcode{377efb243daf0fc86610654009a75d998833067f62b2926670f4e56b4b86546d}; an independent
+commit-derived verifier and its 42 snapshot-applicable tests passed, with only two tests requiring
+a live Git worktree deselected.  All 16 loader snapshots and 144 retained pre-forward RNG states
+reopen successfully.  After an all-user exact-name duplicate check returned no rows, two-node,
+16-H200 job \pathcode{1853781} was submitted once at 12:28 UTC under \pathcode{h200_dev}, with
+both capture hosts excluded independently in the submission and frozen runner.  It started on
+\pathcode{h200-046-153,h200-094-010} and failed \pathcode{15:0} after 8m05s.  All 16 ranks first
+reproduced boundary 905 exactly at reconstructed global norm
+\pathcode{10.604082390132142}, but that boundary uses the retained tensor bundle.  On the first
+live successor fetch, boundary 906, global rank 1 reported that DataLoader child PID 815552 died
+with \pathcode{SIGSEGV}; \pathcode{--kill-on-bad-exit=1} then terminated the other ranks.  Each A1
+journal therefore contains exactly one valid boundary-905 row, while no boundary-906 row, rank
+result, summary, output validation, closed inventory, or terminal marker exists.  Job 1853781 is
+partial non-authorizing infrastructure-failure evidence and cannot select an intervention.
+
+The failure is localized to the deep four-worker
+\pathcode{StatefulDataLoader}/HF-Parquet state restore, not teardown, FSDP, the captured RNG, or
+the boundary-905 computation.  The capture used one fresh loader continuously and the exact replay
+used retained tensors with no loader; only the screen called \pathcode{load\_state\_dict} on the
+saved 1,810-yield multiworker cursor.  The production source itself documents that this restore
+path can segfault a worker.  Retrying the same code or merely excluding the host is therefore
+rejected.
+
+The repaired diagnostic is complete, pushed, and independently accepted at commit
+\pathcode{c0aa93389e4d28ee9021bf3e0dff573817d39afe}, tree
+\pathcode{bd2d32c32e65e7cc7e059fdd869835538a3589ae}, in the same worktree and branch.  Its focused
+suite passed 19 tests; the combined scoped/adjacent suite passed 51 tests with one historical
+cumulative-branch-only test deselected, and both specification and quality review reported no
+findings.  Before CUDA/NCCL, all 16 ranks now construct fresh pinned four-worker loaders, discard
+the first 1,808 batches, materialize batches 1,808--2,415 (boundaries 905--1208), require all 18
+batches for boundaries 905--913 to match the retained capture byte-for-byte, synchronously close
+every worker, and seal one rank-local read-only tape.  The FSDP phase independently rehashes that
+tape and creates no loader.  Retained RNG is restored through boundary 913, while every later shared
+arm boundary carries cross-arm batch and RNG witnesses.  Exact rank/node mapping, isolation on
+entry and exit, cache separation, cleanup-before-completion, and the 126-file/125-record terminal
+closure are all fail-closed.  Its immutable 4,302-file snapshot is
+\pathcode{diagnostic_source_snapshots/stability_screen_c0aa93389e4d28ee9021bf3e0dff573817d39afe},
+with source-manifest SHA-256
+\pathcode{fd03d23ae4b4650f11ee9db194af937ed5088b49fa154bb2e7fc2fe18f177b7a}; a separate
+commit-derived private rematerialization verified every file and mode.  The first probe allocation,
+\pathcode{1854865}, was cancelled before start after its unnecessary GPU reservation was noticed;
+it produced no artifacts.  CPU-only H200-node replacement \pathcode{1855110} started on
+\pathcode{h200-060-199}, constructed the fresh four-worker stream, skipped 1,808 batches, and fetched
+the 18-batch comparison prefix, but failed closed during worker teardown before executing the
+retained-byte comparison.  Torchdata 0.11 waits five seconds per worker, sends \pathcode{SIGTERM} to
+survivors, and does not reap them afterward.  Two PyArrow workers emitted ``terminate called
+without an active exception'' and remained in kernel \pathcode{do\_coredump}; because this cluster
+pipes dumps to \pathcode{systemd-coredump}, the job was killed after 4m59 to release the node.  It has
+only the capture-validation artifact and cannot pass the probe.  The first reviewed cleanup repair
+was committed and pushed as
+\pathcode{b5bfef19bf00f8a6602addc03b152cacdd327337}, tree
+\pathcode{02207725432936cda53370311300d744342a3f86}.  Its immutable 4,302-file snapshot is
+\pathcode{diagnostic_source_snapshots/stability_screen_b5bfef19bf00f8a6602addc03b152cacdd327337},
+with source-manifest SHA-256
+\pathcode{3f4e661d94496f5da4f38554bfd34b3792bc476149a3a78bf8e5552e2f1700fc}; an independent
+private rematerialization was byte-identical and 25 snapshot-applicable tests passed.  Probe
+\pathcode{1855634} then failed in one second before creating a run root because its ad-hoc
+\pathcode{sbatch --wrap} used Bash \pathcode{pipefail} under \pathcode{/bin/sh}.  Corrected wrapper
+probe \pathcode{1855635} ran on \pathcode{h200-128-202}, rebuilt the four-worker stream, and
+reached teardown, but exposed an earlier failure than the timeout fallback: torchdata first sends a
+queue sentinel, and unwinding the live PyArrow parquet readers made three workers abort before
+\pathcode{terminate()} was reached.  The probe failed closed in 1m57s, retained only the exact
+capture-validation document (SHA-256
+\pathcode{116b4cb5adf6cb20f2f6181ae118cdf701a8437caaf68557b35cd64952d28bb2}), and produced no
+probe result or marker.  The final repair removes the iterator from PyTorch's SIGCHLD registry while
+all workers are live, sends SIGKILL to and reaps all four, and only then lets the parent
+cancel/close its index and result queues directly.  It never invokes torchdata's graceful routine
+or touches the process-shared done event after a forced kill, avoiding the documented dead-child
+event-lock hazard.  Independent review returned READY after 27 focused tests, a 59-test scoped
+suite (one historical cumulative-branch test deselected), registered-child stress, and explicit
+ineffective-kill fallback.  The reviewed source is pushed at commit
+\pathcode{7ea1735b3fed99b6a24e7ac07753771defdec944}, tree
+\pathcode{2a9b111657f0d8b68a6839fbeea7a2c2a593e6b6}.  Its immutable 4,302-file snapshot is
+\pathcode{diagnostic_source_snapshots/stability_screen_7ea1735b3fed99b6a24e7ac07753771defdec944},
+with source-manifest SHA-256
+\pathcode{4a5caf3db17da8be95660f78074f972765df624f49a8c1dd31b53c74fe8eb769}; private
+rematerialization was byte-identical and 26 snapshot-applicable tests passed.  Fresh CPU-only H200
+probe \pathcode{1855869} completed \pathcode{0:0} in 1m49s on \pathcode{h200-126-216}.  Its 18
+retained batches matched, CUDA/distributed remained uninitialized, and all four worker PIDs were
+reaped with exit code $-9$.  Its probe-record SHA-256 is
+\pathcode{0a481a5313de98c2f48715d69b4f887997b2e1335751e4de804835e9df5cebe8}; stderr is empty.
+After an all-user exact-name conflict check, exactly one full two-node/16-H200 non-authorizing
+screen, job \pathcode{1855985}, was submitted from this snapshot.  It completed
+\pathcode{0:0} in 16m54s on \pathcode{h200-017-170,h200-046-153}; every root and step row is
+\pathcode{COMPLETED}.  References A1 and A2 are exact to each other and to retained capture
+boundaries 905--913, reaching the same maximum norm \pathcode{2458.377197265625}.  The
+quarter-head arm ($0.25/\sqrt{H}$, effective scale $0.0625$) completed boundaries 905--1200 with
+zero crossings, maximum \pathcode{2.5316383838653564}, and nearest-rank p99
+\pathcode{0.5541900992393494}; it is the sole direct-promotion-eligible arm.  Connected-zero
+rotation was also stable through 1200 (maximum \pathcode{0.4557827115058899}, p99
+\pathcode{0.3324354290962219}) but remains mechanistic-only by declaration.  Half-LR crossed again
+at boundary 911, reached \pathcode{28.53986930847168}, and closed its successor window at 919, so
+it is rejected.  The read-only closure has exactly 126 files and 125 inventory rows.  Summary,
+validation, and inventory SHA-256 values are respectively
+\pathcode{19f0962e04cc45b5df8d9df6e39025cecf54b48423d6e0290cd60a6180d95ec5},
+\pathcode{4683c0609bccbde088b9c41ad1ea32f509346826fbc255ce0c87229048699776}, and
+\pathcode{4c9180ab8b49d5b206a5dabe56010fcfd09ac5d2f3fb97ff12270ca4bf3ebe83}.
+Independent re-execution of the immutable source, output, and inventory validators passed; all 125
+inventoried payloads rehashed exactly, the terminal marker occurs once, and cleanup precedes that
+marker.  The retained 98,660-byte screen stderr contains only FSDP/NCCL deprecation and process-
+group teardown warnings, with no traceback or error.  Cleanup proof is the fail-closed runner
+ordering plus completed scheduler steps and marker, rather than a standalone per-node certificate.
+The screen remains explicitly \pathcode{authorizing=false}: it selects quarter-head for a new
+production-candidate source and fresh soak, not for direct launch.
+
+This failure also exposes a separate production-readiness gap.  The intended 50B job is budgeted
+for 70 training hours inside a 72-hour allocation and, at the measured 31.08K tokens/s/GPU on 16
+GPUs, nominally needs about 27.9 hours.  Nevertheless the launcher explicitly enables requeue, the
+production loader uses four persistent workers, and the first ordinary checkpoint cursor is iter
+2,000, deeper than the failed 1,810-yield cursor.  The accepted resume job \pathcode{1851174}
+covered only a 220M, two-GPU, one-worker restore from iter 16 to iter 24; it does not test this
+failure class.  The bounded control plane forbids \pathcode{HDN\_SKIP\_DATA\_RESUME}, and a worker
+SIGSEGV becomes terminal rather than safely requeued.  Production therefore remains blocked until
+the loader-resume mechanism is fixed or replaced and the mandatory resume gate is upgraded to the
+real two-node/16-rank, four-worker HF-Parquet path at iter at least 2,000, with byte-exact successor
+batches against an uninterrupted control and successful post-restore optimizer progress.  The
+diagnostic batch tape fixes D1 only; it is not a production-resume correction.  The selected
+production design is instead a snapshot-free deterministic replay cursor: set
+\pathcode{snapshot\_every\_n\_steps=0}, prohibit managed-production loader
+\pathcode{state\_dict}/\pathcode{load\_state\_dict}, checkpoint the yielded-batch count and a rolling
+SHA-256 chain over canonical rank-local raw batches plus the exact loader/data/runtime identities,
+and on resume fresh-build the same four-worker stream, replay and rehash the saved prefix, restore
+the saved training RNG, and continue from that iterator.  Opaque v1 sidecars must fail closed rather
+than migrate silently.  The replacement gate will use the exact 2-by-8, 750M, four-worker geometry,
+checkpoint at iter 4,000/update 2,000, compare the next two batches and the resulting update against
+an uninterrupted control in a separate allocation, deliberately fail if either loader restore API
+is called, and require a projected full-horizon replay time of at most eight hours.  A sealed
+rank-local token tape remains the fallback only if deterministic replay misses that throughput gate.
+
+Implementation is isolated from both the diagnostic branch and dirty main checkout in worktree
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v2/source_worktrees/rdiag_shared_dt_v2_replay_cursor_20260906},
+branch \pathcode{codex/rdiag-shared-dt-v2-replay-cursor-20260906}, based on reviewed launch-control
+tip \pathcode{c721817db9fbf8f7dff4c48850c15be34ef45549}.  The cursor/data core is committed and
+pushed as \pathcode{4a2002b}; v2-only trainer integration is committed and pushed as
+\pathcode{cc18784afe16ee760af596de3c24461e283a34e5}, tree
+\pathcode{87181e1d47edbfc27ad294bbeb659aeb8c82d1c8}.  It uses one iterator for prefix replay and live
+continuation, validated cursor/RNG sidecars, no v2 loader state API, coordinated asymmetric failure
+handling, and four-worker hard-stop cleanup before any terminal checkpoint or PASS evidence.
+Independent review returned READY after 573 tests (three skips), a two-rank asymmetric-collective
+probe, and a real four-child cleanup test.  A separate reviewed hardening commit
+\pathcode{7b5808a177d03dd1526d1e0c2dc7a83a0f816217}, tree
+\pathcode{ba0a884d48aedba42ce673bc1c7a0c089a316401}, installs an opt-in, spawn-picklable worker
+initializer that verifies \pathcode{RLIMIT_CORE=(0,0)} and Linux dumpability zero before any
+PyArrow read; 158 focused/adjacent tests and a real subprocess check pass, while legacy loaders are
+unchanged.  This is a reviewed implementation slice, not a launch
+authorization: the v2 control-plane/evidence schemas, uninterrupted-control gate, compute-node
+StatefulDataLoader/PyArrow validation, and final executable plan remain open.  Its immutable
+4,303-file snapshot is
+\pathcode{diagnostic_source_snapshots/replay_cursor_7b5808a177d03dd1526d1e0c2dc7a83a0f816217},
+with source-manifest SHA-256
+\pathcode{e657f2617e98b25b4c413120bd92b3bf59b0d636e1888f3ec85cc63a449bf445}; private
+commit-derived rematerialization and 101 snapshot-local tests passed.
+
+The implementation audit also identified work that is still genuinely prospective at this tip.
+The RNG payload currently contains Python tuples and a NumPy array, and its sidecar reader still
+uses \pathcode{torch.load(...,weights_only=False)}; the current v2 resume evidence class also
+retains the old pending-loader-state attestation.  The final implementation must replace these with
+the specified primitive/tensor-only RNG representation, restricted weights-only loading, and the
+new replay evidence object before the source can be frozen as a production candidate.
+
+A separately reviewed, non-authorizing compute probe then exercised the actual production
+StatefulDataLoader/HF-Parquet path.  CPU-only H200 job \pathcode{1856719} completed
+\pathcode{0:0} in 3m19s on the previously unused node \pathcode{h200-171-121}.  Two wholly fresh
+logical-rank-1-of-16 loaders, each with four persistent workers, consumed 1,826 batches and agreed
+on the boundary-1,808 cursor digest and every one of the following 18 cursor digests.  All eight
+distinct workers reported both core limit zero and \pathcode{CoreDumping: 0}, were reaped at exit
+code $-9$, and left no visible \pathcode{/proc} entry; CUDA and distributed remained uninitialized,
+post-run data/tokenizer identity validation passed, and stderr is empty.  The slower transcript took
+58,317,465,752 ns, giving the integer-ceiling full-190,734-batch projection
+6,091,524,377,187 ns, or 1.6921 hours, below the proposed eight-hour gate.  The mode-0400 result has
+SHA-256 \pathcode{ab308edc368c7920cd8f338efa200819609a1e4d1887ba46b20931500dd3502c} and
+remains explicitly \pathcode{authorizes_production=false}; it validates one-rank loader
+determinism, throughput, and teardown, not the required two-node training/resume equivalence.
+Independent post-run audit returned \pathcode{VALID} after rehashing all 4,303 snapshot files,
+the scheduler rows and artifact closure, both transcript chains, all worker records, and the
+integer projection.
+
+Plan revisions v1--v3 are retained in the worktree.  Revision v4 was also rejected by independent
+review: it selected the invalid login-namespace data witness for compute work, put full-data
+attestation on the login node, omitted node-local source/cache setup for the second node, had
+contradictory timing cardinalities, tried to construct all four family manifests despite singleton
+750M authorization, under-specified canonical recipe and detached-state mechanics, and merely
+printed rather than machine-asserted the final Slurm lifecycle.  Revision v5 then exposed remaining
+compute-namespace, staged-publication, descriptor-bound loading, and cleanup-handshake gaps.
+Revision v6 is complete at
+\pathcode{docs/plans/2026-09-06-rdiag-shared-dt-v2-replay-cursor-plan-v6.md}, SHA-256
+\pathcode{9f4fec8f3c5e208a0b33af05656283975c0c44dc103c56f8f83040391e675094}.  Independent
+review returned \pathcode{NEEDS\_REVISION}: its nominally allowed U07a--U45d tranche still rewired
+active v2 sidecars, evidence, runners, and seals; the v2 retirement was prose rather than an
+executable guard; dependencies placed publication tests before staged APIs; final verification was
+blocked; and the prepared-final handle, bounded cleanup acknowledgement, signal conversion, and
+mapped-reader lifetime were incomplete.  No v6 implementation began.  Revision v7 was then frozen
+at SHA-256
+\pathcode{2c2851f6e2db2ae4a84aaee0e09dccf965894156fd4b5c6a3913b14b4f7fccbe}, but independent
+review again returned \pathcode{NEEDS\_REVISION}: retirement missed qualification preparers and
+occurred after some CLI side effects; it bound the legacy final-model path instead of the actual
+\pathcode{rdiag-final-committed.json} pointer; post-rename failures were modeled as rollbackable;
+cleanup and detached publication lacked exact collective APIs; and several contracts/dependencies
+remained underspecified.  No v7 implementation began.  Revision v8 was frozen at SHA-256
+\pathcode{dcf4ea6294c901b3d4dbcb2a6362af303274b1ff034c2f134c278de95c4b0105}.  It expands
+retirement to 25 supported v2 construction, publication, attestation, witness-generation, and
+submission boundaries; preserves historical read-only validation; specifies separate stable
+directory and closed-file identities; uses the actual
+\pathcode{rdiag-final-committed.json} pointer; models irreversible and uncertain commit outcomes;
+and defines family-neutral restricted-load, Merkle-evidence, collective cleanup, and staged
+publication APIs.  Independent review nevertheless returned \pathcode{NEEDS\_REVISION}: guarded
+SubmitLine builders were still called by historical read-only validators; detached publication
+could not represent post-hardlink failure; its staged-handle digest was circular and unverifiable
+after publication; detached/final rank transport lacked exact primitive codecs; attestor edit
+rules contradicted the terminal audit; two v2 evidence/authorization paths remained live; and the
+cleanup contract disagreed on one versus two join passes.  No v8 implementation began; revision v9
+is in progress.
+
+The first additive \pathcode{shared\_dt\_v3} quarter-head plan was separately frozen at SHA-256
+\pathcode{aee51f621f5e66aa15b94a369b2cf61b3a79f4b28bcdc8d3f1769ee399ba398e} and rejected by
+independent review.  It retained a stale eleven-boundary retirement check, disagreed with v8's
+sidecar API/schema, omitted the required 48-rank-timing authorization calculation, placed the final
+pointer directly under the output root instead of the manifest's \pathcode{out\_dir}, allowed a
+TERM-before-KILL cleanup path, omitted exact attestor provenance and a v3 nonce-claim contract, and
+contained dependency inversions.  Revision v2 is in progress.  It must preserve v1/v2 identities,
+add exactly the singleton \pathcode{rdiag\_kla\_shared\_dt\_v3\_750M}, and own every new
+model/schema/runner/seal binding before any production operation.
+
+The completed matched screen crossed the exact warmup peak at boundary 954 with one model resident
+at a time and satisfied every declared comparability invariant before interpretation.  Under the
+predeclared policy, quarter-head is therefore selected over half-LR as the production-source
+candidate; the radial-only result strengthens the causal attribution to the rotational path but is
+not itself eligible.  This selection is still only a design decision.  The new versioned clock must
+pass a fresh generation-zero 3,300-update soak and disjoint-node attestation; the diagnostic cannot
+replace that qualification gate.
+
+The remaining sequence is:
 \begin{enumerate}[leftmargin=1.8em]
-  \item complete in-flight S7 six-arm job \pathcode{1847784}, then run its fresh-node validator and
-        require a fully sealed accepted closure; the S6 in-job result remains non-authorizing
-        corroboration only;
-  \item only if the S7 validator accepts the exact repeatability, isolation, liveness, health, and
-        prospective effect-size evidence, implement and freeze the additive
-        \pathcode{shared_dt_v2} source, then rerun all six gates, including an entirely fresh
-        3300-update soak;
-  \item build a fresh v2 aggregate only after all six v2 recursive seals validate, then compute and
-        pin the parallel v2 recipe, catalog, aggregate, and exact execution-manifest digests for
-        that final source while keeping every existing v1 canonical byte sequence and pin
-        unchanged; and
-  \item create the separate required production snapshot and invoke the \pathcode{prepare-fresh}
-        mode of a future exact-family v2 submitter (preferably
-        \pathcode{submit_rdiag_shared_dt_v2.py}; the current
-        \pathcode{submit_rdiag_shared_dt.py} remains v1-only) only for the new versioned
-        \pathcode{rdiag_kla_shared_dt_v2_750M} with train configuration
+  \item preserve failed infrastructure run \pathcode{1853781}, failed cleanup probes
+        \pathcode{1855110}/\pathcode{1855635}, and pre-Python wrapper failure \pathcode{1855634};
+        preserve accepted non-authorizing screen \pathcode{1855985}, and implement its sole
+        promotion-eligible quarter-head correction in a new versioned source without weakening or
+        blindly retrying the gate;
+  \item complete the control-plane/evidence integration around reviewed snapshot-free replay tip
+        \pathcode{7b5808a177d03dd1526d1e0c2dc7a83a0f816217}, then run the replacement authenticated
+        gate at exact production topology through iter 4,000, proving byte-exact
+        successor batches, a committed post-resume update against an uninterrupted control, and
+        the eight-hour maximum projected full-horizon replay time;
+  \item combine only an evidence-supported soak and resume correction with reviewed launch-control tip
+        \pathcode{c721817db9fbf8f7dff4c48850c15be34ef45549}, freeze one
+        final production candidate, and do not aggregate the superseded b37 seals;
+  \item reuse only the recursively revalidated compute-authored data manifest, then repeat all six
+        preparations, workloads, and disjoint-node attestors for the final source, run the independent
+        derived-gates control, build a fresh six-seal aggregate, and independently reopen and
+        recursively validate that aggregate while keeping every existing v1 canonical byte sequence
+        and pin unchanged; and
+  \item generate a short-lived signed remote-ref witness for that exact aggregate and execution
+        manifest, create the separate required production snapshot, and invoke the \pathcode{prepare-fresh}
+        mode of a new exact-family v3 submitter; the existing v1 and retired v2 submitters must not
+        be reused.  Submit only the additive singleton
+        \pathcode{rdiag_kla_shared_dt_v3_750M} with train configuration
         \pathcode{tsz128x4k_50B}; retain the supervisor-enforced \pathcode{standard},
         \pathcode{niah_single_1}, \pathcode{niah_single_1_8k}, \pathcode{niah_single_2},
         \pathcode{niah_single_2_8k}, \pathcode{niah_single_3}, and
@@ -3522,21 +4040,42 @@ sequence is:
 \end{enumerate}
 Job \pathcode{1835824}'s scientific failure invalidated the prior nine-workload lower bound;
 jobs \pathcode{1836996}, \pathcode{1837446}, \pathcode{1838750}, \pathcode{1839531}, and
-\pathcode{1847039} have now completed the localization, replacement generation-zero,
-trigger-capture, matched-intervention, and source-matched replacement-candidate workloads.
+\pathcode{1847039} completed the localization, replacement generation-zero, trigger-capture,
+matched-intervention, and first source-matched replacement-candidate workloads; S7 job
+\pathcode{1847784} has now completed their strictly repeated six-arm diagnostic.
 Jobs \pathcode{1846561} and \pathcode{1847039} returned provisional valid passes, but validators
 \pathcode{1846728} and \pathcode{1847464} respectively failed before validation and after
 scientific validation but before evidence sealing; neither cycle is externally accepted.  From
-this point, the optimistic path requires completion of the already-submitted S7 source-bound
-candidate cycle followed by
-at least six fresh qualification GPU workloads before production launch.  Production training
-would follow those gates.  Since the
-demonstrated six-gate control plane expands its six
-scientific gates to 20 Slurm jobs (six preparation jobs, two H200 control/submit allocations, six
-gate workloads, and six external attestors), after submitted main job \pathcode{1847784} the
-comparable operational lower bound is at least 21 further scheduler submissions before production
-submission: its fresh-node validator and the 20-job gate control plane.  A held-out replication
-would increase that count.
+this point, S7 sealing and the v2 production-H200 gate are complete, and the matched screen has
+selected quarter-head as the correction candidate.  It still requires implementation, a new
+acceptable soak, and then a complete fresh-source campaign before production launch; all
+four short b37 qualification workloads and their external attestors have already completed.
+Production training would follow the new campaign.  Because data identities include
+numeric UID/GID, the final-source hard successful-path minimum is 21 compute allocations before
+production: six gate preparers, six scientific workloads, six fresh external attestors, one
+independent prepared/derived-gates control, one aggregate builder, and one independent recursive
+aggregate validator.  The existing compute-authored data manifest is reusable only after full
+compute-side verification folded into the first H200 preparation; regeneration would add an
+allocation.  A compute-side guarded-submit controller and production itself add two more, while
+retaining the earlier optional third-node H200-seal control adds one.  On the historical b37 path,
+seventeen of its original 21 outcomes have completed: the manifest builder,
+all six preparers, the H200 workload and attestor, and the train-smoke and checkpoint-fault
+workloads and their attestors, plus the gradient-A/B workload and attestor and the resume workload.
+Its attestor is also accepted.  The failed soak still leaves four original hard-minimum outcomes: its
+successful replacement and attestor, the aggregate builder, and the aggregate validator.  At least one new soak preparation is
+additional to that lower bound.
+Including the new soak preparation and preserving the earlier independent pre-submit-control
+convention adds two allocations, leaving at least six outcomes before complete b37 scientific
+closure; retries and diagnostic allocations are additional.  More importantly, the required
+remote-ref correction changes source identity, so the b37 seals cannot authorize that source: after
+review, all six preparations, all six workloads, all six attestors, the prepared-gates control,
+aggregate construction, and independent aggregate validation must be rerun in a fresh campaign.
+The compute-authored data
+manifest remains reusable subject to recursive revalidation.  The six
+immutable runners contain 13 distinct \pathcode{srun} call sites and execute 15 steps on a normal
+success path because the soak reuses its source-copy and cache actions during cleanup.  One separate
+production \pathcode{sbatch} follows only after aggregate acceptance.  A held-out replication would
+increase that count.
 Failed attempts \pathcode{1838085} and
 \pathcode{1838250} did not satisfy the trigger-capture stage.  This count excludes retries, additional
 discriminator arms, implementation-time GPU checks, held-out causal replication, and production
