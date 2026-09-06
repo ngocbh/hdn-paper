@@ -762,6 +762,8 @@ later shared-DT candidate and its separate, still-open qualification.
 \section{Shared-DT engineering status as of September 6, 2026}
 \label{sec:shared-dt-status}
 
+\noindent\textit{Status updated 2026-09-06 18:53 UTC.}
+
 This section records a newer production candidate and does not revise the closed E2 result above.
 The candidate starts from commit
 \texttt{6472a0711eb61177c3ef91845855fffa82202290} and replaces E2's detached bounded clock with a
@@ -3988,17 +3990,38 @@ could not represent post-hardlink failure; its staged-handle digest was circular
 after publication; detached/final rank transport lacked exact primitive codecs; attestor edit
 rules contradicted the terminal audit; two v2 evidence/authorization paths remained live; and the
 cleanup contract disagreed on one versus two join passes.  No v8 implementation began; revision v9
-is in progress.
+was frozen at SHA-256
+\pathcode{5eb6bb60cc06ee415241b9e7c66814cfa9076b09461d0abce3b4396a8510d92c}, and revision v10
+was frozen at SHA-256
+\pathcode{ef6e1bc095ca40182d146fa411b7fafafbf3a2b64422c825ba93d193c8dda152}.
+Both are immutable superseded planning evidence; neither produced code, a compute job, or a
+production authorization.  Revision v11 is frozen read-only at SHA-256
+\pathcode{b0e681bd0fe01559ae8f8ad5797b2b5ebf21a3804fd7a639fbc392132b82f0f8}.
+Independent review returned \pathcode{NEEDS\_REVISION}: the generic manifest guard names the
+execution-manifest schema although its input is a recipe; the nominal 33-boundary audit scans more
+host modules than its literal disposition inventory; the lifecycle cannot supply the worker and
+queue identities required by its cleanup-certificate validator; it publishes the split before
+continuing the same iterator; the reconstructed-SubmitLine runtime type check is outside its
+declared edit surface; the evaluation-seal test path is wrong; and lifecycle/dependency and
+cross-result bindings remain incomplete.  Revision v12 is now in preparation.  No replay-plan
+revision has authorized or submitted a job or changed production code.
 
-The first additive \pathcode{shared\_dt\_v3} quarter-head plan was separately frozen at SHA-256
+The first additive \pathcode{shared\_dt\_v3} quarter-head plan was reviewed at SHA-256
 \pathcode{aee51f621f5e66aa15b94a369b2cf61b3a79f4b28bcdc8d3f1769ee399ba398e} and rejected by
-independent review.  It retained a stale eleven-boundary retirement check, disagreed with v8's
+independent review.  Its ignored worktree file was subsequently edited in place during v8 planning,
+contrary to the declared freeze, and now has SHA-256
+\pathcode{8a429606e563189e7700ea0ae906403f68e247a40c57ce38f8ec19e4fa47af3c}; the original bytes
+could not be recovered and neither version is executable evidence.  The reviewed version retained
+a stale eleven-boundary retirement check, disagreed with v8's
 sidecar API/schema, omitted the required 48-rank-timing authorization calculation, placed the final
 pointer directly under the output root instead of the manifest's \pathcode{out\_dir}, allowed a
 TERM-before-KILL cleanup path, omitted exact attestor provenance and a v3 nonce-claim contract, and
-contained dependency inversions.  Revision v2 is in progress.  It must preserve v1/v2 identities,
-add exactly the singleton \pathcode{rdiag\_kla\_shared\_dt\_v3\_750M}, and own every new
-model/schema/runner/seal binding before any production operation.
+contained dependency inversions.  Revision v2 was frozen read-only at SHA-256
+\pathcode{83a2c07f502824ac982e4efb0c43141f2571aa60e82c7fc0e567448f789f70e3}, but remains a
+non-executable review response pending an accepted replay-substrate successor and further review.
+The eventual accepted revision must preserve v1/v2 identities, add exactly the singleton
+\pathcode{rdiag\_kla\_shared\_dt\_v3\_750M}, and own every new model/schema/runner/seal binding
+before any production operation.
 
 The completed matched screen crossed the exact warmup peak at boundary 954 with one model resident
 at a time and satisfied every declared comparability invariant before interpretation.  Under the
@@ -4015,7 +4038,8 @@ The remaining sequence is:
         preserve accepted non-authorizing screen \pathcode{1855985}, and implement its sole
         promotion-eligible quarter-head correction in a new versioned source without weakening or
         blindly retrying the gate;
-  \item complete the control-plane/evidence integration around reviewed snapshot-free replay tip
+  \item finish and independently accept replay/retirement plan v12, implement its dormant substrate
+        and fail-closed v2 retirement around reviewed snapshot-free replay tip
         \pathcode{7b5808a177d03dd1526d1e0c2dc7a83a0f816217}, then run the replacement authenticated
         gate at exact production topology through iter 4,000, proving byte-exact
         successor batches, a committed post-resume update against an uninterrupted control, and

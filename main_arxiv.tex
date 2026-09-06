@@ -50,10 +50,12 @@ observation reliability. Under this formulation, Delta-style updates emerge as a
 substitutes a token-wise isotropic surrogate for predictive covariance and omits covariance tracking.
 Exact tracking, however, entails a dense,
 state-dependent Riccati recursion that is poorly suited to GPU-parallel linear-attention scans.
-To address this issue, we derive a \textit{Diagonal KDN} by projecting each one-step posterior onto the
-diagonal Gaussian family through online mean-field variational inference. The resulting
-per-channel covariance recurrences are M\"obius maps, enabling an associative scan with
-$O(d_k)$ auxiliary state and logarithmic parallel depth. Across controlled pretraining at
+To address this issue, we introduce two scan-compatible KDN approximations. \textit{Diagonal KDN}
+projects each one-step posterior onto the diagonal Gaussian family through online mean-field
+variational inference, whereas \textit{Isotropic KDN} uses an isotropic approximation with a single
+uncertainty scalar per head. Their uncertainty recurrences are M\"obius maps, enabling associative
+scans with logarithmic parallel depth and $O(d_k)$ and $O(1)$ auxiliary state per head,
+respectively. Across controlled pretraining at
 750M and 1.3B parameters, KDN variants consistently improve perplexity and mean downstream
 accuracy over state-of-the-art linear-attention models.
 \end{abstract}
@@ -484,7 +486,7 @@ Finally, the layer reads from the filtered memory,
   \ve{o}_t = \ve{S}_t^{\tr}\ve{q}_t .
   \label{eq:kalman-read}
 \end{equation}
-The predict--innovation--correct recursion therefore computes the conditional expectation in
+The predict--update recursion therefore computes the conditional expectation in
 \eqref{eq:online-filtering-objective} at every step.
 The following proposition summarizes this optimal recursion.
 
@@ -768,8 +770,8 @@ Projecting each dense posterior to a product Gaussian discards cross-channel cor
 inherits the coordinatewise overconfidence of reverse-KL mean field~\citep{blei2017variational}.
 These correlations encode observed \emph{joint} key directions; without them, the approximation can
 be overconfident in individual channels yet too uncertain along those directions. Consequently, a
-repeated key, or a later key with energy on the same coordinates, can trigger an excessively strong
-residual write (Figure~\ref{fig:kdn-overwrite}, second column; $\mu=1$). To mitigate this overwrite,
+repeated key or a later key with energy on the same coordinates can trigger an excessively strong
+residual write (see Figure~\ref{fig:kdn-overwrite}, second column; $\mu=1$). To mitigate this overwrite,
 we apply an information scale $\mu>0$ only to the post-write precision increment:
 \begin{equation}
   \ve{u}_t
@@ -1195,29 +1197,33 @@ at $1.0$, and a cosine schedule with a $1\%$ token-budget warm-up ($0.5$B/$1$B t
 the two scales). All runs use a global
 batch of $0.5$M tokens, a sequence length of $4$K, and the same data seed within each comparison.
 We set $r_{\min}=0.01$ and initialize the process noise isotropically by setting
-$\ve{W}_{\omega}=\ve{0}$ when training Diagonal KDN.
-Throughout the main experiments, Diagonal KDN uses the fixed information scale $\mu=d_k$.
+$\ve{W}_{\omega}=\ve{0}$ when training Diagonal KDN. We also learn a scalar initial covariance
+$c_{0,h}>0$ for each head $h$, so that
+$\widetilde{\ve{S}}_0^{(h)}\sim\N_{\mathrm{col}}(\ve{0},c_{0,h}\ve{I}_{d_k})$.
+Throughout the main experiments, both Isotropic and Diagonal KDN use the fixed information scale
+$\mu=d_k$.
 % =============================================================================
 \subsection{Experimental Results}
 \label{sec:experimental-results}
 
 \paragraph{Language modeling and commonsense reasoning.}
-Table~\ref{tab:pretrain-lm} shows that both KDN variants outperform all recurrent-only baselines in
-perplexity and achieve the two highest average accuracies at both scales, with Diagonal KDN leading
-and Isotropic KDN close behind. Among hybrid models, Diagonal KDN $+$ SWA achieves the highest
-average accuracy, followed by KDA $+$ SWA; all recurrent--attention hybrids outperform the
-attention-only Transformer.
+Table~\ref{tab:pretrain-lm} shows consistent gains from KDN across both parameter scales. Among
+recurrent-only models, both Diagonal and Isotropic KDN outperform KDA and Mamba-3 on the two
+perplexity benchmarks and in average accuracy at both scales, with Diagonal KDN leading in average
+accuracy. In the hybrid setting, Diagonal KDN $+$ SWA achieves the highest average accuracy,
+followed by KDA $+$ SWA, while every recurrent--attention hybrid outperforms the attention-only
+Transformer.
 
 \paragraph{In-context retrieval.}
-Table~\ref{tab:pretrain-niah} shows that Diagonal KDN achieves the highest aggregate among
-recurrent-only models at both scales, with particularly strong S-NIAH-3 and multi-key retrieval.
-This is consistent with channel-wise uncertainty protecting stored associations under interference.
-
-\paragraph{Real-world retrieval.}
-Table~\ref{tab:real-world-retrieval} reports the six-task real-world retrieval comparison at
-$1.3$B parameters. Among recurrent-only models, the Diagonal KDN achieves the best average
-and leads FDA, TriviaQA, and DROP. In the hybrid block, the Isotropic KDN $+$ SWA has the best
-average, while the Diagonal KDN $+$ SWA ranks second and leads FDA.
+Tables~\ref{tab:pretrain-niah} and~\ref{tab:real-world-retrieval} evaluate synthetic
+needle-in-a-haystack and real-world retrieval, respectively. On the synthetic tasks, Diagonal KDN
+achieves the highest aggregate among recurrent-only models at both scales, with particularly strong
+S-NIAH-3 and multi-key retrieval. This is consistent with channel-wise uncertainty protecting stored
+associations under interference. On the six real-world tasks at $1.3$B parameters, Diagonal KDN
+also achieves the best recurrent-only average and leads FDA, TriviaQA, and DROP. In the hybrid block,
+Isotropic KDN $+$ SWA has the best average, while Diagonal KDN $+$ SWA ranks second and leads FDA.
+Additionally, every hybrid model substantially outperforms its recurrent-only counterpart on these
+tasks.
 
 \FloatBarrier
 
@@ -1564,126 +1570,63 @@ Therefore the exact Kalman Associative Memory update is
 
 \begin{proof}[Proof of Proposition~\ref{prop:diag-variational-inference}
   (Online Diagonal Variational Update)]
-Although Proposition~\ref{prop:diag-variational-inference} is stated as a KL minimization against
-the exact posterior, it can be solved without forming that posterior explicitly. In this proof,
-conditioning on the known $\ve{k}_t$ and $r_t$ is shown where useful and otherwise suppressed.
-The exact one-step posterior is
-$\N_{\mathrm{col}}(\ve{S}_t^\star,\ve{P}_t^\star)$, with
-\begin{equation}
-  (\ve{P}_t^\star)^{-1}
-  =\widehat{\ve{P}}_t^{-1}
-   +\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr}.
-  \label{eq:proof-diag-vi-exact-posterior}
-\end{equation}
-For every $q\in\mathcal{Q}_{\mathrm{col}}$, the standard variational identity gives
-\begin{equation}
-  \log p(\ve{v}_t\mid\mathcal{F}_{t-1},\ve{k}_t,r_t)
-  =\mathcal{L}_t(q)
-   +\operatorname{KL}\!\left(
-      q\,\|\,\N_{\mathrm{col}}(\ve{S}_t^\star,\ve{P}_t^\star)
-    \right),
-  \label{eq:proof-diag-vi-identity}
-\end{equation}
-where
-\begin{equation}
-  \mathcal{L}_t(q)
-  =\mathbb{E}_{q}\!\left[\log p(\ve{v}_t\mid\widetilde{\ve{S}}_t)\right]
-   -\operatorname{KL}\!\left(
-      q\,\|\,\N_{\mathrm{col}}(\widehat{\ve{S}}_t,\widehat{\ve{P}}_t)
-    \right)
-  \label{eq:proof-diag-vi-elbo}
-\end{equation}
-is the one-step evidence lower bound. The log evidence in
-\eqref{eq:proof-diag-vi-identity} is independent of $q$, so
-\begin{equation}
-  \argmin_{q\in\mathcal{Q}_{\mathrm{col}}}
-    \operatorname{KL}\!\left(
-      q\,\|\,\N_{\mathrm{col}}(\ve{S}_t^\star,\ve{P}_t^\star)
-    \right)
-  =\argmax_{q\in\mathcal{Q}_{\mathrm{col}}}\mathcal{L}_t(q).
-  \label{eq:proof-diag-vi-equivalence}
-\end{equation}
-We therefore solve the original objective by maximizing this ELBO.
-
-Write
-\begin{equation}
-  q=\N_{\mathrm{col}}(\ve{S},\diag(\ve{p})),
-  \qquad
-  \widehat{\ve{P}}_t=\diag(\widehat{\ve{p}}_t).
-  \label{eq:proof-diag-vi-notation}
-\end{equation}
-Under $q$, the expected squared observation residual separates into an error at the variational
-mean and a variance term shared across the $d_v$ conditionally independent columns:
-\begin{equation}
-  \mathbb{E}_{q}\!\left[
-    \left\|\ve{v}_t-\widetilde{\ve{S}}_t^{\tr}\ve{k}_t\right\|_2^2
-  \right]
-  =\left\|\ve{v}_t-\ve{S}^{\tr}\ve{k}_t\right\|_2^2
-   +d_v\sum_i k_{t,i}^2p_i.
-  \label{eq:proof-diag-vi-expected-residual}
-\end{equation}
-The Gaussian likelihood and Gaussian KL in
-\eqref{eq:proof-diag-vi-elbo} therefore give, up to constants independent of
-$\ve{S}$ and $\ve{p}$,
+Let $\ve{\Lambda}_t^\star=(\ve{P}_t^\star)^{-1}$. For
+$q=\N_{\mathrm{col}}(\ve{S},\diag(\ve{p}))$, the columnwise factorization and the Gaussian KL formula give
 \begin{equation}
 \begin{aligned}
-  -\mathcal{L}_t(q)
-  &=\frac12\Trace\!\left[
-      (\ve{S}-\widehat{\ve{S}}_t)^{\tr}
-      \widehat{\ve{P}}_t^{-1}
-      (\ve{S}-\widehat{\ve{S}}_t)
-    \right]
-    +\frac{\left\|\ve{v}_t-\ve{S}^{\tr}\ve{k}_t\right\|_2^2}{2r_t} \\
+  &\operatorname{KL}\!\left(
+    q\,\|\,\N_{\mathrm{col}}(\ve{S}_t^\star,\ve{P}_t^\star)
+  \right) \\
   &\quad
+    =\frac12\Trace\!\left[
+      (\ve{S}-\ve{S}_t^\star)^{\tr}
+      \ve{\Lambda}_t^\star
+      (\ve{S}-\ve{S}_t^\star)
+    \right]
     +\frac{d_v}{2}\sum_i\left[
-      \left(\widehat p_{t,i}^{-1}+\frac{k_{t,i}^2}{r_t}\right)p_i
+      (\ve{\Lambda}_t^\star)_{ii}p_i
       -\log p_i
-    \right].
-  \label{eq:proof-diag-vi-negative-elbo}
+    \right]+C,
+  \label{eq:proof-diag-vi-objective}
 \end{aligned}
 \end{equation}
-The objective separates between the mean and variances. Its Hessian with respect to the mean is
-$\widehat{\ve{P}}_t^{-1}+\ve{k}_t\ve{k}_t^{\tr}/r_t\succ0$ for each value column, and its
-second derivative with respect to each $p_i$ is $d_v/(2p_i^2)>0$. Hence any stationary point is
-the unique optimum.
-
-Differentiating with respect to $p_i$ and setting the result to zero gives
+where $C=\frac{d_v}{2}(\log\det\ve{P}_t^\star-d_k)$ is independent of $\ve{S}$ and $\ve{p}$.
+Since $\ve{\Lambda}_t^\star\succ\ve{0}$, the mean term is uniquely minimized at
+$\ve{S}=\ve{S}_t^\star$. For each $p_i>0$,
 \begin{equation}
-  \frac{\partial[-\mathcal{L}_t(q)]}{\partial p_i}
+  \frac{\partial\operatorname{KL}}{\partial p_i}
   =\frac{d_v}{2}\left(
-    \widehat p_{t,i}^{-1}+\frac{k_{t,i}^2}{r_t}-\frac{1}{p_i}
-  \right)=0,
+    (\ve{\Lambda}_t^\star)_{ii}-\frac{1}{p_i}
+  \right),
+  \qquad
+  \frac{\partial^2\operatorname{KL}}{\partial p_i^2}
+  =\frac{d_v}{2p_i^2}>0.
+  \label{eq:proof-diag-vi-derivatives}
+\end{equation}
+Thus the unique minimizing variance is
+$p_i=1/(\ve{\Lambda}_t^\star)_{ii}$. Finally, the exact posterior precision satisfies
+\begin{equation}
+  \ve{\Lambda}_t^\star
+  =\widehat{\ve{P}}_t^{-1}
+   +\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr}.
+  \label{eq:proof-diag-vi-exact-precision}
+\end{equation}
+Because $\widehat{\ve{P}}_t=\diag(\widehat{\ve{p}}_t)$,
+\begin{equation}
+  (\ve{\Lambda}_t^\star)_{ii}
+  =\widehat p_{t,i}^{-1}+\frac{k_{t,i}^2}{r_t},
   \qquad
   p_{t,i}
   =\left(\widehat p_{t,i}^{-1}+\frac{k_{t,i}^2}{r_t}\right)^{-1}.
   \label{eq:proof-diag-vi-variance}
 \end{equation}
-For the mean, stationarity gives
-\begin{equation}
-  \left(\widehat{\ve{P}}_t^{-1}
-    +\frac{1}{r_t}\ve{k}_t\ve{k}_t^{\tr}\right)\ve{S}
-  =\widehat{\ve{P}}_t^{-1}\widehat{\ve{S}}_t
-   +\frac{1}{r_t}\ve{k}_t\ve{v}_t^{\tr}.
-  \label{eq:proof-diag-vi-mean-normal-equation}
-\end{equation}
-Applying the Woodbury identity yields
-\begin{equation}
-  \ve{S}
-  =\ve{S}_t^\star
-  =\widehat{\ve{S}}_t
-   +\frac{\widehat{\ve{P}}_t\ve{k}_t}
-    {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}
-    \left(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\right)^{\tr}
-  =\ve{S}_t,
-  \label{eq:proof-diag-vi-mean}
-\end{equation}
-which is the Kalman mean update with gain \eqref{eq:diag-kalman-gain}. Hence the retained
-variational mean satisfies $\ve{S}_t=\ve{S}_t^\star$. Together with
-\eqref{eq:proof-diag-vi-variance}, this proves \eqref{eq:diag-variational-solution}.
+Together with the exact Kalman posterior mean $\ve{S}_t^\star$ from
+Proposition~\ref{prop:kalman-associative-memory}, this proves
+\eqref{eq:diag-variational-solution}.
 \end{proof}
 
 % =============================================================================
-\section{Overwrite, Overconfidence, and Protection--Write Decoupling}
+\section{Overwrite and Protection--Write Decoupling}
 \label{app:protection-write}
 
 \paragraph{Empirical symptom.}
@@ -1701,104 +1644,61 @@ Reading the updated memory at the same key shows its operational meaning:
   \label{eq:appendix-effective-write-residual}
 \end{equation}
 Thus $\beta_t^{\mathrm{eff}}$ is the fraction of the current residual removed at its own key;
-values near one correspond to an almost complete same-key rewrite. The fixed-weight intervention
-below isolates the causal effect of $\mu$ from learned compensation.
+values near one correspond to an almost complete same-key rewrite. We call an update an
+\emph{overwrite} when $\beta_t^{\mathrm{eff}}$ remains large despite strong prior evidence along
+$\ve{k}_t$, causing a new observation to replace rather than cautiously revise the stored
+association.
 
-\paragraph{Figure construction.}
-For Figure~\ref{fig:kdn-overwrite}, we form a deterministic FineWeb-Edu token stream and split its
-first 16,384 tokens into eight contiguous sequences of length 2048, processed in batches of two.
-The upper row uses model-specific initialization controls; the lower row loads the final 50B-token KDA
-checkpoint and the Diagonal KDN checkpoint trained at each displayed fixed value of $\mu$. We
-record $\beta_t^{\mathrm{eff}}$ at every layer, head, and token. The KDA panels contain all
-262,144 values per layer, whereas the Diagonal KDN panels use a deterministic uniform sample of
-65,536 values per layer. Each panel is a density-normalized histogram with 60 equal-width bins on
-$[0,1]$; the dashed line marks the pooled mean.
-
-\paragraph{What the parallel approximation discards.}
-Suppress the token index and write the diagonal predictive covariance as
-$\ve{P}^{-}=\diag(\widehat p_1,\ldots,\widehat p_{d_k})$. Define
-\begin{equation}
-  q_i=\widehat p_i k_i^2,
-  \qquad
-  z=\sum_i q_i,
-  \qquad
-  D=r+z.
-  \label{eq:appendix-overwrite-notation}
-\end{equation}
-Conditioning on the scalar observation creates the dense exact posterior
-\begin{equation}
-  \ve{P}^{\star}
-  =\ve{P}^{-}
-   -\frac{(\ve{P}^{-}\ve{k})(\ve{P}^{-}\ve{k})^{\tr}}{D},
-  \qquad
-  P_{ij}^{\star}=-\frac{\widehat p_i\widehat p_jk_ik_j}{D}
-  \quad(i\ne j).
-  \label{eq:appendix-overwrite-exact-posterior}
-\end{equation}
-These cross-channel terms encode that the joint direction $\ve{k}$ has been observed. Retaining
-them would require a dense, state-dependent Riccati recurrence; dropping them is the price that
-makes the per-channel M\"obius maps scan-parallel.
-
-At $\mu=1$, the reverse-KL mean-field projection underlying Diagonal KDN and a forward-KL
-moment-matching projection retain, respectively,
-\begin{equation}
-\begin{aligned}
-  p_i^{\mathrm{VI}}
-  &=\left(\widehat p_i^{-1}+\frac{k_i^2}{r}\right)^{-1}
-    =\widehat p_i-\frac{\widehat p_i^2k_i^2}{r+q_i},
-  &
-  p_i^{\mathrm{MM}}
-  &=P_{ii}^{\star}
-    =\widehat p_i-\frac{\widehat p_i^2k_i^2}{D}.
-\end{aligned}
-  \label{eq:appendix-overwrite-diagonal-projections}
-\end{equation}
-Since $r+q_i\leq D$, $p_i^{\mathrm{VI}}\leq p_i^{\mathrm{MM}}=P_{ii}^{\star}$: reverse-KL
-mean field retains conditional rather than marginal variances and is therefore coordinatewise
-overconfident. However, marginal calibration is not the same as protection of the measured
-direction. The variances left along $\ve{k}$ obey
-\begin{equation}
-\begin{aligned}
-  V^{\star}
-  &:=\ve{k}^{\tr}\ve{P}^{\star}\ve{k}
-    =\frac{rz}{r+z},
-  &
-  V^{\mathrm{VI}}
-  &:=\sum_i\frac{rq_i}{r+q_i},
-  &
-  V^{\mathrm{MM}}
-  &:=V^{\star}+\frac{2\sum_{i<j}q_iq_j}{D},
-\end{aligned}
-  \label{eq:appendix-overwrite-directional-variances}
-\end{equation}
-and hence
-\begin{equation}
-  V^{\star}\leq V^{\mathrm{VI}}\leq V^{\mathrm{MM}}.
-  \label{eq:appendix-overwrite-directional-order}
-\end{equation}
-The first inequality follows from the subadditivity of $f(x)=rx/(r+x)$, and the second follows
-from the coordinatewise ordering above. Reverse KL is therefore already more protective than
-moment matching, but it still retains too much uncertainty along a previously measured dense key
-relative to the exact posterior. For an immediate repeated observation with noise
-$r_{\mathrm{next}}$, its effective write is $V/(r_{\mathrm{next}}+V)$, an increasing function of
-$V$; Equation~\eqref{eq:appendix-overwrite-directional-order}
-therefore predicts excessive rewriting despite the coordinatewise overconfidence. Moment matching
-repairs the marginals but discards the same correlations and makes this directional overwrite
-still stronger.
+To analyze the write strength induced by KDN, we record $\beta_t^{\mathrm{eff}}$ across layers,
+heads, and tokens on a fixed FineWeb-Edu stream for parameter-matched 750M KDA and Diagonal KDN
+models, both at initialization and after 50B training tokens. The resulting distributions are shown
+in Figure~\ref{fig:kdn-overwrite}. At $\mu=1$, Diagonal KDN concentrates its effective writes near
+one, indicating frequent overwrite. Increasing $\mu$ progressively reduces the effective write
+strength.
 
 \paragraph{Information scale as future protection.}
-Diagonal KDN changes only the uncertainty state retained after the current write. To expose the
-causal ordering, temporarily allow a token-specific scale $\mu_t$; the model's scale is constant
-across tokens:
+To understand overwrite, consider a normalized key with equal energy on $m$ active channels and
+isotropic predictive variance on that support: $k_i^2=1/m$ and $\widehat p_i=p$. Along this key,
+the exact posterior and its unscaled diagonal projection retain variances
+\begin{equation}
+  V_{\mathrm{exact}}
+  :=\ve{k}^{\tr}\ve{P}^{\star}\ve{k}
+  =\frac{rp}{r+p},
+  \qquad
+  V_{\mathrm{proj}}
+  :=\ve{k}^{\tr}\diag(\ve{p})\ve{k}
+  =\frac{mrp}{mr+p}.
+  \label{eq:appendix-balanced-key-mismatch}
+\end{equation}
+For $m>1$, $V_{\mathrm{proj}}>V_{\mathrm{exact}}$. Consider an immediate repeat of the same key
+with no intervening covariance evolution, so that the retained variance $V$ becomes the predictive
+variance for the next write. Its effective strength is
+\begin{equation}
+  \beta_{t+1}^{\mathrm{eff}}(V)
+  =\frac{V}{r_{t+1}+V}.
+  \label{eq:appendix-variance-write-link}
+\end{equation}
+Because this fraction increases with $V$, the diagonal projection assigns a stronger correction
+to the repeated key than the exact posterior.
+
+We introduce an information scale $\mu$ to reduce this retained uncertainty. For the causal
+analysis, let it vary by token as $\mu_t$; the model uses a single constant $\mu$:
 \begin{equation}
   p_{t,i}(\mu_t)
   =\left(\widehat p_{t,i}^{-1}
     +\mu_t\frac{k_{t,i}^2}{r_t}\right)^{-1}.
   \label{eq:appendix-protection-scale-update}
 \end{equation}
-Because $\ve{\kappa}_t$ is computed from the exclusive state
-$\widehat{\ve{p}}_t$ before Equation~\eqref{eq:appendix-protection-scale-update} is applied, a
-token-local intervention satisfies
+For the balanced key above, the scaled projection retains
+\begin{equation}
+  V_{\mathrm{proj}}(\mu)=\frac{mrp}{mr+\mu p}.
+  \label{eq:appendix-balanced-key-protection}
+\end{equation}
+Thus $\mu=m$ matches the exact one-step directional variance; for an equal-energy key with full
+support, this gives $\mu=d_k$.
+
+The gain $\ve{\kappa}_t$ is computed from the predictive state $\widehat{\ve{p}}_t$ before the
+scaled uncertainty update, so $\mu_t$ does not change the current gain or memory estimate:
 \begin{equation}
   \frac{\partial\ve{\kappa}_t}{\partial\mu_t}=\ve{0},
   \qquad
@@ -1808,8 +1708,7 @@ token-local intervention satisfies
   =-\frac{k_{t,i}^2}{r_t}p_{t,i}^2\leq0.
   \label{eq:appendix-protection-current-invariance}
 \end{equation}
-It therefore cannot strengthen the write that creates an association. Its first effect is on
-future gains. Holding subsequent token projections fixed and defining
+Its first effect is on future gains. Holding the next token's parameters fixed and defining
 $z_{t+1}=\sum_i\widehat p_{t+1,i}k_{t+1,i}^2$, we obtain
 \begin{equation}
 \begin{aligned}
@@ -1822,25 +1721,9 @@ $z_{t+1}=\sum_i\widehat p_{t+1,i}k_{t+1,i}^2$, we obtain
 \end{aligned}
   \label{eq:appendix-protection-future-write}
 \end{equation}
-Thus $\mu$ is a protection scale: it leaves present assimilation unchanged locally, but makes
-later tokens less able to rewrite directions with overlapping coordinatewise energy. This
-statement is local in causal time. Across complete runs, earlier scaled increments change the
-incoming state, and learned projections may compensate.
+Thus $\mu$ is a protection scale: it leaves the current write unchanged while weakening future
+writes along channels shared with the current key.
 
-For intuition, suppose a normalized key has equal energy on $m$ active channels and the incoming
-variance is isotropic, $k_i^2=1/m$ and $\widehat p_i=p$ on that support. The exact posterior leaves
-directional variance $rp/(r+p)$, whereas Equation~\eqref{eq:appendix-protection-scale-update}
-leaves
-\begin{equation}
-  V(\mu)=\frac{mrp}{mr+\mu p}.
-  \label{eq:appendix-balanced-key-protection}
-\end{equation}
-Hence $\mu=m$ exactly matches the one-step exact directional variance in this balanced case;
-$\mu=d_k$ is the corresponding calibration for a dense key. It is not a generally calibrated
-posterior: increasing $\mu$ deliberately makes the retained marginals still more confident in
-exchange for stronger future protection.
-
-\paragraph{Measured scale response.}
 The matched 750M sweep exhibits the predicted reduction in write strength. At both initialization
 and after training, the pooled mean $\beta^{\mathrm{eff}}$ decreases monotonically as $\mu$
 increases:
@@ -2020,8 +1903,6 @@ Diagonal KDN by one scalar per head:
   b_t>0.
   \label{eq:iso-cov-family}
 \end{equation}
-A hat continues to denote a one-step predictive quantity before conditioning on the current
-observation.
 
 \paragraph{Two isotropic projections.}
 The isotropic family is not closed under either stage of the Kalman recursion. Starting from
@@ -2067,7 +1948,8 @@ $\ve{\Omega}_t=\omega_t\ve{I}$, the retained predictive covariance is
   \label{eq:iso-kla-predict}
 \end{equation}
 Thus $\widehat b_t$ is the average predictive marginal variance. The projection is inactive when
-$\ve{\alpha}_t$ is constant across channels; otherwise the memory retains the full channel-wise
+$\ve{\alpha}_t$ is constant across channels, as in the scalar decay of Gated
+DeltaNet~\citep{yang2024gdn}. For channel-wise decay as in KDA, the memory retains the full
 transition while the uncertainty tracker keeps only its isotropic projection.
 
 \paragraph{Posterior covariance.}
