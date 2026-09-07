@@ -1,0 +1,1480 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,mathtools,amsthm,booktabs,microtype,xcolor}
+\usepackage{array,enumitem}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+
+\title{Kalman Delta Networks 3:\\
+Mixture of Associative Memories}
+\author{}
+\date{September 7, 2026}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\ve}[1]{\boldsymbol{#1}}
+\newcommand{\tr}{\mathsf{T}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\KL}{\operatorname{KL}}
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Normal}{\mathcal{N}}
+\newcommand{\Cat}{\operatorname{Cat}}
+\newcommand{\softmax}{\operatorname{softmax}}
+\newcommand{\logsumexp}{\operatorname{logsumexp}}
+
+\newtheorem{proposition}{Proposition}
+\newtheorem{corollary}{Corollary}
+\newtheorem{remark}{Remark}
+
+\setlist{itemsep=2pt,topsep=4pt}
+\setlength{\emergencystretch}{3em}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Kalman Associative Memory models a recurrent key--value map as one latent matrix with a
+columnwise Gaussian filtering law.  We seek to scale its state capacity by maintaining many
+Gaussian associative memories while reading and writing only a small token-selected subset.  The
+derivation proceeds in three stages.  First, replacing the single Gaussian by a persistent finite
+Gaussian sum gives an exact Bayesian anchor: linear--Gaussian prediction and conditioning preserve
+each hypothesis, component evidence updates its probability, and the one-component boundary is
+precisely Kalman Associative Memory.  Second, allowing a fresh categorical assignment at every
+token defines a conditional mixture of dynamic Bayesian linear regressors.  Exact filtering then
+branches over routing histories.  An online structured mean-field projection compresses this
+posterior to a product of Gaussian memory banks and yields responsibility-weighted, fractional
+Kalman updates.  Restricting its categorical factor to a token-local recognition network makes all
+routing coefficients known before the recurrent scan; it is an amortized variational filter when
+trained against the corresponding objective, and a variationally derived gate otherwise.
+
+Third, a deterministic top-$k$ participation controller defines a sparse, local-event-time member
+of the same model family.  Inactive memories then have identity dynamics and zero process noise,
+so routed tokens can be packed into
+expert-specific chronological subsequences and processed by segmented KDA/KDN scans.  The number
+of stored memories grows with the component count $C$, while expensive recurrent work grows with
+$k$ rather than $C$; a global-time-aging alternative is also characterized.  This note therefore
+separates the exact Gaussian-sum motivation, the approximate variational model, and the sparse
+systems realization.  Current multi-head KDN is recovered at $C=1$ after imposing the same
+covariance approximation.
+\end{abstract}
+
+\section{Scope and notation}
+\label{sec:kdn3-scope}
+
+We start directly from the Kalman Associative Memory formulation.  The latent memory
+$\widetilde{\ve{S}}_t\in\R^{d_k\times d_v}$ is a random linear map from keys to values.  A tilde
+denotes a random state, a bare symbol denotes a filtered component mean, and a hat denotes an
+exclusive one-step prediction before token $t$ is assimilated.  For matrices
+$\ve{X}=[\ve{x}_1,\ldots,\ve{x}_{d_v}]$ and
+$\ve{M}=[\ve{m}_1,\ldots,\ve{m}_{d_v}]$, retain the columnwise Gaussian notation
+\begin{equation}
+  \ve{X}\sim\Normal_{\mathrm{col}}(\ve{M},\ve{P})
+  \quad\Longleftrightarrow\quad
+  \ve{x}_j\sim\Normal(\ve{m}_j,\ve{P})
+  \ \text{independently for }j=1,\ldots,d_v.
+  \label{eq:kdn3-columnwise-gaussian}
+\end{equation}
+Equivalently,
+$\operatorname{vec}(\ve{X})\sim
+\Normal(\operatorname{vec}(\ve{M}),\ve{I}_{d_v}\otimes\ve{P})$.
+
+Let $C$ denote the number of mixture components and let $c\in\{1,\ldots,C\}$ index them.  We use
+$C$ rather than the commonly used $E$ to avoid confusing the component count with expectation.
+The base construction has one categorical variable
+$Z$ shared by every value column of a head and persistent through the sequence.  This shared label
+is essential: conditional on $Z$, the columns are independent, but marginalizing $Z$ can create
+dependence between them.  Independent component labels for the $d_v$ columns would instead define
+a different model with as many as $C^{d_v}$ joint combinations.
+
+The persistent label provides a simple setting in which an exact finite Gaussian mixture remains
+closed.  It represents alternative posterior hypotheses about one latent memory.  It does
+\emph{not} yet represent a mode that switches between tokens or a bank in which only one memory is
+updated.  Those models are separated in Section~\ref{sec:kdn3-routing-boundary}.
+
+\section{Kalman Associative Memory}
+\label{sec:kdn3-kam}
+
+The latent associative map evolves according to
+\begin{equation}
+  \widetilde{\ve{S}}_t
+  =\ve{D}_t\widetilde{\ve{S}}_{t-1}+\ve{W}_t,
+  \qquad
+  \ve{W}_t\sim\Normal_{\mathrm{col}}(\ve{0},\ve{\Omega}_t),
+  \label{eq:kdn3-kam-dynamics}
+\end{equation}
+and the current key reveals one noisy projection of that map,
+\begin{equation}
+  \ve{v}_t
+  =\widetilde{\ve{S}}_t^{\tr}\ve{k}_t+\ve{e}_t,
+  \qquad
+  \ve{e}_t\sim\Normal(\ve{0},r_t\ve{I}_{d_v}).
+  \label{eq:kdn3-kam-observation}
+\end{equation}
+Let
+$\mathcal{F}_t=\sigma\{(\ve{k}_\tau,\ve{v}_\tau):\tau\leq t\}$.
+With a single Gaussian filtering law
+\begin{equation}
+  \widetilde{\ve{S}}_{t-1}\mid\mathcal{F}_{t-1}
+  \sim\Normal_{\mathrm{col}}(\ve{S}_{t-1},\ve{P}_{t-1}),
+  \label{eq:kdn3-single-filtering-law}
+\end{equation}
+the Kalman prediction is
+\begin{equation}
+  \widehat{\ve{S}}_t=\ve{D}_t\ve{S}_{t-1},
+  \qquad
+  \widehat{\ve{P}}_t
+  =\ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t.
+  \label{eq:kdn3-single-predict}
+\end{equation}
+Define the innovation, its scalar variance, and the Kalman gain by
+\begin{equation}
+\begin{aligned}
+  \ve{\delta}_t
+  &=\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t,
+  &
+  \gamma_t
+  &=r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t,
+  &
+  \ve{\kappa}_t
+  &=\frac{\widehat{\ve{P}}_t\ve{k}_t}{\gamma_t}.
+\end{aligned}
+  \label{eq:kdn3-single-innovation}
+\end{equation}
+Conditioning gives
+\begin{equation}
+  \ve{S}_t
+  =\widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr},
+  \qquad
+  \ve{P}_t
+  =(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t.
+  \label{eq:kdn3-single-update}
+\end{equation}
+The posterior mean is the minimum-mean-square-error memory, and the layer reads
+\begin{equation}
+  \ve{o}_t=\ve{S}_t^{\tr}\ve{q}_t.
+  \label{eq:kdn3-single-read}
+\end{equation}
+The shared-parameter construction below changes only the filtering family.  Equations
+\eqref{eq:kdn3-kam-dynamics} and \eqref{eq:kdn3-kam-observation} remain the conditional model in
+each hypothesis.  Component-conditioned dynamics and noise are then introduced as an explicit
+extension.
+
+\section{Gaussian-mixture Kalman Associative Memory}
+\label{sec:kdn3-mixture-kam}
+
+\subsection{Mixture filtering law}
+
+Replace the single filtering law in Equation~\eqref{eq:kdn3-single-filtering-law} by
+\begin{equation}
+\begin{aligned}
+  \Pr(Z=c\mid\mathcal{F}_{t-1})
+  &=\pi_{t-1,c},
+  &
+  \widetilde{\ve{S}}_{t-1}\mid
+  (Z=c,\mathcal{F}_{t-1})
+  &\sim\Normal_{\mathrm{col}}(\ve{S}_{t-1,c},\ve{P}_{t-1,c}),
+\end{aligned}
+  \label{eq:kdn3-component-filtering-law}
+\end{equation}
+where $\pi_{t-1,c}>0$ and $\sum_c\pi_{t-1,c}=1$.  Marginally,
+\begin{equation}
+  p(\widetilde{\ve{S}}_{t-1}\mid\mathcal{F}_{t-1})
+  =\sum_{c=1}^{C}\pi_{t-1,c}
+   \Normal_{\mathrm{col}}(
+     \widetilde{\ve{S}}_{t-1};\ve{S}_{t-1,c},\ve{P}_{t-1,c}).
+  \label{eq:kdn3-mixture-filtering-law}
+\end{equation}
+At $t=0$, this replaces the original prior
+$\Normal_{\mathrm{col}}(\ve{0},\ve{I})$ by
+\begin{equation}
+  p(\widetilde{\ve{S}}_0)
+  =\sum_{c=1}^{C}\pi_{0,c}
+   \Normal_{\mathrm{col}}(
+     \widetilde{\ve{S}}_0;\ve{S}_{0,c},\ve{P}_{0,c}).
+  \label{eq:kdn3-mixture-prior}
+\end{equation}
+
+The closest extension of Kalman Associative Memory shares
+$\ve{D}_t$, $\ve{\Omega}_t$, and $r_t$ across components.  More generally, let the conditional
+model be
+\begin{equation}
+\begin{aligned}
+  \widetilde{\ve{S}}_t\mid Z=c
+  &=\ve{D}_{t,c}\widetilde{\ve{S}}_{t-1}+\ve{W}_{t,c},
+  &
+  \ve{W}_{t,c}
+  &\sim\Normal_{\mathrm{col}}(\ve{0},\ve{\Omega}_{t,c}),
+  \\
+  \ve{v}_t\mid(\widetilde{\ve{S}}_t,Z=c)
+  &=\widetilde{\ve{S}}_t^{\tr}\ve{k}_t+\ve{e}_{t,c},
+  &
+  \ve{e}_{t,c}
+  &\sim\Normal(\ve{0},r_{t,c}\ve{I}_{d_v}).
+\end{aligned}
+  \label{eq:kdn3-component-model}
+\end{equation}
+Assume $\ve{P}_{0,c}\succ0$, $\ve{\Omega}_{t,c}\succeq0$, $r_{t,c}>0$, and that the resulting
+$\widehat{\ve{P}}_{t,c}$ is positive definite.  Conditioned on
+$Z$ and the input-dependent quantities
+$\{(\ve{D}_{t,c},\ve{\Omega}_{t,c},\ve{k}_t,r_{t,c})\}$, the process and observation noises have
+the same temporal and mutual independence assumptions as in Kalman Associative Memory.  These
+quantities are treated as known at filtering time.  Tying them across $c$ recovers the original
+conditional model; the component-indexed notation exposes where meaningful symmetry breaking may
+enter.
+
+\subsection{Exact mixture prediction}
+
+Conditioned on $Z=c$, linear--Gaussian prediction gives
+\begin{equation}
+  \widehat{\ve{S}}_{t,c}
+  =\ve{D}_{t,c}\ve{S}_{t-1,c},
+  \qquad
+  \widehat{\ve{P}}_{t,c}
+  =\ve{D}_{t,c}\ve{P}_{t-1,c}\ve{D}_{t,c}^{\tr}
+   +\ve{\Omega}_{t,c}.
+  \label{eq:kdn3-component-predict}
+\end{equation}
+Because $Z$ is persistent, prediction does not move probability between components:
+\begin{equation}
+  \widehat\pi_{t,c}=\pi_{t-1,c}.
+  \label{eq:kdn3-weight-predict}
+\end{equation}
+Therefore
+\begin{equation}
+  p(\widetilde{\ve{S}}_t\mid\mathcal{F}_{t-1})
+  =\sum_{c=1}^{C}\widehat\pi_{t,c}
+   \Normal_{\mathrm{col}}(
+     \widetilde{\ve{S}}_t;\widehat{\ve{S}}_{t,c},\widehat{\ve{P}}_{t,c}).
+  \label{eq:kdn3-predictive-mixture}
+\end{equation}
+The number of components remains $C$: there is one predicted descendant of each persistent
+hypothesis.
+
+\subsection{Component evidence and Bayesian responsibilities}
+
+For component $c$, define
+\begin{equation}
+  \widehat{\ve{v}}_{t,c}
+  =\widehat{\ve{S}}_{t,c}^{\tr}\ve{k}_t,
+  \qquad
+  \ve{\delta}_{t,c}
+  =\ve{v}_t-\widehat{\ve{v}}_{t,c},
+  \qquad
+  \gamma_{t,c}
+  =r_{t,c}+\ve{k}_t^{\tr}\widehat{\ve{P}}_{t,c}\ve{k}_t.
+  \label{eq:kdn3-component-innovation}
+\end{equation}
+Integrating out the component memory gives the predictive observation law
+\begin{equation}
+  \ve{v}_t\mid(Z=c,\mathcal{F}_{t-1},\ve{k}_t)
+  \sim\Normal(
+    \widehat{\ve{v}}_{t,c},
+    \gamma_{t,c}\ve{I}_{d_v}).
+  \label{eq:kdn3-component-predictive-observation}
+\end{equation}
+Its log evidence is
+\begin{equation}
+  \ell_{t,c}
+  =-\frac{d_v}{2}\log(2\pi\gamma_{t,c})
+   -\frac{\|\ve{\delta}_{t,c}\|_2^2}{2\gamma_{t,c}}.
+  \label{eq:kdn3-component-log-evidence}
+\end{equation}
+Bayes' rule then yields the posterior component probability
+\begin{equation}
+  \pi_{t,c}
+  =\frac{\widehat\pi_{t,c}\exp(\ell_{t,c})}
+  {\sum_{a=1}^{C}\widehat\pi_{t,a}\exp(\ell_{t,a})}
+  =\softmax_c\!\left(
+    \log\widehat\pi_{t,c}+\ell_{t,c}
+  \right).
+  \label{eq:kdn3-responsibility}
+\end{equation}
+The variance penalty $d_v\log\gamma_{t,c}$ is part of the Bayesian score.  Using only the
+standardized squared-innovation term
+$\|\ve{\delta}_{t,c}\|_2^2/\gamma_{t,c}$ while omitting this penalty favors diffuse components and
+is equivalent to the exact likelihood only when all $\gamma_{t,c}$ are equal.
+
+\subsection{Conditional Kalman update and exact closure}
+
+Every component is conditioned on the observed token.  Its gain and posterior parameters are
+\begin{equation}
+\begin{aligned}
+  \ve{\kappa}_{t,c}
+  &=\frac{\widehat{\ve{P}}_{t,c}\ve{k}_t}{\gamma_{t,c}},
+  &
+  \ve{S}_{t,c}
+  &=\widehat{\ve{S}}_{t,c}
+    +\ve{\kappa}_{t,c}\ve{\delta}_{t,c}^{\tr},
+  \\
+  \ve{P}_{t,c}
+  &=(\ve{I}-\ve{\kappa}_{t,c}\ve{k}_t^{\tr})
+    \widehat{\ve{P}}_{t,c},
+  &
+  \ve{P}_{t,c}^{-1}
+  &=\widehat{\ve{P}}_{t,c}^{-1}
+    +\frac{1}{r_{t,c}}\ve{k}_t\ve{k}_t^{\tr}.
+\end{aligned}
+  \label{eq:kdn3-component-update}
+\end{equation}
+The covariance update may equivalently use the symmetric Joseph form
+\begin{equation}
+  \ve{P}_{t,c}
+  =(\ve{I}-\ve{\kappa}_{t,c}\ve{k}_t^{\tr})
+    \widehat{\ve{P}}_{t,c}
+    (\ve{I}-\ve{\kappa}_{t,c}\ve{k}_t^{\tr})^{\tr}
+   +r_{t,c}\ve{\kappa}_{t,c}\ve{\kappa}_{t,c}^{\tr}.
+  \label{eq:kdn3-component-joseph}
+\end{equation}
+
+\begin{proposition}[Exact finite-mixture closure]
+\label{prop:kdn3-mixture-closure}
+Suppose Equation~\eqref{eq:kdn3-component-filtering-law} holds with one persistent label $Z$
+shared across all value columns.  Assume the known conditional dynamics and observation model are
+given by Equation~\eqref{eq:kdn3-component-model}, with conditionally independent columns and
+noises.  Then the exact filtering
+posterior after token $t$ is
+\begin{equation}
+  p(\widetilde{\ve{S}}_t\mid\mathcal{F}_t)
+  =\sum_{c=1}^{C}\pi_{t,c}
+   \Normal_{\mathrm{col}}(
+     \widetilde{\ve{S}}_t;\ve{S}_{t,c},\ve{P}_{t,c}),
+  \label{eq:kdn3-exact-mixture-posterior}
+\end{equation}
+where the component parameters are given by
+Equations~\eqref{eq:kdn3-component-predict} and \eqref{eq:kdn3-component-update}, and the weights
+are given by Equation~\eqref{eq:kdn3-responsibility}.  In particular, exact filtering retains
+exactly $C$ labeled Gaussian branches at every time.
+\end{proposition}
+
+\begin{proof}
+Conditioned on $Z=c$, convolution with the linear--Gaussian transition maps the previous
+columnwise Gaussian to the predicted Gaussian in Equation~\eqref{eq:kdn3-component-predict}.
+Multiplying that density by the Gaussian observation likelihood gives the conditional Gaussian
+in Equation~\eqref{eq:kdn3-component-update}; its normalizing constant is precisely
+$\exp(\ell_{t,c})$.  Applying Bayes' rule to $Z$ normalizes those constants as in
+Equation~\eqref{eq:kdn3-responsibility}.  Since persistence creates one descendant per component,
+no additional mixture branches appear.
+\end{proof}
+
+\begin{remark}[Responsibilities do not attenuate the exact branch update]
+\label{rem:kdn3-no-fractional-write}
+The posterior probability $\pi_{t,c}$ changes how much component $c$ contributes to the marginal
+belief; it does not multiply that component's Kalman gain.  Conditioned on $Z=c$, token $t$ was
+observed and the branch receives the full update in Equation~\eqref{eq:kdn3-component-update}.
+In particular,
+\begin{equation}
+  \ve{P}_{t,c}^{-1}
+  \ne
+  \widehat{\ve{P}}_{t,c}^{-1}
+  +\frac{\pi_{t,c}}{r_{t,c}}\ve{k}_t\ve{k}_t^{\tr}
+  \quad\text{in general}.
+  \label{eq:kdn3-not-fractional-update}
+\end{equation}
+A responsibility-weighted precision increment can arise from a power-likelihood or
+mean-field/online-EM approximation to a different model with token-wise assignments and
+simultaneous memory banks.
+\end{remark}
+
+\section{Bayesian memory, readout, and uncertainty}
+\label{sec:kdn3-mixture-moments}
+
+\subsection{Posterior-mean associative memory}
+
+Under squared Frobenius loss, the optimal point memory remains the posterior mean,
+\begin{equation}
+  \overline{\ve{S}}_t
+  =\E[\widetilde{\ve{S}}_t\mid\mathcal{F}_t]
+  =\sum_{c=1}^{C}\pi_{t,c}\ve{S}_{t,c}.
+  \label{eq:kdn3-mixture-mean-memory}
+\end{equation}
+The Bayesian model-averaged read is therefore
+\begin{equation}
+  \ve{o}_t
+  =\overline{\ve{S}}_t^{\tr}\ve{q}_t
+  =\sum_{c=1}^{C}\pi_{t,c}\ve{S}_{t,c}^{\tr}\ve{q}_t.
+  \label{eq:kdn3-mixture-read}
+\end{equation}
+This is a normalized competition among alternative predictions in the same key--value space, not
+a concatenation of unrelated representation subspaces.
+
+The mean update contains two conceptually different corrections.  Define the predicted mixture
+mean
+\begin{equation}
+  \widehat{\overline{\ve{S}}}_t
+  =\sum_{c=1}^{C}\widehat\pi_{t,c}\widehat{\ve{S}}_{t,c}.
+  \label{eq:kdn3-predicted-mixture-mean}
+\end{equation}
+Substituting Equation~\eqref{eq:kdn3-component-update} into
+Equation~\eqref{eq:kdn3-mixture-mean-memory} gives
+\begin{equation}
+\begin{aligned}
+  \overline{\ve{S}}_t
+  ={}&\widehat{\overline{\ve{S}}}_t
+  +\sum_{c=1}^{C}
+    \pi_{t,c}\ve{\kappa}_{t,c}\ve{\delta}_{t,c}^{\tr}
+  \\
+  &+\sum_{c=1}^{C}
+    (\pi_{t,c}-\widehat\pi_{t,c})\widehat{\ve{S}}_{t,c}.
+\end{aligned}
+  \label{eq:kdn3-mixture-mean-decomposition}
+\end{equation}
+The second term performs within-hypothesis Kalman corrections.  The third moves the marginal mean
+because the observation changes which hypothesis is credible.  Consequently, the model-averaged
+memory is generally not governed by one ordinary delta rule even though every conditional branch
+is.
+
+\subsection{Within- and between-component uncertainty}
+
+Let
+$\ve{m}_{t,c}=\operatorname{vec}(\ve{S}_{t,c})$ and
+$\overline{\ve{m}}_t=\operatorname{vec}(\overline{\ve{S}}_t)$.
+The law of total covariance gives
+\begin{equation}
+\begin{aligned}
+  \Cov(\operatorname{vec}(\widetilde{\ve{S}}_t)\mid\mathcal{F}_t)
+  =\sum_{c=1}^{C}\pi_{t,c}\Big[
+     \ve{I}_{d_v}\otimes\ve{P}_{t,c}
+     +(\ve{m}_{t,c}-\overline{\ve{m}}_t)
+      (\ve{m}_{t,c}-\overline{\ve{m}}_t)^{\tr}
+   \Big].
+  \label{eq:kdn3-total-covariance}
+\end{aligned}
+\end{equation}
+The first term is average within-component uncertainty.  The second is uncertainty over distinct
+associative maps.  In vectorized memory space, this between-component term has rank at most
+$C-1$ and can correlate different key and value coordinates.
+
+Writing $\ve{s}_{t,c,j}$ for column $j$ of $\ve{S}_{t,c}$ and
+$\overline{\ve{s}}_{t,j}$ for the corresponding mixture mean, the diagonal and off-diagonal value
+blocks are
+\begin{equation}
+\begin{aligned}
+  \Cov(\widetilde{\ve{s}}_{t,j}\mid\mathcal{F}_t)
+  &=\sum_c\pi_{t,c}\left[
+      \ve{P}_{t,c}
+      +(\ve{s}_{t,c,j}-\overline{\ve{s}}_{t,j})
+       (\ve{s}_{t,c,j}-\overline{\ve{s}}_{t,j})^{\tr}
+    \right],
+  \\
+  \Cov(\widetilde{\ve{s}}_{t,j},\widetilde{\ve{s}}_{t,\ell}\mid\mathcal{F}_t)
+  &=\sum_c\pi_{t,c}
+    (\ve{s}_{t,c,j}-\overline{\ve{s}}_{t,j})
+    (\ve{s}_{t,c,\ell}-\overline{\ve{s}}_{t,\ell})^{\tr},
+  \quad j\ne\ell.
+\end{aligned}
+  \label{eq:kdn3-column-covariance}
+\end{equation}
+Thus the marginal mixture is generally not itself
+$\Normal_{\mathrm{col}}(\overline{\ve{S}}_t,\overline{\ve{P}}_t)$: marginalizing the common label
+induces cross-value dependence even though columns are independent inside each component.
+
+For a query $\ve{q}_t$, the uncertainty of the retrieved value is
+\begin{equation}
+\begin{aligned}
+  \Cov(\widetilde{\ve{S}}_t^{\tr}\ve{q}_t\mid\mathcal{F}_t)
+  =\sum_c\pi_{t,c}\Big[
+    (\ve{q}_t^{\tr}\ve{P}_{t,c}\ve{q}_t)\ve{I}_{d_v}
+    +(\ve{S}_{t,c}^{\tr}\ve{q}_t-\ve{o}_t)
+     (\ve{S}_{t,c}^{\tr}\ve{q}_t-\ve{o}_t)^{\tr}
+  \Big].
+  \label{eq:kdn3-read-covariance}
+\end{aligned}
+\end{equation}
+The second term measures disagreement among component reads and has no analogue in a
+single-Gaussian KDN state.
+
+\section{Special cases and the multi-head model}
+\label{sec:kdn3-special-cases}
+
+\subsection{One component recovers Kalman Associative Memory}
+
+\begin{corollary}[Single-component boundary]
+\label{cor:kdn3-single-component}
+For $C=1$, $\pi_{t,1}=1$, and
+Equations~\eqref{eq:kdn3-component-predict}--\eqref{eq:kdn3-component-update} reduce exactly to
+Kalman Associative Memory in
+Equations~\eqref{eq:kdn3-single-predict}--\eqref{eq:kdn3-single-update}.
+\end{corollary}
+
+This statement concerns the dense optimal filter.  To recover Diagonal or Isotropic KDN, impose
+the same retained covariance family and the same prediction/posterior projection scheme separately
+in every component; then set $C=1$.  To recover KDA, additionally replace the covariance-derived gain by
+$\ve{\kappa}_t=\beta_t\ve{k}_t$ and choose
+$\ve{D}_t=\diag(\ve{\alpha}_t)$.  A multi-component fixed-gain model can retain a learned
+surrogate evidence variance, but without a covariance state its component probabilities are no
+longer the exact Bayesian probabilities derived above.
+
+\subsection{Heads and mixture components are different axes}
+
+Assuming independent per-head labels and priors, conditionally independent head processes, and a
+factorized head observation model, the direct extension to $H$ attention heads is
+\begin{equation}
+  p(\widetilde{\ve{S}}_{t,1:H}\mid\mathcal{F}_t)
+  =\prod_{h=1}^{H}
+    \left[
+      \sum_{c=1}^{C}\pi_{t,h,c}
+      \Normal_{\mathrm{col}}(
+        \widetilde{\ve{S}}_{t,h};\ve{S}_{t,h,c},\ve{P}_{t,h,c})
+    \right].
+  \label{eq:kdn3-multihead-mixture}
+\end{equation}
+Every head remains a simultaneously active representation subspace.  Components within a head
+are normalized alternative hypotheses about the same head-local associative map.  Therefore the
+precise reduction statement is:
+\begin{quote}
+With the same per-component covariance projection, current multi-head Diagonal or Isotropic KDN
+is recovered as the single-component ($C=1$) case of the corresponding per-head Bayesian
+Gaussian-mixture filter.
+\end{quote}
+It would be incorrect to identify the existing $H$ heads themselves as mixture components.  If a
+single global component label is instead shared across heads, the joint family becomes
+\begin{equation}
+  \sum_{c=1}^{C}\pi_{t,c}
+  \prod_{h=1}^{H}
+  \Normal_{\mathrm{col}}(
+    \widetilde{\ve{S}}_{t,h};\ve{S}_{t,h,c},\ve{P}_{t,h,c}),
+  \label{eq:kdn3-global-head-label}
+\end{equation}
+and, under conditional independence of head observations given the global label, the component
+log evidence is summed across heads.  That is a distinct, more strongly coupled routing choice.
+
+\subsection{When the mixture is nontrivial}
+
+If all positive-weight components start with identical means and covariances and use identical
+dynamics and observation noise, induction through the filter keeps them identical.  Their
+likelihoods remain equal, so the mixture is exactly redundant.  A useful construction needs at
+least one source of symmetry breaking, such as component-specific prior means, prior
+covariances, process dynamics, process noise, or observation noise.  Sharing $\ve{k}_t$,
+$\ve{v}_t$, and the underlying coordinate system across components preserves the interpretation
+of competing hypotheses; giving every component unrelated key and value projections moves the
+model toward ordinary extra heads or a conventional mixture of experts.
+
+\section{Mixture Diagonal KDN}
+\label{sec:kdn3-diagonal}
+
+The exact dense Gaussian-sum filter multiplies the dense Riccati state and work by $C$.  A
+scan-compatible boundary applies the existing Diagonal KDN approximation independently to each
+component.  Let
+\begin{equation}
+  \ve{P}_{t-1,c}=\diag(\ve{p}_{t-1,c}),
+  \qquad
+  \ve{D}_{t,c}=\diag(\ve{\alpha}_{t,c}),
+  \qquad
+  \ve{\Omega}_{t,c}=\diag(\ve{\omega}_{t,c}).
+  \label{eq:kdn3-diagonal-family}
+\end{equation}
+The predictive diagonal covariance is
+\begin{equation}
+  \widehat{\ve{p}}_{t,c}
+  =\ve{\alpha}_{t,c}^{2}\odot\ve{p}_{t-1,c}
+   +\ve{\omega}_{t,c}.
+  \label{eq:kdn3-diagonal-predict}
+\end{equation}
+The component innovation variance and gain are
+\begin{equation}
+\begin{aligned}
+  \gamma_{t,c}
+  &=r_{t,c}
+    +\sum_i\widehat p_{t,c,i}k_{t,i}^2,
+  &
+  \ve{\kappa}_{t,c}
+  &=\frac{\widehat{\ve{p}}_{t,c}\odot\ve{k}_t}{\gamma_{t,c}}.
+\end{aligned}
+  \label{eq:kdn3-diagonal-gain}
+\end{equation}
+The predictive mean and innovation remain
+Equations~\eqref{eq:kdn3-component-predict} and
+\eqref{eq:kdn3-component-innovation}.  The component mean is updated by the mean line of
+Equation~\eqref{eq:kdn3-component-update} using the diagonal gain above.  The dense covariance
+line of that equation is not retained.  The component log evidence and posterior weight use
+Equations~\eqref{eq:kdn3-component-log-evidence} and \eqref{eq:kdn3-responsibility}.
+Because their predictive covariance has already been projected at preceding tokens, these are
+the exact one-step evidence and weight update given the retained diagonal predictive mixture, but
+approximations to the dense Kalman Associative Memory posterior.
+
+The exact within-component posterior covariance is generally dense.  Reverse-KL projection back to the
+diagonal family preserves the component posterior mean and gives
+\begin{equation}
+  p_{t,c,i}
+  =\left(
+     \widehat p_{t,c,i}^{-1}
+     +\frac{k_{t,i}^2}{r_{t,c}}
+   \right)^{-1}.
+  \label{eq:kdn3-diagonal-projection}
+\end{equation}
+Defining $u_{t,c,i}=k_{t,i}^2/r_{t,c}$ yields the per-component M\"obius recurrence
+\begin{equation}
+  p_{t,c,i}
+  =\frac{
+     \alpha_{t,c,i}^2p_{t-1,c,i}+\omega_{t,c,i}
+   }{
+     u_{t,c,i}\alpha_{t,c,i}^2p_{t-1,c,i}
+     +1+u_{t,c,i}\omega_{t,c,i}
+   }.
+  \label{eq:kdn3-diagonal-mobius}
+\end{equation}
+Equivalently, each $(c,i)$ pair carries the $2\times2$ map
+\begin{equation}
+  \ve{M}_{t,c,i}
+  =\begin{bmatrix}
+     \alpha_{t,c,i}^2 & \omega_{t,c,i}\\
+     u_{t,c,i}\alpha_{t,c,i}^2 & 1+u_{t,c,i}\omega_{t,c,i}
+   \end{bmatrix},
+  \label{eq:kdn3-diagonal-mobius-matrix}
+\end{equation}
+whose prefix product, applied to the homogeneous initial vector
+$[p_{0,c,i},1]^{\tr}$, recovers the covariance trajectory through the ratio of its two
+coordinates.  The information scale used by current Diagonal KDN can be introduced by replacing
+$u_{t,c,i}$ with $\mu_c k_{t,i}^2/r_{t,c}$.  The literal reverse-KL projection is $\mu_c=1$;
+other values are calibrated approximations.  At a given token, changing the post-write scale does
+not alter that token's gain or evidence conditional on holding
+$\widehat{\ve{p}}_{t,c}$ fixed; it changes later predictive covariances and therefore future gains
+and evidences.
+
+The mean recurrence for each component is
+\begin{equation}
+  \ve{S}_{t,c}
+  =(\ve{I}-\ve{\kappa}_{t,c}\ve{k}_t^{\tr})
+    \ve{D}_{t,c}\ve{S}_{t-1,c}
+   +\ve{\kappa}_{t,c}\ve{v}_t^{\tr}.
+  \label{eq:kdn3-diagonal-memory-recurrence}
+\end{equation}
+Once $\ve{\kappa}_{t,c}$ is obtained from the covariance scan, this is the same affine two-key
+memory recurrence already used by Diagonal KDN.
+
+\section{Associative structure and parallel schedule}
+\label{sec:kdn3-parallelism}
+
+The persistent mixture has an important factorization: neither the component covariance update
+nor the component mean update depends on $\pi_{t,c}$.  Posterior weights couple component
+\emph{beliefs}, but they do not feed back into conditional component trajectories.  Consequently,
+the $C$ conditional filters can be evaluated independently before their probabilities and outputs
+are combined.
+
+Let $a_{t,c}$ denote an unnormalized log weight.  Since
+$\widehat\pi_{t,c}=\pi_{t-1,c}$,
+\begin{equation}
+  a_{t,c}
+  =\log\pi_{0,c}+\sum_{\tau=1}^{t}\ell_{\tau,c},
+  \qquad
+  \pi_{t,c}
+  =\exp\left(
+    a_{t,c}-\logsumexp_{b}a_{t,b}
+  \right).
+  \label{eq:kdn3-log-weight-scan}
+\end{equation}
+Thus mixture routing itself is an additive prefix scan once the component evidences are known.
+
+\begin{proposition}[Staged scan factorization]
+\label{prop:kdn3-staged-scan}
+For persistent Mixture Diagonal KDN, the defined projected recurrence can be evaluated exactly in
+the following order:
+\begin{enumerate}
+  \item run $C$ independent M\"obius covariance scans to obtain
+        $\widehat{\ve{p}}_{t,c}$ and $\ve{\kappa}_{t,c}$;
+  \item run $C$ independent affine memory scans to obtain component reads and exclusive
+        innovations $\ve{\delta}_{t,c}$;
+  \item form $\ell_{t,c}$, perform the additive prefix scans in
+        Equation~\eqref{eq:kdn3-log-weight-scan}, and normalize across $c$;
+  \item reduce component reads using Equation~\eqref{eq:kdn3-mixture-read}.
+\end{enumerate}
+No component-state recurrence depends on the result of the weight scan.
+\end{proposition}
+
+\begin{proof}
+Equations~\eqref{eq:kdn3-diagonal-predict}--\eqref{eq:kdn3-diagonal-memory-recurrence} contain only
+component-local state and token inputs.  They therefore determine every component trajectory
+without reference to $\pi_{t,c}$.  Equation~\eqref{eq:kdn3-component-log-evidence} is then a
+tokenwise function of the exclusive component trajectory, and persistent posterior odds are the
+prefix sum in Equation~\eqref{eq:kdn3-log-weight-scan}.  The only cross-component operations are
+the token-local log-sum-exp normalization and weighted output reduction.
+\end{proof}
+
+This factorization corrects a tempting but overly broad conclusion: state-dependent Bayesian
+responsibilities do not destroy the existing scan structure in the persistent model, because
+they do not control the branch updates.  The component dimension can in principle be flattened
+into the head dimension for the existing gain and memory algebra, but the current public kernels
+need interface changes.  A naive flatten physically replicates shared keys, values, and queries;
+a native component axis or stride-aware loads would avoid that bandwidth cost.  The layer
+frontend, normalization, and output projection also retain the original head count.  The key new
+kernel contract is access to the exclusive innovation and innovation variance for every token and
+component.  Reconstructing the innovation from a post-write read requires division by
+$1-\ve{k}_t^{\tr}\ve{\kappa}_{t,c}$ and becomes unstable near a full write, so a production kernel
+should expose an exclusive key read or fuse a dedicated innovation computation and its backward.
+
+For $H$ heads and $C$ components per head, the retained states scale as
+\begin{equation}
+\begin{array}{c|c}
+  \text{branch family} & \text{state per layer, up to batch factors}\\
+  \hline
+  \text{Isotropic KDN mixture} & O(HC(d_kd_v+1))\\
+  \text{Diagonal KDN mixture} & O(HC(d_kd_v+d_k+1))\\
+  \text{Dense Kalman mixture} & O(HC(d_kd_v+d_k^2+1)).
+\end{array}
+  \label{eq:kdn3-state-cost}
+\end{equation}
+These are recurrent inference states; the final scalar accounts for each component's log weight.
+For distinct component means, all components process all tokens, so the persistent Gaussian-sum
+model offers no sparse-compute benefit.  Assuming diagonal or similarly structured transitions,
+a diagonal implementation requires
+$O(BTHC(d_kd_v+d_k))$ branch work, followed by
+$O(BTHCd_v+BTHC)$ evidence, normalization, and reduction work.  Dense recurrent filtering costs
+$O(BTHC(d_kd_v+d_k^2))$ under the same transition structure; a generic dense transition instead
+adds $O(d_k^2d_v+d_k^3)$ work per component and token.  If
+$\ve{P}_{0,c},\ve{D}_{t,c},\ve{\Omega}_{t,c},r_{t,c}$ are tied, covariance and gain trajectories
+are identical and that scan can be shared; distinct means still require component-specific memory
+work.  If the means are tied as well, the mixture is redundant.
+
+Materializing $[B,T,H,C,d_v]$ innovations and component reads can be expensive.  Innovation norms
+can be reduced immediately after evidence formation, although backward must retain or recompute
+the needed residual information.  Component reads cannot be reduced until the prefix evidence
+scan produces posterior weights, so they must be retained, recomputed, or handled by a more
+involved chunk pipeline.
+
+\section{A unified latent routed-memory model}
+\label{sec:kdn3-routing-boundary}
+
+The persistent Gaussian sum is an exact anchor, but its component label describes a
+sequence-global hypothesis rather than scalable token routing.  We now enlarge the model so that
+the categorical assignment can change with the token.  This gives one probabilistic family whose
+persistent boundary is the exact filter above and whose variational approximation is a routed bank
+of associative memories.
+
+\subsection{A conditional mixture of dynamic associative memories}
+\label{sec:kdn3-routed-generative}
+
+Maintain $C$ simultaneous latent memories
+$\widetilde{\ve{S}}_{t,1:C}$.  Their joint transition is
+\begin{equation}
+  p(\widetilde{\ve{S}}_{t,1:C}
+    \mid\widetilde{\ve{S}}_{t-1,1:C},\ve{x}_t)
+  =\prod_{c=1}^{C}
+   \Normal_{\mathrm{col}}\!\left(
+     \widetilde{\ve{S}}_{t,c};
+     \ve{D}_{t,c}\widetilde{\ve{S}}_{t-1,c},
+     \ve{\Omega}_{t,c}
+   \right),
+  \label{eq:kdn3-joint-bank-transition}
+\end{equation}
+where the process noises are conditionally independent.  Given the observed token representation
+$\ve{x}_t$, draw a local assignment
+\begin{equation}
+  Z_t\mid\ve{x}_t
+  \sim\Cat(\ve{\pi}_{\theta,t}),
+  \qquad
+  \ve{\pi}_{\theta,t}
+  =\softmax(\ve{g}_{\theta}(\ve{x}_t)),
+  \label{eq:kdn3-token-route-prior}
+\end{equation}
+and let only the selected memory explain the current key--value observation,
+\begin{equation}
+  \widetilde{\ve{S}}_{t}^{\mathrm{act}}
+  :=\widetilde{\ve{S}}_{t,Z_t},
+  \qquad
+  \ve{v}_t\mid
+  (Z_t=c,\widetilde{\ve{S}}_{t,c},\ve{k}_t)
+  \sim
+  \Normal(
+    \widetilde{\ve{S}}_{t,c}^{\tr}\ve{k}_t,
+    r_{t,c}\ve{I}_{d_v}).
+  \label{eq:kdn3-routed-observation}
+\end{equation}
+Thus Kalman Associative Memory is dynamic Bayesian linear regression from keys to values, while
+the routed model is a conditional mixture of dynamic Bayesian linear regressions.
+
+More generally, a route transition
+\begin{equation}
+  T_{t,ac}
+  =\Pr(Z_t=c\mid Z_{t-1}=a,\ve{x}_t)
+  \label{eq:kdn3-route-transition}
+\end{equation}
+unifies several cases.  The identity transition
+$T_{t,ac}=\mathbf{1}\{a=c\}$ gives a persistent route.  Identical rows
+$T_{t,ac}=\pi_{\theta,t,c}$ give a fresh token-local route, and a diagonally biased matrix gives a
+sticky switching model.  The persistent case is exactly closed because each component has one
+descendant.  General switching is not.
+
+To see the connection to the earlier Gaussian sum, use the identity route transition, set
+$\Pr(Z_0=c)=\pi_{0,c}$, initialize bank $c$ with the $c$th component prior, and let all banks follow
+Equation~\eqref{eq:kdn3-joint-bank-transition}.  Conditional on $Z=c$, only bank $c$ supplies
+observations.  Integrating out the unused banks gives exactly the marginal law of the active state
+$\widetilde{\ve{S}}_t^{\mathrm{act}}$ in
+Section~\ref{sec:kdn3-mixture-kam}.  Thus the earlier one-state mixture is a marginal boundary of
+this simultaneous-bank construction.
+
+\subsection{Fresh-route one-step posterior and route-history growth}
+\label{sec:kdn3-routed-exact}
+
+Let
+\begin{equation}
+  \widehat q_{t,c}(\widetilde{\ve{S}}_{t,c})
+  =
+  \Normal_{\mathrm{col}}(
+    \widetilde{\ve{S}}_{t,c};
+    \widehat{\ve{S}}_{t,c},\widehat{\ve{P}}_{t,c})
+  \label{eq:kdn3-bank-predictive-factor}
+\end{equation}
+denote the predicted Gaussian factor for bank $c$.  In the fresh-route case, start from the
+factorized predictive law
+\begin{equation}
+  \widetilde p_t(
+    Z_t,\widetilde{\ve{S}}_{t,1:C})
+  =\Cat(Z_t;\ve{\pi}_{\theta,t})
+   \prod_{c=1}^{C}\widehat q_{t,c}(\widetilde{\ve{S}}_{t,c}).
+  \label{eq:kdn3-projected-predictive-law}
+\end{equation}
+This law is exact at the first token under independent bank priors, and after later tokens it is
+the fixed-size product projection used below.  Conditioning this law on one observation gives the
+exact one-step posterior
+\begin{equation}
+\begin{aligned}
+  &\widetilde p_t(
+    Z_t=c,\widetilde{\ve{S}}_{t,1:C}
+    \mid\ve{v}_t,\ve{k}_t,\ve{x}_t)
+  \\
+  &\qquad=
+  \rho_{t,c}^{\star}\,
+  q_{t,c}^{+}(\widetilde{\ve{S}}_{t,c})
+  \prod_{b\ne c}
+  \widehat q_{t,b}(\widetilde{\ve{S}}_{t,b}),
+\end{aligned}
+  \label{eq:kdn3-exact-bank-posterior}
+\end{equation}
+where $q_{t,c}^{+}$ is the full Kalman update of bank $c$ and
+\begin{equation}
+  \rho_{t,c}^{\star}
+  \propto
+  \pi_{\theta,t,c}\,
+  \Normal\!\left(
+    \ve{v}_t;
+    \widehat{\ve{S}}_{t,c}^{\tr}\ve{k}_t,
+    \gamma_{t,c}\ve{I}_{d_v}
+  \right).
+  \label{eq:kdn3-collapsed-route-posterior}
+\end{equation}
+This is already a mixture of $C$ joint bank distributions.  At the next token, without the product
+projection, each route history
+generally produces different bank states and can branch again.  Exact filtering can therefore grow
+as $C^t$.  A Markov route has the same continuous-state problem: although its discrete weights
+admit standard semiring operations, every destination receives a mixture over predecessor bank
+states.  For a Markov route, replacing $\ve{\pi}_{\theta,t}$ by a predicted route marginal in
+Equation~\eqref{eq:kdn3-projected-predictive-law} is itself part of the projection, not an exact
+filtering identity.  A fixed-size implementation needs an explicit projection or merging rule.
+
+When $Z_t=Z$ is persistent, only the branch that repeatedly selects $c$ matters under hypothesis
+$Z=c$; marginalizing unused banks recovers exactly the $C$-component Gaussian-sum filter in
+Section~\ref{sec:kdn3-mixture-kam}.  The exact persistent model is therefore a boundary of the
+routed-bank model, not the sparse implementation itself.
+
+\section{Amortized online variational filtering}
+\label{sec:kdn3-amortized-vi}
+
+\subsection{Structured mean-field projection}
+
+After every token, project the route-history posterior onto
+\begin{equation}
+  q_t(Z_t,\widetilde{\ve{S}}_{t,1:C})
+  =
+  \Cat(Z_t;\ve{\rho}_t)
+  \prod_{c=1}^{C}
+  q_{t,c}(\widetilde{\ve{S}}_{t,c}),
+  \qquad
+  q_{t,c}
+  =
+  \Normal_{\mathrm{col}}(\ve{S}_{t,c},\ve{P}_{t,c}).
+  \label{eq:kdn3-routed-variational-family}
+\end{equation}
+For predicted bank factors $\widehat q_{t,c}$, define the one-step objective relative to the
+projected predictive law in Equation~\eqref{eq:kdn3-projected-predictive-law}:
+\begin{equation}
+  \mathcal{L}_t(q)
+  =\E_q[\log p(\ve{v}_t\mid Z_t,\widetilde{\ve{S}}_{t,1:C},\ve{k}_t)]
+   -\KL(q_t\,\|\,\widetilde p_t).
+  \label{eq:kdn3-online-elbo-compact}
+\end{equation}
+Using the factorization in Equation~\eqref{eq:kdn3-routed-variational-family}, this expands to
+\begin{equation}
+\begin{aligned}
+  \mathcal{L}_t(q)
+  ={}&
+  \sum_{c=1}^{C}\rho_{t,c}\,
+  \E_{q_{t,c}}\!\left[
+    \log p(\ve{v}_t\mid
+      \widetilde{\ve{S}}_{t,c},Z_t=c,\ve{k}_t)
+  \right]
+  \\
+  &-\KL\!\left(
+    \Cat(\ve{\rho}_t)\,\|\,\Cat(\ve{\pi}_{\theta,t})
+  \right)
+  -\sum_{c=1}^{C}
+   \KL(q_{t,c}\,\|\,\widehat q_{t,c}).
+\end{aligned}
+  \label{eq:kdn3-online-elbo}
+\end{equation}
+For fixed $\ve{\rho}_t$, the coordinate-optimal bank factor is
+\begin{equation}
+  q_{t,c}(\widetilde{\ve{S}}_{t,c})
+  \propto
+  \widehat q_{t,c}(\widetilde{\ve{S}}_{t,c})\,
+  p(\ve{v}_t\mid
+    \widetilde{\ve{S}}_{t,c},Z_t=c,\ve{k}_t)^{\rho_{t,c}}.
+  \label{eq:kdn3-power-posterior}
+\end{equation}
+Thus the local responsibility allocates the token's observation precision across the memory bank.
+With
+$\ve{\Lambda}_{t,c}=\ve{P}_{t,c}^{-1}$ and
+$\ve{\Xi}_{t,c}=\ve{\Lambda}_{t,c}\ve{S}_{t,c}$, the update is
+\begin{equation}
+\begin{aligned}
+  \ve{\Lambda}_{t,c}
+  &=
+  \widehat{\ve{P}}_{t,c}^{-1}
+  +\frac{\rho_{t,c}}{r_{t,c}}\ve{k}_t\ve{k}_t^{\tr},
+  \\
+  \ve{\Xi}_{t,c}
+  &=
+  \widehat{\ve{P}}_{t,c}^{-1}\widehat{\ve{S}}_{t,c}
+  +\frac{\rho_{t,c}}{r_{t,c}}\ve{k}_t\ve{v}_t^{\tr}.
+\end{aligned}
+  \label{eq:kdn3-fractional-natural-update}
+\end{equation}
+Equivalently,
+\begin{equation}
+\begin{aligned}
+  \ve{S}_{t,c}
+  &=
+  \widehat{\ve{S}}_{t,c}
+  +\ve{\kappa}_{t,c}^{(\rho)}
+   \left(
+     \ve{v}_t-\widehat{\ve{S}}_{t,c}^{\tr}\ve{k}_t
+   \right)^{\tr},
+  \\
+  \ve{\kappa}_{t,c}^{(\rho)}
+  &=
+  \frac{
+    \rho_{t,c}\widehat{\ve{P}}_{t,c}\ve{k}_t
+  }{
+    r_{t,c}
+    +\rho_{t,c}\ve{k}_t^{\tr}
+      \widehat{\ve{P}}_{t,c}\ve{k}_t
+  }.
+\end{aligned}
+  \label{eq:kdn3-fractional-kalman-update}
+\end{equation}
+
+\begin{proof}[Derivation of the bank coordinate]
+Holding $\ve{\rho}_t$ and the other bank factors fixed, the terms in
+Equation~\eqref{eq:kdn3-online-elbo} that depend on $q_{t,c}$ give
+\begin{equation}
+  \log q_{t,c}^{\star}(\widetilde{\ve{S}}_{t,c})
+  =
+  \log\widehat q_{t,c}(\widetilde{\ve{S}}_{t,c})
+  +\rho_{t,c}
+   \log p(\ve{v}_t\mid
+     \widetilde{\ve{S}}_{t,c},Z_t=c,\ve{k}_t)
+  +\mathrm{const}.
+  \label{eq:kdn3-bank-coordinate-proof}
+\end{equation}
+The first term is Gaussian and the second is a Gaussian log likelihood multiplied by
+$\rho_{t,c}$.  Collecting the quadratic and linear terms in
+$\widetilde{\ve{S}}_{t,c}$ gives the precision and precision-weighted mean in
+Equation~\eqref{eq:kdn3-fractional-natural-update}.  Applying the matrix inversion lemma gives
+Equation~\eqref{eq:kdn3-fractional-kalman-update}.
+\end{proof}
+
+When $\rho_{t,c}=0$, bank $c$ receives no measurement information; when
+$\rho_{t,c}=1$, it receives the ordinary Kalman update.  These are exact coordinate updates for
+Equation~\eqref{eq:kdn3-online-elbo} given fixed responsibilities, but the factorized family is an
+approximation to exact route-history filtering.
+
+The likelihood power in Equation~\eqref{eq:kdn3-power-posterior} is not an ad hoc temperature.
+It is the ordinary mean-field coordinate update: the selector
+$\mathbf{1}\{Z_t=c\}$ appears in the complete-data log likelihood, and its expectation under the
+categorical factor is $\rho_{t,c}$.  If $\rho_{t,c}$ is instead supplied by a deterministic gate
+trained only through a language-model objective, the same recurrence is better viewed as a
+generalized-Bayes or stateful-MoE update motivated by this coordinate calculation.
+
+This is the direct dynamic analogue of finite-mixture variational inference
+\cite{blei2017variational}: a static component parameter becomes a recurrent Gaussian
+associative-memory bank, the local assignment becomes
+$Z_t$, its responsibility becomes $\rho_{t,c}$, and responsibility-weighted sufficient statistics
+become the fractional precision and precision-weighted-mean increments in
+Equation~\eqref{eq:kdn3-fractional-natural-update}.
+
+\subsection{Exact and amortized responsibilities}
+
+The unconstrained categorical coordinate satisfies
+\begin{equation}
+  \rho_{t,c}^{\mathrm{CAVI}}
+  \propto
+  \pi_{\theta,t,c}
+  \exp\!\left\{
+    \E_{q_{t,c}}
+    [\log p(\ve{v}_t\mid
+      \widetilde{\ve{S}}_{t,c},Z_t=c,\ve{k}_t)]
+  \right\}.
+  \label{eq:kdn3-cavi-route}
+\end{equation}
+For a Gaussian bank factor, its expected log likelihood is
+\begin{equation}
+\begin{aligned}
+  &\E_{q_{t,c}}
+   [\log p(\ve{v}_t\mid
+      \widetilde{\ve{S}}_{t,c},Z_t=c,\ve{k}_t)]
+  \\
+  &\quad=
+  -\frac{d_v}{2}\log(2\pi r_{t,c})
+  -\frac{
+    \|\ve{v}_t-\ve{S}_{t,c}^{\tr}\ve{k}_t\|_2^2
+    +d_v\ve{k}_t^{\tr}\ve{P}_{t,c}\ve{k}_t
+  }{2r_{t,c}}.
+\end{aligned}
+  \label{eq:kdn3-expected-log-likelihood}
+\end{equation}
+This coordinate depends on recurrent bank state, so alternating it with
+Equation~\eqref{eq:kdn3-fractional-natural-update} is sequential and would obstruct the existing
+input-coefficient scan.
+
+The scalable restriction is an amortized local factor
+\begin{equation}
+  q_{\phi}(Z_t=c\mid\ve{x}_t)=\rho_{t,c},
+  \qquad
+  \ve{\rho}_t=\softmax(\ve{g}_{\phi}(\ve{x}_t)),
+  \label{eq:kdn3-amortized-router}
+\end{equation}
+computed from pre-mixer token features only.  It approximates the state-aware categorical
+coordinate but is not the exact Bayesian responsibility in
+Equation~\eqref{eq:kdn3-collapsed-route-posterior}.  Keeping the generative prior
+$\ve{\pi}_{\theta,t}$ distinct from the recognition probability $\ve{\rho}_t$ preserves the KL
+term in Equation~\eqref{eq:kdn3-online-elbo}.  Tying them is a simpler conditional-gating model,
+but weakens the inference interpretation.  If training uses only language-model loss and no
+variational or calibration objective, the most accurate claim is that the router and updates are
+\emph{variationally derived}, not that the layer performs optimized variational inference.
+
+Using the same local factor for reading gives
+\begin{equation}
+  \ve{o}_t
+  =\sum_{c=1}^{C}
+    \rho_{t,c}\ve{S}_{t,c}^{\tr}\ve{q}_t.
+  \label{eq:kdn3-routed-read}
+\end{equation}
+Separate read and write gates are possible, but Equation~\eqref{eq:kdn3-routed-read} is the
+coherent boundary in which one latent assignment controls both.  Components share key, value, and
+query projections inside each original head, compete on a simplex, and reduce back to the
+original head width before the output projection.  This distinguishes the factorization from
+simply widening the model with unrelated heads, although it remains representable as a constrained
+set of tied, gated heads.
+
+In the recommended shared-across-head variant, one global $Z_t$ selects the same component index
+jointly across all $H$ original heads.  The headwise expected log likelihoods add in
+Equation~\eqref{eq:kdn3-online-elbo}, and the same $\rho_{t,c}$ weights every head.  Independent
+variables $Z_{t,h}$ instead define a per-head routing family with different semantics and many more
+routed streams.  In neither case do the original representation heads become mixture components.
+Formally, the shared-route factorization uses
+\begin{equation}
+  q_t=\Cat(Z_t;\ve{\rho}_t)
+      \prod_{h=1}^{H}\prod_{c=1}^{C}q_{t,h,c},
+  \qquad
+  p(\ve{v}_{t,1:H}\mid Z_t=c,\widetilde{\ve{S}}_{t,1:H,c})
+  =\prod_{h=1}^{H}p(\ve{v}_{t,h}\mid Z_t=c,\widetilde{\ve{S}}_{t,h,c}).
+  \label{eq:kdn3-shared-head-route}
+\end{equation}
+
+\subsection{Routed Diagonal KDN remains scan-compatible}
+
+For a diagonal bank covariance, define
+\begin{equation}
+\begin{aligned}
+  \widehat{\ve{p}}_{t,c}
+  &=\ve{\alpha}_{t,c}^{2}\odot\ve{p}_{t-1,c}
+    +\ve{\omega}_{t,c},
+  \\
+  \ve{\kappa}_{t,c}^{(\rho)}
+  &=
+  \frac{
+    \rho_{t,c}\widehat{\ve{p}}_{t,c}\odot\ve{k}_t
+  }{
+    r_{t,c}
+    +\rho_{t,c}\sum_i\widehat p_{t,c,i}k_{t,i}^{2}
+  },
+  \qquad
+  \ve{u}_{t,c}
+  =\frac{\mu_c\rho_{t,c}}{r_{t,c}}
+   \ve{k}_t\odot\ve{k}_t,
+  \\
+  \ve{p}_{t,c}
+  &=\frac{
+    \widehat{\ve{p}}_{t,c}
+  }{
+    \ve{1}+\ve{u}_{t,c}\odot\widehat{\ve{p}}_{t,c}
+  }.
+\end{aligned}
+  \label{eq:kdn3-routed-diagonal-update}
+\end{equation}
+The literal variational update has $\mu_c=1$; other values retain the existing KDN information
+calibration.  Substituting
+$u_{t,c,i}=\mu_c\rho_{t,c}k_{t,i}^2/r_{t,c}$ into
+Equation~\eqref{eq:kdn3-diagonal-mobius-matrix} gives the same $2\times2$ M\"obius scan for every
+bank and key channel.  The mean update remains
+\begin{equation}
+  \ve{S}_{t,c}
+  =
+  (\ve{I}-\ve{\kappa}_{t,c}^{(\rho)}\ve{k}_t^{\tr})
+  \ve{D}_{t,c}\ve{S}_{t-1,c}
+  +\ve{\kappa}_{t,c}^{(\rho)}\ve{v}_t^{\tr}.
+  \label{eq:kdn3-routed-memory-update}
+\end{equation}
+Because Equation~\eqref{eq:kdn3-amortized-router} makes every $\rho_{t,c}$ known before either
+recurrence, the covariance maps and affine memory maps remain associative.  A router that reads
+the current bank predictions would reintroduce a state--routing cycle.
+
+\begin{corollary}[Routed single-component boundary]
+For $C=1$, $\rho_{t,1}=1$.  Equations~\eqref{eq:kdn3-routed-diagonal-update} and
+\eqref{eq:kdn3-routed-memory-update} reduce to current Diagonal KDN with the same information-scale
+choice.  Replacing the covariance-derived gain by the fixed gain
+$\beta_t\ve{k}_t$ gives the corresponding KDA boundary.
+\end{corollary}
+
+For a routed fixed-gain KDA bank with $C>1$, the direct control baseline uses
+\begin{equation}
+  \ve{\kappa}_{t,c}^{\mathrm{KDA}}
+  =\rho_{t,c}\beta_{t,c}\ve{k}_t.
+  \label{eq:kdn3-routed-kda-gain}
+\end{equation}
+This is not a covariance-derived variational gain, but it preserves the same input-known affine
+scan and gives an inexpensive systems prototype for the routing mechanism.
+
+\section{Sparse capacity scaling}
+\label{sec:kdn3-sparse-scaling}
+
+\subsection{Dense soft routing is the reference recurrence}
+
+With a dense softmax, every $\rho_{t,c}$ is nonzero, so all $C$ memories must update and read every
+token.  This gives the cleanest reference implementation and directly validates the variational
+recurrence, but its recurrent work and training activations are $C$ times the one-memory layer.
+It scales representational state, not computational efficiency.
+
+Merely setting most variational responsibilities to zero does not by itself freeze the associated
+latent dynamics.  For a genuinely sparse local-clock model, add a deterministic participation
+controller $\mathcal{A}_t$ of size $k\ll C$ to the conditional generative model.  Define
+\begin{equation}
+\begin{aligned}
+  \mathcal{A}_t
+  &=\operatorname{TopK}(\ve{g}_{\psi}(\ve{x}_t),k),
+  &a_{t,c}&=\mathbf{1}\{c\in\mathcal{A}_t\},
+  \\
+  \ve{D}^{\mathcal{A}}_{t,c}
+  &=a_{t,c}\ve{D}_{t,c}+(1-a_{t,c})\ve{I},
+  &
+  \ve{\Omega}^{\mathcal{A}}_{t,c}
+  &=a_{t,c}\ve{\Omega}_{t,c},
+  \\
+  \pi_{\theta,t,c}&=\rho_{t,c}=0\quad(c\notin\mathcal{A}_t),
+  &
+  \sum_{c\in\mathcal{A}_t}\pi_{\theta,t,c}
+  &=\sum_{c\in\mathcal{A}_t}\rho_{t,c}=1.
+\end{aligned}
+  \label{eq:kdn3-topk-router}
+\end{equation}
+The quantities $\ve{D}^{\mathcal{A}}$ and $\ve{\Omega}^{\mathcal{A}}$ summarize the conditional
+transition moments.  Literally, the joint bank transition in
+Equation~\eqref{eq:kdn3-joint-bank-transition} is replaced by the product of kernels
+\begin{equation}
+\begin{aligned}
+  &p(\widetilde{\ve{S}}_{t,1:C}
+      \mid\widetilde{\ve{S}}_{t-1,1:C},\ve{x}_t,\mathcal{A}_t)
+    =\prod_{c=1}^{C}
+      \mathcal{K}^{\mathcal{A}}_{t,c}(\widetilde{\ve{S}}_{t,c}),
+  \\
+  &\mathcal{K}^{\mathcal{A}}_{t,c}(\widetilde{\ve{S}})
+  =\begin{cases}
+    \Normal_{\mathrm{col}}\!\left(
+      \widetilde{\ve{S}};
+      \ve{D}_{t,c}\widetilde{\ve{S}}_{t-1,c},\ve{\Omega}_{t,c}
+    \right), & a_{t,c}=1,\\
+    \delta_{\widetilde{\ve{S}}_{t-1,c}}(\widetilde{\ve{S}}),
+      & a_{t,c}=0.
+  \end{cases}
+\end{aligned}
+  \label{eq:kdn3-participation-transition}
+\end{equation}
+Here $\delta$ is a Dirac measure; after integrating over the previous bank factor, an inactive
+bank's predictive factor is simply unchanged.  The route prior and recognition factor are both
+supported inside $\mathcal{A}_t$; they need not otherwise be equal.  Equations
+\eqref{eq:kdn3-projected-predictive-law}--\eqref{eq:kdn3-online-elbo} apply conditional on
+$\mathcal{A}_t$, using predictive factors generated by this kernel and masked categorical factors.
+Event-time freezing is therefore a declared model choice, not an implication of top-$k$ posterior
+truncation.
+
+Top-$2$ is the recommended initial point because it preserves competition and ordinary gradients
+between the two selected recognition scores while bounding recurrent work.  A first implementation
+can tie $\ve{g}_{\psi}=\ve{g}_{\phi}$ and apply a masked softmax.  Hard set membership and
+unselected scores still have no pathwise gradient; a distinct participation network needs a
+straight-through estimator, sampling relaxation, or auxiliary routing objective.  Top-$1$ is a
+useful ablation but also needs such a mechanism because renormalizing its only selected probability
+to one removes the within-route gate gradient.
+In the exact categorical model, one $Z_t\in\mathcal{A}_t$ supplies the likelihood and all
+participating banks undergo their declared dynamics.  In the projected filter, every bank with
+$\rho_{t,c}>0$ additionally receives its fractional measurement update.  Consequently a runner-up
+with tiny $\rho_{t,c}$ still undergoes a full transition but receives almost no measurement; gating
+the transition itself by responsibility would define another model and should be ablated
+separately.
+
+\subsection{Local event time: the sparse reference semantics}
+
+Under Equation~\eqref{eq:kdn3-participation-transition}, an inactive memory is exactly frozen.  For
+each bank, let $t_{c,1}<\cdots<t_{c,N_c}$ be the tokens at which
+$c\in\mathcal{A}_t$ and use a local event index $j$:
+\begin{equation}
+\begin{aligned}
+  \widetilde{\ve{S}}_{j,c}
+  &=\ve{D}_{t_{c,j},c}\widetilde{\ve{S}}_{j-1,c}
+    +\ve{W}_{t_{c,j},c},
+  \\
+  q_{j,c}(\widetilde{\ve{S}}_{j,c})
+  &\propto
+  \widehat q_{j,c}(\widetilde{\ve{S}}_{j,c})
+  p(\ve{v}_{t_{c,j}}\mid
+    \widetilde{\ve{S}}_{j,c},Z_{t_{c,j}}=c,
+    \ve{k}_{t_{c,j}})^{\rho_{t_{c,j},c}}.
+\end{aligned}
+  \label{eq:kdn3-local-clock-model}
+\end{equation}
+Between routed events, the bank transition is the identity and process noise is zero.  Dropping
+inactive tokens from that bank's stream is therefore exact.  Stable dispatch by
+$(\text{batch},c,t)$ produces chronological variable-length sequences, each of which can be
+processed by the ordinary associative recurrence.  Outputs are inverse-scattered to token order
+and combined by Equation~\eqref{eq:kdn3-routed-read}.
+
+This event-time model deliberately differs from global-time KDN: a rarely used memory does not
+decay merely because unrelated tokens were routed elsewhere.  That behavior is natural for a
+memory-slot interpretation and gives the cleanest $O(k)$ recurrent computation, but it must be
+stated as part of the model rather than hidden as a kernel shortcut.
+
+\subsection{Global-time aging as a controlled alternative}
+
+If every memory must age at every global token, use the original all-bank transition in
+Equation~\eqref{eq:kdn3-joint-bank-transition} and sparsify only the measurement update.  A bank
+outside the measurement active set still performs
+\begin{equation}
+  \ve{S}_{t,c}=\ve{D}_{t,c}\ve{S}_{t-1,c},
+  \qquad
+  \ve{p}_{t,c}
+  =\ve{\alpha}_{t,c}^{2}\odot\ve{p}_{t-1,c}
+   +\ve{\omega}_{t,c}.
+  \label{eq:kdn3-inactive-global-transition}
+\end{equation}
+Sparse execution is still possible when skipped transitions have compact interval summaries.  A
+diagonal mean transition composes by products of $\ve{\alpha}$, while each covariance coordinate
+has the affine map $p\mapsto ap+b$; these maps compose associatively over the gap between routed
+events.  If transition parameters are shared across memories, their prefix summaries can be
+computed once and queried at routed events.  Fully component- and token-specific transitions
+generally require $O(CT)$ transition generation or a new hierarchical parameterization, weakening
+the scaling benefit.
+
+For KDA, a skipped interval can use differences of prefix sums of the activated full-timeline
+log-decay, then call the scan with that already activated gate
+(\texttt{use\_gate\_in\_kernel=False}).  For Diagonal KDN, the skipped prediction is the composed
+affine map $p\mapsto ap+b$, followed at the next selected event by its M\"obius measurement map.  A
+global-clock implementation must therefore retain a timestamp or pending interval transform for
+every inactive bank during streaming or stateful execution; an offline full-sequence
+implementation can instead materialize the relevant prefix differences.  In either case it cannot
+interpret an unchanged stored state as already aged.
+
+\subsection{Segmented scan and complexity}
+
+For a router shared across the original heads, one global assignment selects the same component
+index jointly across all $H$ heads.  Stable routing then creates at most $BC$ bank streams, each
+retaining the original $H$ heads, and a Bayesian or CAVI score sums its headwise evidence.  A
+per-head route creates up to $BHC$ streams and substantially more metadata and short segments, so
+shared-across-head routing is the preferred first systems boundary.  Keys, values, and queries
+remain shared across components.
+
+After routing and compaction, the sparse layer performs:
+\begin{enumerate}
+  \item compute router logits and a top-$k$ active set from pre-mixer token states;
+  \item stable-sort routed events by bank while preserving time within each stream;
+  \item run a variable-length segmented KDA/KDN scan on nonempty streams;
+  \item inverse-scatter component reads and reduce their weighted sum;
+  \item scatter final states back through the active-stream-to-bank map.  Under the local clock,
+        omitted banks remain untouched; under the global clock, retain and apply their pending
+        interval transform and final tail.
+\end{enumerate}
+Chronological stability is a correctness condition: unordered atomic dispatch changes the
+recurrent model.  Omit zero-length streams from packed \texttt{cu\_seqlens}; retain an explicit
+active-stream-to-bank map for the final scatter.  Passing repeated offsets through metadata
+builders that assume positive lengths is not a safe representation of empty banks.
+
+For Diagonal KDN, dense soft routing costs
+\begin{equation}
+  \Theta\!\left(
+    BTHC(d_kd_v+d_k)
+  \right)
+  \label{eq:kdn3-dense-routed-work}
+\end{equation}
+in branch work.  Ideal top-$k$ event-time routing reduces this to
+\begin{equation}
+  \Theta\!\left(
+    BTHk(d_kd_v+d_k)
+  \right)
+  +\Theta(BT d_{\mathrm{model}}C)
+  \label{eq:kdn3-sparse-routed-work}
+\end{equation}
+for ideal recurrent branch work plus dense linear router scoring shared across heads.  The router also
+materializes $O(BTC)$ logits.  State storage remains
+$\Theta(BHC(d_kd_v+d_k))$; sparsity scales recurrent-branch compute and activations, not router
+work, dispatch metadata, or the persistent cache.  For
+very large $C$, dense router logits eventually require hierarchical, product-key, or approximate
+top-$k$ selection.  Sorting, prefix construction, gather/scatter, and chunk padding add costs not
+shown in Equation~\eqref{eq:kdn3-sparse-routed-work}; when the mean stream length $Tk/C$ is much
+smaller than a hardware-efficient chunk, those costs can dominate.
+
+The nearest implementation substrate is
+\texttt{lit\_gpt/kda\_ops/chunk.py::chunk\_kda}.  Its variable-length interface uses a flattened
+$B=1$ token buffer, \texttt{cu\_seqlens}, and per-stream FP32 initial and final states of shape
+$[N,H,K,V]$.  Its current chunk-index preparation calls
+\texttt{tolist()}, so fully dynamic routing ultimately needs GPU-native histogram, prefix-offset,
+and chunk-index construction to avoid a host synchronization.  Short streams also waste partial
+64-token chunks.
+
+Sparse Diagonal KDN additionally needs ragged initial and final covariance state and a ragged
+asymmetric-WY memory scan.  The current \texttt{kla\_kappa\_chunk} does not support
+\texttt{initial\_info}, and the public \texttt{chunk\_kalman} wrapper has no variable-length
+interface.  The recommended sequence is therefore a dense-soft PyTorch reference, followed by a
+shared-across-head top-$2$ KDA bank, followed by sparse Diagonal KDN only after the routing
+hypothesis earns the additional kernel work.
+
+\section{Parameterization and failure modes}
+\label{sec:kdn3-parameterization}
+
+\paragraph{Gating prior and recognition router.}
+The conditional prior $\ve{\pi}_{\theta,t}$ and variational responsibility $\ve{\rho}_t$ play
+different roles.  In the dense model, a simple first implementation can use a uniform prior and
+one learned $q_{\phi}(Z_t\mid\ve{x}_t)$.  In that case
+$\KL(\Cat(\ve{\rho}_t)\|\Cat(\ve{1}/C))=\log C-\mathcal{H}(\ve{\rho}_t)$ is a
+\emph{per-token entropy} regularizer, not a load-balancing term.  In the sparse model, a prior
+uniform on $\mathcal{A}_t$ instead gives $\log k-\mathcal{H}(\ve{\rho}_t)$.  Balance across a batch
+or sequence requires a separate aggregate statistic, for example
+$\overline\rho_c=(BT)^{-1}\sum_{b,t}\rho_{bt,c}$ and
+$\KL(\Cat(\overline{\ve{\rho}})\|\Cat(\ve{1}/C))$, or an explicit hard-dispatch load penalty.
+A more literal conditional latent-variable model learns both networks and trains the local ELBO
+alongside the language-model objective.  If no such objective is used, the probabilistic
+derivation still specifies the update but should be described as motivation rather than optimized
+inference.
+
+\paragraph{Shared observation space.}
+Use common key and value projections within a head so components explain the same observation.
+Component-specific transition, process-noise, observation-noise, or prior parameters provide
+controlled hypothesis diversity without turning components into unrelated heads.
+
+\paragraph{Symmetry, collapse, and balance.}
+The likelihood is invariant to a permutation of component labels.  Identical memories form an
+exact fixed point only when the router and update preserve that symmetry; deterministic top-$k$
+tie-breaking can break it immediately.  Initialization should therefore be deliberately weak and
+component-permutation equivariance should be tested away from tied routing logits, or with an
+explicitly equivariant tie rule.  A token-local router can also starve memories before they
+specialize.  Report token fractions, probability mass, effective component count, and maximum load
+per component; use an aggregate balancing loss only as a declared modeling choice.
+
+\paragraph{Persistent and amortized collapse differ.}
+For persistent $Z$, log odds accumulate evidence over the whole sequence.  A component that loses
+early can acquire exponentially small posterior weight, and under identifiable, persistently
+informative data the filter can concentrate toward one sequence-global hypothesis.  This is
+coherent Bayesian behavior but may not provide span-level routing.  In the amortized bank, collapse
+instead means that the recognition network repeatedly selects a few components.  Weight
+forgetting, floors, entropy penalties, aggregate load penalties, component resets, or likelihood
+tempering can mitigate either failure, but each changes the probabilistic model or objective and
+must be identified explicitly.  Top-$k$ alone is only a compute constraint and does not prevent
+collapse onto the same small set of banks.
+
+\paragraph{High-dimensional evidence.}
+Both terms in Equation~\eqref{eq:kdn3-component-log-evidence} scale with $d_v$.  Learned value
+coordinates are neither guaranteed independent nor perfectly Gaussian, so the nominal likelihood
+may become extremely sharp.  Dividing the log evidence by $d_v$ or introducing a temperature can
+calibrate routing, but the exact Bayesian baseline is the untempered expression.  Log weights,
+quadratic residual accumulation, and log-sum-exp normalization should use at least FP32.  The
+input-only amortized router avoids this numerical path in its forward decision, but a
+state-aware teacher or auxiliary variational objective still inherits the calibration issue.
+
+\paragraph{Covariance scale.}
+As in ordinary Kalman Associative Memory, jointly scaling predictive covariance and observation
+noise by a positive factor leaves the gain unchanged.  It does not leave mixture evidence
+unchanged.  A common factor rescales every innovation variance and therefore tempers the relative
+quadratic evidence, even though its common log-determinant offset cancels across components.
+Component-specific factors additionally change determinant comparisons.  Mixture responsibilities
+therefore expose covariance-calibration errors that can be invisible in the mean update alone.
+
+\section{Validation contract}
+\label{sec:kdn3-validation}
+
+Before a language-model experiment, a reference implementation should pass:
+\begin{enumerate}
+  \item \textbf{Single-component reduction.}  At $C=1$, match the dense KAM, Diagonal KDN, or
+        Isotropic KDN reference selected for each test, including forward, backward, and final
+        state.
+  \item \textbf{Persistent exact anchor.}  For small $d_k,d_v,C,T$, compare component means,
+        covariances, evidences, and weights with direct Gaussian density evaluation.
+  \item \textbf{Mixture-moment check.}  Compare Equations~\eqref{eq:kdn3-mixture-mean-memory} and
+        \eqref{eq:kdn3-total-covariance} with Monte Carlo samples from the filtered mixture.
+  \item \textbf{Fractional-update identity.}  In FP64, verify that the natural-parameter and gain
+        forms agree for $\rho\in\{0,10^{-6},0.1,0.5,1\}$.
+  \item \textbf{Dense routed scan parity.}  For fixed token-local responsibilities, compare every
+        M\"obius scan, gain, component memory, and routed read with a sequential FP64 oracle.
+  \item \textbf{Router invariants.}  Check simplex normalization, top-$k$ support, causal
+        dependence on pre-mixer inputs only, and finite gradients under nearly tied and extremely
+        separated logits.
+  \item \textbf{Permutation equivariance.}  Away from tied logits, jointly permuting component
+        parameters, router logits, and states must permute internals while leaving the reduced
+        output unchanged.  Test ties separately only with an equivariant tie rule.
+  \item \textbf{Sparse dispatch parity.}  Compare packed event-time execution with a dense
+        implementation of Equation~\eqref{eq:kdn3-participation-transition} under empty banks,
+        highly imbalanced loads, partial chunks, and repeated routing.  Verify chronological order
+        within every bank stream.
+  \item \textbf{Route-history audit.}  At tiny $C$ and $T$, enumerate exact token routes and compare
+        the variational approximation's means, covariances, and predictive distribution with the
+        true mixture rather than treating the fractional update as exact Bayes.
+  \item \textbf{Clock semantics.}  If global-time aging is implemented, compare its lazy interval
+        maps with a dense all-bank recurrence; never compare it against the event-time model as if
+        they were the same recurrence.
+\end{enumerate}
+
+The decisive first experiment should separate routed memory capacity from increased state,
+parameters, and compute.  At small scale, compare $C=1$, a dense-soft $C>1$ reference, a top-$2$
+event-time bank, an expanded-head control with comparable state, a random or hashed router, and an
+identical-component control.  Share key, value, and query projections; keep output width fixed;
+and match recurrent-state size, measured FLOPs, and learned parameter count in separate controlled
+comparisons.  Report the $O(d_{\mathrm{model}}C)$ router parameters and any component-specific
+transition parameters explicitly, alongside component entropy, token and probability load,
+effective component count, router gradients, throughput, peak memory, and the usual
+language-model and retrieval metrics.
+
+\section{Conclusion}
+
+The exact Gaussian-sum filter and the scalable routed bank belong to one hierarchy.  A persistent
+categorical label gives an exact finite mixture of Kalman associative-memory hypotheses.  Allowing
+the label to change by token yields a conditional mixture of dynamic Bayesian linear regressors,
+whose exact posterior branches over routing histories.  An online structured mean-field
+projection compresses those histories into $C$ Gaussian bank factors.  Restricting the categorical
+factor to a token-local recognition network gives an amortized filter when the variational
+objective is trained, and a variationally derived gate when it is not.  The resulting fractional
+Kalman update allocates each token's information across memories while retaining associative
+covariance and mean scans.  At $C=1$, the construction reduces to KAM, KDN, or KDA according to the
+chosen covariance and gain approximation.
+
+Dense soft routing is the reference recurrence but not the capacity-scaling mechanism.  A
+deterministic top-$k$ participation controller, shared key--value coordinates, stable segmented
+dispatch, and explicitly local-event-time dynamics let recurrent work grow with $k$ while stored
+state grows with $C$.  Global-time aging is available when skipped transitions can be composed
+compactly.  This separation supports a precise claim: Gaussian-sum KAM supplies the Bayesian
+motivation, mean-field projection supplies the fixed-size routed update, and sparse segmented
+scans supply the scalable implementation.
+
+\begin{thebibliography}{1}
+\bibitem{blei2017variational}
+David M. Blei, Alp Kucukelbir, and Jon D. McAuliffe.
+\newblock Variational inference: A review for statisticians.
+\newblock \emph{Journal of the American Statistical Association}, 112(518):859--877, 2017.
+\end{thebibliography}
+
+\end{document}

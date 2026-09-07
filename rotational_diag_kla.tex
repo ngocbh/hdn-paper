@@ -759,10 +759,10 @@ production-submission gate.  Train-smoke, distributed checkpoint/resume, and mul
 soak/attestation remained for that baseline at the time of sealing.  The next section records the
 later shared-DT candidate and its separate, still-open qualification.
 
-\section{Shared-DT engineering status as of September 6, 2026}
+\section{Shared-DT engineering status as of September 7, 2026}
 \label{sec:shared-dt-status}
 
-\noindent\textit{Status updated 2026-09-06 18:53 UTC.}
+\noindent\textit{Status updated 2026-09-07 UTC.}
 
 This section records a newer production candidate and does not revise the closed E2 result above.
 The candidate starts from commit
@@ -809,6 +809,11 @@ related by the gauge transform $W_{\rm angle}\mapsto-W_{\rm angle}$; exact conti
 checkpoint also negates that parameter's first moment.  This rules out a structural sign error, but
 flipping only the scan sign at one fixed, untransformed checkpoint can change outputs and gradient
 norms.
+The equivalence is an algebraic coordinate map for the bias-free angle projection and the same
+initial phase carry: angle gradients and Adam/AdamW first moments change sign, whereas second
+moments do not.  It is not bitwise cross-kernel or full-model equivalence because Mamba-3 and RDiag
+use different \pathcode{tanh} and trigonometric realizations, and no matched sign arm was run.  The
+sign audit therefore does not support changing RDiag's scan sign as a stability fix.
 The relevant difference from the E2 model is instead that the angle and $DT$ paths remain live and
 the same shared $DT$ controls radial decay and rotation.
 Writing $s_H=0.5H^{-1/2}$ for v2 and bars for cotangents, the exact phase branch contributes
@@ -3762,7 +3767,9 @@ global norm was \pathcode{10.604082390132142}; changing only to the older 0.25 s
 \pathcode{12.423034238808185}, a factor of 1.17153.  The corresponding angle, decay, DT-bias,
 DT-weight, and other category norms changed from 6.36818, 0.08549, 0.14930, 4.34821, and 7.27711
 to 6.55957, 0.10176, 0.21774, 5.37835, and 9.07301.  Thus the larger v1 scale causally worsens this
-boundary, but the present v2 scale still violates the production limit and is not acceptable.
+boundary, but the present v2 scale still violates that frozen diagnostic's predeclared limit.  This
+crossing is a stability warning and a reason to continue diagnosis, not by itself a rejection of
+the implementation.
 The non-authorizing summary, validation, and closed-inventory SHA-256 values are respectively
 \pathcode{82c22cee330756b2527bbc77e6fa39a2ad40f417042ec548a16039a2cc8914ed},
 \pathcode{1a575a7c565bbae0896402be7e6d9affb70040f9f0d6bc8de0782b4d538dd7ee}, and
@@ -4014,16 +4021,179 @@ rejected by independent review; their SHA-256 values are, in order,
 and \pathcode{feac1b553db2842c4d8b4e032cfd13e5f96ac676e9f2f8806e89dc42fee4659f}.
 Revision v19 is frozen at SHA-256
 \pathcode{41e0ca7c0f3f91c79929724a5fe8cad2b1f01a94ee7835d87ca1a52a811d9467}
-and remains under independent review; it is not yet accepted.
+and was independently \pathcode{REJECTED} with five remaining replay contract and dependency-graph
+gaps.  Revision v20 is frozen at SHA-256
+\pathcode{2934c933a3b7d2cb282b77a185df72ec33a0ec5a31f6efee2d3a8e9415451a5b}
+and was independently \pathcode{REJECTED} for five issue groups: ancestor-safe path traversal;
+codec-versus-collective TDD ordering and T36 task order; the retained authorized-model contract;
+run-entry/root agreement deadlock; and timing warmup/error convergence.  Revision v21 is frozen at
+SHA-256 \pathcode{d34e9a730758785c085566c1e7c367391e1b467997c2ba1e9d5a9775484b643a}
+and was independently \pathcode{REJECTED} for seven blocker groups: the missing rooted-mismatch
+terminal state; all-rank FSDP/save and shutdown convergence; rank-0 post-mutation outcome
+preservation; the timing-schedule digest; mutable rooted authority and loose split roots; sidecar
+pre-/post-link outcome gaps; and missing DAG edges.  Revision v22 is frozen at SHA-256
+\pathcode{3c267c68b7ad2671f90c9cb637ab42b54a9d4044eb05c1058c3ee24f4204340f}
+and was independently \pathcode{REJECTED} for six blocker groups: the missing boundary-authority
+token; no converged pre-save stage, FSDP API, or preflight; inconsistent all-rank and rank-0 outcome
+transport; missing lifecycle/abort/residue distinctions; incomplete sidecar/evidence fsync state;
+and T53d sequencing.  Revision v23 is frozen at SHA-256
+\pathcode{90e96659eb600294e14e41e5bcfc749b41637112ccbac618506fa219c9455595}
+and was independently \pathcode{REJECTED} for five blocker groups: provisional/partial-stage
+residues and multiple cleanup errors; readiness/abort/local-invalid terminal paths and authority
+bindings; clone placement; double-slash canonicality; and audit wording.  Revision v24 is frozen at
+SHA-256 \pathcode{7ca8e1ebcf953e8c3079e0233be544589fabcde1aebbc546c7da81f221120222}
+and was independently \pathcode{REJECTED} for six blocker groups: readiness-fallback authority and
+typed handling; TDD ownership and order; missing handle/request lifecycle authority and contextual
+replay checks; multiple cleanup errors; sidecar/evidence no-residue guarantees; and the final-save
+cleanup matrix.  Revision v25 is frozen at SHA-256
+\pathcode{e0f857dffe4de2fd405df1dd06883f9980d2dc4cc3cfd46e220b3822423ff911}, with 4217 lines,
+439026 bytes, and mode \pathcode{0444}, and was independently \pathcode{REJECTED} for eight blocker
+groups: missing T09a/T16g2 DAG edges; source-intent and collective authority before mutation;
+cleanup/fallback/upstream and lifecycle precedence matrices; fallback certificate/digest authority;
+canonical final-checkpoint metadata plus a bounded, non-nested FSDP save path; protocol world-size
+and bounds; publication/abort cleanup multiplicity and identity digests; and a root-path fixture
+contradiction.  Revision v26 is frozen at SHA-256
+\pathcode{8baa88ee0a2edb2b0e63a9506b392ab98fb8a5c236a0f509541ccc5db0859269}, with 4322 lines,
+473105 bytes, and mode \pathcode{0444}, and was independently \pathcode{REJECTED} for five blocker
+groups: readiness-certificate authority not bound through the failure payload and total-resource
+fallback; unsafe \pathcode{super().save\_checkpoint} pre-FSDP/path mutation requiring a
+replay-specific context/session and descriptor-exclusive write; the missing persisted final-file
+schema/model-root verifier; impossible raw-path alias claims while accepting only \pathcode{Path};
+and TDD, file-ownership, and stale-phase dependency issues.  Revision v27 is frozen at SHA-256
+\pathcode{07e96435b12f2bc8b37782706725771b4666aec01c92477533b14902d559bfdf}, with 4574 lines,
+489342 bytes, and mode \pathcode{0444}, and was independently \pathcode{REJECTED} for six blocker
+groups: the missing role-aware FULL/HYBRID donor receipt/reducer and topology binding; undefined
+common/composite session ownership and TDD sequencing; nontransactional partial FSDP-context entry
+and restore handling; a circular writer SHA and missing typed verifier close-error channel; unsafe
+pre-mutation recovery reused after rank-0 mutation/result failure; and residual task ownership and
+stale-summary issues.  Revision v28 is frozen at SHA-256
+\pathcode{1c38cf938807a6f7280adaf334ece5ff993c829a561fb607020b5c686255b483}, with 4874 lines,
+528352 bytes, and mode \pathcode{0444}, and was independently \pathcode{REJECTED} by all three
+reviews for twelve blocker groups: a detached pure-preflight signature mismatch; the missing
+role-aware mapping-release API; inability of a final FSDP fatal path to retain execution/resource
+cleanup and residue; actual AdamW hooks being \pathcode{OrderedDict} instances; T16k/T16l ownership
+inversion; recovery templates lacking future-failure cause/finalizer state; missing chmod failure
+injection; cloned detached roots not bound to agreed materialization roots; an all-rank raw-gradient
+mapping requirement lacking a bounded receipt certificate; absent sidecar RNG/cursor formulas and
+dependencies; unrepresentable aggregate-trace capture errors; and the T31 chain's missing T30c
+dependency.  Revision v29 is frozen at SHA-256
+\pathcode{e28373847753c6132019cc6b7e8443acf82db6d284f34a679a31ab9d85ec41a6}, with 5200 lines,
+579234 bytes, and mode \pathcode{0444}, and was independently \pathcode{REJECTED} by all three
+reviews for seven blocker groups: invalid \pathcode{no\_sync} gradient-shape and zero-numel
+assumptions; gradient capture lacking run/boundary-issued intent and one-use authority; no bounded
+per-rank fatal/alias receipt gather; rank-0 final-fatal cleanup not distributed to peers; holder
+transition failures treated inconsistently as fatal versus ordinary; a stale identical-common-exception
+lifecycle claim; and recovery-template constructors accepting an arbitrary finalizer despite their
+phase-authority claims.  Revision v30 is frozen at SHA-256
+\pathcode{88bb868d2ae7c0b82d2f6fe17055e858286a5715c5fbec1d35f5bfe0a93f0ab3}, with 5716 lines,
+651608 bytes, and mode \pathcode{0444}, and was \pathcode{REJECTED} by all three independent reviews
+for eight blocker groups: rank-local boundary/batch digests wrongly required equal; fallible
+recovery/template construction before the readiness gather; T16g/T16g1 and production-finalizer
+TDD order inversion; untagged and undersized fatal-cleanup errors; absent inventory/layout/intent
+wire grammars, bounds, and failure contracts, plus a free configuration digest and ambiguous
+binding before \pathcode{setup\_optimizers}; unconverged gradient begin/complete transitions;
+readiness-failure cleanup able to mutate without a guard; and detached all-rank RNG/cursor plus
+complete model/optimizer-root authority lacking source-bound producers.  An immutable revision v31
+is frozen at SHA-256
+\pathcode{918d1b21d7cfa404c5d49169bac6f0e549ce6c593d23fd9eeabafe37a0f132d8}, with 7254 lines,
+885733 bytes, and mode \pathcode{0444}.  Its three external reviews returned one
+\pathcode{ACCEPTED} and two \pathcode{REJECTED}, so its overall disposition is
+\pathcode{REJECTED}.  Six blocker groups remain: the rank-0-only \pathcode{RESUME} payload has no
+executable all-rank Lightning load/distribution; detached intent loses private write authority,
+authenticated run identity, and entry release; lifecycle adapters are arbitrary callables not
+sealed to run/collective/resources; final aggregate failure has no guarded release for its reserved
+model permit; 131072-row schemas exceed the shared encoder's 4096-entry list cap; and DAG T36a
+lacks T17h.  Revision v32 is frozen at SHA-256
+\pathcode{d7df049fa09c362d0388355a1c6c97a80f9a0c4db6cb8510b359b72761a8a77e}, with 7786 lines,
+1002655 bytes, and mode \pathcode{0444}, and all three external reviews \pathcode{REJECTED} it.
+Two blocker groups remain: restore readiness incorrectly requires empty module hooks even though
+PyTorch 2.8 FSDP always registers four framework state/load-state hooks; and lifecycle-entry release
+proof is not causally or object-identity bound to resource clearing, while T36b2 tests downstream
+orchestration slots before they exist.  Revision v33 is frozen at SHA-256
+\pathcode{2e5acc7179b6776902eb0b5b5caa4139c3d214860edb19e3dd3b4ab1e154d579}, with 7828 lines,
+1028568 bytes, and mode \pathcode{0444}, and all three external reviews \pathcode{REJECTED} it.
+Three blockers remain: the required restore GPU test and test-only sbatch are absent from the
+complete allowlist and contradict the no-job-script claim; the proposed 2-rank test cannot prove
+exact world-16 readiness convergence and must be local-only or changed to 16 ranks; and the
+predecessor-immutability audit omits frozen v32's tuple.  Revision v34 is now frozen at SHA-256
+\pathcode{1fda3d8eda8d6297a985b6f48269ce00791c11a51614e501a30c302b3912f236}, with 7852 lines,
+1034997 bytes, and mode \pathcode{0444}.  One exact-byte review accepted it, but the second
+\pathcode{REJECTED} it because T92 still categorically forbade any sbatch call into a new replay API
+while the same revision explicitly allowlisted a test-only two-rank H200 sbatch that exercises the
+restore smoke.  All three v33 blockers and the 302-task, 786-edge acyclic dependency graph otherwise
+passed that review.  Revision v35 is frozen at SHA-256
+\pathcode{86c3e3b94648351632fc9c17e31946c51870bb788e4bbeb14a485a8677f2b8e8}, with 7857 lines,
+1036430 bytes, and mode \pathcode{0444}.  Its three external reviews returned one
+\pathcode{ACCEPTED} and two \pathcode{REJECTED}; both rejections found that T37a5, T82a1, and
+T84a2 bundle multiple independent branches, APIs, or GPU launches despite the plan's own
+2--5-minute, one-test-or-branch red/green-unit rule.  The v34 runner-scope repair, predecessor
+tuples, acyclic graph, and full reachability otherwise passed.  Revision v36 is frozen at SHA-256
+\pathcode{6fe31e54bdbf0aa682c57705df346a88bb8243a63d61bf2c72ca526803e3be04}, with 8726 lines,
+1011967 bytes, and mode \pathcode{0444}, and all three draft reviews \pathcode{REJECTED} it.
+Its 524-heading, 774-edge calibrated graph was acyclic and fully reachable, but a residual set of
+multi-phase units still violated the same narrow-unit rule; several ownership and direct-edge claims
+were stale after decomposition; and the installed-pin validator lacked an explicit live restore-
+readiness consumer.  Revision v37 is frozen at SHA-256
+\pathcode{1a9e0521d4150708909519e5c65b3ad078b1a06a259b43867af018f152784001}, with 8992 lines,
+1022272 bytes, and mode \pathcode{0444}, and all three draft reviews \pathcode{REJECTED} it.
+Its calibrated 591-heading, 806-edge graph passed, but one live installed-pin mismatch test preceded
+the convergence implementation it required; duplicate producers and undeclared digest APIs remained;
+six residual surface units were still too broad; and several split-owner references were stale.
+Revision v38 is frozen at SHA-256
+\pathcode{cf863d800fc239b625dabbcf3c0e5a936e19c73ee605bd5d5a6aab767da3b582}, with 9475 lines,
+1023370 bytes, and mode \pathcode{0444}.  Its three draft reviews returned two
+\pathcode{APPROVED} and one \pathcode{REJECTED}.  The rejecting review found two ownership-
+transition ordering errors, three missing or late implementation owners, an impossible fatal-cleanup
+maximum fixture, undeclared helper APIs, and four stale owner labels; its calibrated 710-heading,
+925-edge graph and production/test boundaries passed.  Revision v39 is being prepared from those
+exact repairs without changing scientific semantics and is not accepted.  The exact 2x8-H200
+additive-v3 probe remains required after v3 integration.
 
-The T00 fail-closed retirement tranche is committed locally as
+The authoritative 2-rank H200 gradient-view probe, job \pathcode{1864404}, completed
+\pathcode{0:0} on \pathcode{h200-002-213} using two H200s in 18 seconds.  Its artifact root is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag\_shared\_dt\_v2/diagnostic\_runs/fsdp\_grad\_view\_probe\_9d92d77941e8\_20260907T044320Z};
+the summary and \pathcode{ANALYSIS.md} SHA-256 values are respectively
+\pathcode{df85bd74f45766b5dd765d8f6249a0fa5b20227c008c5b797df5f937ffd43546} and
+\pathcode{5b997425180d533c4d662d3c9808ee13d771779ee9b33110565299bb0b66140f}.
+Failed first attempt \pathcode{1864402} reached both backward passes and failed only in diagnostic
+metadata collection, so it is retained but non-authoritative.  At iteration 4001 under
+\pathcode{no\_sync}, parameters were already local shards, while every rank/FQN gradient was full
+and unsharded, including for zero-size local parameters.  At synchronized iteration 4002,
+gradients matched local shards and zero-size local parameters had \pathcode{None} gradients.
+Exact observed parameter/gradient numels were rank 0
+\pathcode{3/3,4/7,0/4} then \pathcode{3/3,4/4,0/None}, and rank 1
+\pathcode{0/3,3/7,4/4} then \pathcode{0/None,3/3,4/4}.  Every present gradient was finite fp32
+CUDA, and each original parameter had exact optimizer identity once.
+
+Separate non-authorizing retired-v2 architecture-surrogate job \pathcode{1864644} ran but was
+\pathcode{FAILED 15:0} because its diagnostic topology traversal omitted the outer FSDP wrapper.
+All 16 rank artifacts and their SHA-256 sidecars validated; the preliminary summary was present and
+its substantive checks passed, but its topology assertion failed, so the result is non-authoritative.
+Bounded retry \pathcode{1865069} is the authoritative non-authorizing v2 architecture-surrogate
+result: it was \pathcode{COMPLETED 0:0} in 3:08 on \pathcode{h200-094-088} and
+\pathcode{h200-094-194}.  Its artifact root is
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag\_shared\_dt\_v2/diagnostic\_runs/fsdp\_grad\_view\_hybrid16\_v2\_surrogate\_retry1\_9d92d77941e8\_20260907T060212Z};
+the summary and \pathcode{ANALYSIS.md} SHA-256 values are respectively
+\pathcode{9094cb2a24b59fbdfa9db4bfffe219a93fa3b84b4e6535bd1734ece6396f4be5} and
+\pathcode{7ba8d62abd3fedf66920dcb0a0cce33db1bd8cef0c69edb296d5abce07e75830}.
+It observed 17 FSDP units with exact 2x8 HYBRID shard/replica topology; 419 canonical FQNs and
+752,358,400 parameters; and exact-once optimizer coverage split into 274 decay and 145 no-decay
+parameters.  Under \pathcode{no\_sync}, all 419 FQNs on every rank had finite fp32 full/global-shape
+gradients, including beside zero-size local views.  After synchronization, gradients matched every
+nonempty local shard, zero-size views had \pathcode{None}, and all replica-pair digests matched.
+Peak CUDA allocation was 5.788 GiB per rank.  This retired-v2 surrogate is non-authorizing; the
+exact 2x8-H200 additive-v3 test remains required after v3 integration.
+
+The T00 fail-closed retirement tranche is recorded as commit
 \pathcode{9d92d77941e877bf0b99d55df0f051929bb2bcff}, tree
 \pathcode{b5c0e19c75a8813df73163e85a07c8f0c87036fd}, and received an independent
 \pathcode{APPROVED}.  It guards exactly 33 supported v2 boundaries and pins 463 literal audit
-fixtures.  Integrated pueue task \pathcode{4607} passed 653 tests with four skips, compared with
-baseline task \pathcode{4594} at 525 passes and four skips.  This local T00 commit has not been
-pushed, submitted as a compute job, or used to grant production authorization; no later replay
-substrate tranche is implemented by that result.
+fixtures.  The integrated host suite in pueue task \pathcode{4607} passed 653 tests with four
+skips, compared with baseline task \pathcode{4594} at 525 passes and four skips; the integrated
+run reported ten warnings.  The commit was successfully pushed to remote branch
+\pathcode{codex/rdiag-shared-dt-v2-replay-cursor-20260906}.  No replay implementation beyond T00
+exists, no RDiag production job was submitted or authorized, and new-source qualification remains
+at 0/6 gates.
 
 The first additive \pathcode{shared\_dt\_v3} quarter-head plan was reviewed at SHA-256
 \pathcode{aee51f621f5e66aa15b94a369b2cf61b3a79f4b28bcdc8d3f1769ee399ba398e} and rejected by
@@ -4046,19 +4216,196 @@ The completed matched screen crossed the exact warmup peak at boundary 954 with 
 at a time and satisfied every declared comparability invariant before interpretation.  Under the
 predeclared policy, quarter-head is therefore selected over half-LR as the production-source
 candidate; the radial-only result strengthens the causal attribution to the rotational path but is
-not itself eligible.  This selection is still only a design decision.  The new versioned clock must
-pass a fresh generation-zero 3,300-update soak and disjoint-node attestation; the diagnostic cannot
-replace that qualification gate.
+not itself eligible.  This selection is still only a design decision.  The implementation and its
+first diagnostic executions are recorded next; they do not replace a fresh family-specific
+qualification campaign or authorize production.
+
+\subsection{Quarter-head v3 implementation and diagnostic rerun}
+\label{sec:shared-dt-v3-debug-20260907}
+
+The sole promotion-eligible arm of matched screen job \pathcode{1855985} used absolute angle scale
+$0.0625$ at $H=16$.  The additive \pathcode{rdiag_kla_shared_dt_v3_750M} identity therefore changes
+the v2 scale $0.5H^{-1/2}$ to $0.25H^{-1/2}$ and preserves the v2 projections, state topology,
+negative inclusive phase convention, normalization, gain, memory kernels, optimizer recipe, and
+initialization.  No file below \pathcode{lit_gpt/kla_ops/} changes.  The generalized
+$0.25H^{-1/2}$ rule is an extrapolation from the $H=16$ screen; the $H=18$ test establishes only the
+formula and constructor contract.
+
+The scientific implementation first appears at commit
+\pathcode{722b258018d9e1d5fff911a53a9570c83470ddb7}, with tree
+\pathcode{287102e9e427225fe8ff6cece78ab2515b09b302}.  It is based on commit
+\pathcode{9d92d77941e877bf0b99d55df0f051929bb2bcff}.  Two later commits change only
+the diagnostic control plane: \pathcode{7368943777cfc833cf50ca7e4985d2dc36c99d16}
+(tree \pathcode{41c63fab5463a5f36caed83b44f56ea86ed56416}) makes every finite gradient-norm
+crossing alert-only while retaining ordinary clipping at one and rejection of non-finite metrics;
+\pathcode{328879295966cdecdbf4a098c3e56da985e128a6} (tree
+\pathcode{f8ccbc5b9d762b07749f9d8a675ce25ec4088ede}) corrects the two-rank gate launcher
+to give one Slurm task both GPUs and launch rank-local workers with \pathcode{torchrun}.  Neither
+commit changes the model, optimizer, data order, or long-run recipe.  The isolated worktree is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v3/}\\
+\pathcode{source_worktrees/rdiag_shared_dt_v3_quarter_head_debug_20260907}.
+\end{quote}
+Its executable plan is
+\pathcode{docs/plans/2026-09-07-rdiag-shared-dt-v3-debug-rerun-plan.md}.  The principal code paths
+are \pathcode{lit_gpt/rdiag_shared_dt_kla.py}, \pathcode{lit_gpt/config.py},
+\pathcode{lit_gpt/model.py}, \pathcode{lit_gpt/rdiag_shared_dt_rmsnorm.py},
+\pathcode{lit_gpt/rdiag_shared_dt_training_health.py}, and \pathcode{pretrain.py}.  The long-run
+entry points are \pathcode{scripts/analyses/run_rdiag_shared_dt_v3_3300_debug.sbatch} and
+\pathcode{scripts/analyses/validate_rdiag_shared_dt_v3_3300_debug.py}; the H200 gate uses
+\pathcode{scripts/tests/rdiag/test_rdiag_shared_dt_v3_core_h200.py},
+\pathcode{scripts/tests/rdiag/smoke_rdiag_shared_dt_v3_fsdp_one_update.py}, and their Slurm runner.
+The initial focused host set passed 75 tests; the alert-only control-plane patch passed 128 focused
+tests, and the launcher correction passed its 12 focused host tests.  Shell, Python-AST, and
+whitespace checks passed, and independent full-diff review reported no Critical, Important, or
+Minor finding.  A broader historical
+suite was not completed because both \pathcode{/tmp} and \pathcode{/var/tmp} were full and an
+unchanged legacy-v1 helper hard-codes \pathcode{/tmp}; this is an environmental coverage gap, not a
+claimed pass.
+
+Initial non-authorizing H200 gate job \pathcode{1872223} completed \pathcode{0:0} in 5m18s on
+\pathcode{h200-003-168}.  Its one-GPU numerical/oracle test passed four cases, and its two-rank
+\pathcode{FULL_SHARD} forward/backward/fused-AdamW smoke passed against the exact commit and tree
+above.  The result has schema \pathcode{rdiag-shared-dt-v3-core-h200-diagnostic-v1}, explicitly
+records \pathcode{authorizing=false} and \pathcode{production_gate=false}, and is retained at
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v3/}\\
+\pathcode{h200_core_gate_runs/job_1872223/result.json}
+\end{quote}
+with SHA-256
+\pathcode{fee52da8ad6f90a322e13a95b582b45a77bafb03deabf55f44efda9a13b4ea73}; its scheduler
+stderr is empty.
+
+After the alert-only patch, gate job \pathcode{1873078} passed all one-GPU numerical tests but
+failed before constructing the distributed model: Slurm exposed one GPU to each of two tasks while
+each task was configured as a two-device Fabric process.  This is a launcher-only failure and its
+non-authorizing failed result has SHA-256
+\pathcode{1303dad60cd2658909c8906e2a18a9419bb35987471503db7cb68d93786a9b23}.  The corrected
+same-commit gate, job \pathcode{1873216}, completed \pathcode{0:0} in 5m11s on
+\pathcode{h200-036-250}: four one-GPU oracle cases and the two-rank \pathcode{FULL_SHARD}
+forward/backward/fused-AdamW update all passed, with two visible GPUs bound to distinct H200 UUIDs.
+Its exact-source, non-authorizing result is
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v3/}\\
+\pathcode{h200_core_gate_runs/job_1873216/result.json}
+\end{quote}
+with SHA-256
+\pathcode{ad494c58fbc3f5932be9eaff92ccc57ce0050f94c94a99b18f8f47967374190b}; scheduler stderr is
+empty.
+
+Only after the initial pass, fresh two-node, sixteen-H200 job \pathcode{1872253} was submitted for 6,600
+microsteps/3,300 updates with seed 3407, sequence length 4096, global batch 128, the unchanged 50B
+learning-rate horizon, and the originally predeclared fail-before-AdamW pre-clip norm sentinel of
+10.  The run completed 1,598 AdamW updates and 837,812,224 tokens with finite loss and parameters;
+its last completed-update loss was 3.069645.  It then stopped when the next finite pre-clip norm
+crossed the sentinel.  A long rank-interleaved RMSNorm marker also made the frozen validator report
+a malformed marker.  Neither condition is evidence that the model is non-finite or that the
+implementation should be rejected: the sentinel is only a proxy, and the marker is a harness
+serialization defect.  The canonical non-authorizing failed result is retained at
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v3/}\\
+\pathcode{diagnostic_runs/v3_quarter_head_3300_job_1872253/result.json}
+\end{quote}
+with SHA-256
+\pathcode{d978734f1429c212acf51c767f4391eaa1fe01584daea9ee742c2d815aa3a6d7}.  Commit
+\pathcode{7368943777cfc833cf50ca7e4985d2dc36c99d16} therefore preserves the alert telemetry but
+continues all finite updates through the unchanged gradient clip and AdamW; it also emits a compact,
+single-line RMSNorm marker with a pinned full-policy digest.
+The available portion is directly comparable with failed v2 soak \pathcode{1851176}: both use seed
+3407, the same 16-rank topology, microbatch four with accumulation two, 4096-token sequences, the
+same 50B learning-rate schedule, data-manifest SHA-256
+\pathcode{47e8650e20025ce8dc3d2f261b25f1493b991b34f466e644b7eb7795659641e7}, tokenizer, parameter
+count, and model topology apart from the versioned angle scale.  Their first 100 per-update losses
+have correlation 0.999997 and differ in mean by only $-0.022\%$, providing a strong data-order
+check.  The later matched real-training losses are:
+\begin{center}
+\begin{tabular}{@{}lrrr@{}}
+  \toprule
+  Updates & v2 mean loss & v3 mean loss & Relative change \\
+  \midrule
+  301--400 & 4.825093 & 4.768219 & $-1.18\%$ \\
+  501--600 & 4.089313 & 3.971679 & $-2.88\%$ \\
+  701--800 & 3.746106 & 3.566579 & $-4.79\%$ \\
+  801--900 & 3.603847 & 3.439164 & $-4.57\%$ \\
+  901--904 & 3.572039 & 3.397925 & $-4.87\%$ \\
+  \bottomrule
+\end{tabular}
+\end{center}
+For updates 801--900, exponentiating the mean-loss difference gives a geometric training-perplexity
+ratio of 0.848, or 15.2\% lower for v3.  These are global-rank-averaged final-microbatch training
+losses, not validation losses; v2 has no comparable record after update 904, and available GDN/KLA
+runs differ in topology/history and metric semantics.  The overlap therefore supports improved
+early optimization against the matched v2 run without claiming a broader model-quality ranking.
+
+After the alert-only and launcher fixes passed the final gate, fresh job \pathcode{1873229} ran
+the same real FineWeb-Edu recipe from the same seed and initial-state SHA-256
+\pathcode{a78fcef7d10f1c36d947648636445b00b3d2223d37d8142afbb99776ed46656c}.  It completed
+all 6,600 microsteps/3,300 AdamW updates, or 1,730,150,400 training tokens, on
+\pathcode{h200-201-012,h200-201-139}; every recorded loss was finite.  The non-authorizing v2
+validator returned \pathcode{passed}, with no errors, at
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v3/}\\
+\pathcode{diagnostic_runs/v3_quarter_head_3300_job_1873229/result.json}
+\end{quote}
+with SHA-256
+\pathcode{4b430d40ea8abb758b0b45d652dd3adbc5a304ef7a4d38c20052d893902ada3f}.  It binds source
+commit \pathcode{328879295966cdecdbf4a098c3e56da985e128a6}, tree
+\pathcode{f8ccbc5b9d762b07749f9d8a675ce25ec4088ede}, and the final H200-gate result above.  The
+terminal checkpoint contains iter/update counters 6,600/3,300, is 3,009,619,114 bytes, and has
+independently rechecked SHA-256
+\pathcode{4d004385cf603e968142e86fda0a1de06c073a7aeff57c45e00d1bfdb0730402} at
+\begin{quote}
+\pathcode{/lustre-storage/checkpoints/ngocbh/hdn/diagnostics/rdiag_shared_dt_v3/}\\
+\pathcode{diagnostic_runs/v3_quarter_head_3300_job_1873229/training/outputs/}\\
+\pathcode{tsz128x4k_50B_non_authorizing_v3_quarter_head_3300_job1873229/}\\
+\pathcode{final-model-ckpt.pth}.
+\end{quote}
+
+The terminal pass establishes execution and finiteness, but the actual loss gives a mixed and
+scientifically more important result.  Mean loss reached 2.9713 over updates 1801--1900 and 2.9812
+over 1901--2000, then underwent recurrent excursions rather than sustaining that trend:
+\begin{center}
+\begin{tabular}{@{}lrr@{}}
+  \toprule
+  Updates & Mean loss & Maximum loss \\
+  \midrule
+  2001--2100 & 3.0168 & 3.1370 \\
+  2101--2200 & 3.1751 & 5.3059 \\
+  2201--2300 & 5.0736 & 9.3219 \\
+  2301--2400 & 3.9272 & 7.0330 \\
+  2401--2500 & 3.2492 & 3.5471 \\
+  2801--2900 & 3.3615 & 5.8847 \\
+  3101--3200 & 3.6589 & 5.4545 \\
+  3201--3300 & 3.4614 & 4.2393 \\
+  \bottomrule
+\end{tabular}
+\end{center}
+The final-window mean is 1.3068 below the prescribed early 301--400 mean of 4.7682, so the bounded
+validator correctly passes.  It is nevertheless 0.4802 above the run's 1901--2000 mean.  Thus
+quarter-head improves the directly matched early loss and permits a complete finite run, but it
+does not yet demonstrate sustained long-horizon loss stability.  Finite gradient-norm alerts are
+retained as debugging telemetry and did not determine this conclusion.
+
+This diagnostic is explicitly non-authorizing.  Its pass establishes approximately 1.73 billion
+tokens of execution, not a production-quality model result.  Production still requires a
+loss-motivated follow-up that resolves or bounds the recurrent late excursions, a reviewed final
+source, the complete fresh six-gate/disjoint-attestor campaign and independently validated
+aggregate, the exact-topology deterministic-replay resume gate described above, a separately
+created production snapshot and launch witness, 50B training, and the full standard plus configured
+NIAH evaluation suite.
 
 The remaining sequence is:
 \begin{enumerate}[leftmargin=1.8em]
   \item preserve failed infrastructure run \pathcode{1853781}, failed cleanup probes
         \pathcode{1855110}/\pathcode{1855635}, and pre-Python wrapper failure \pathcode{1855634};
-        preserve accepted non-authorizing screen \pathcode{1855985}, and implement its sole
-        promotion-eligible quarter-head correction in a new versioned source without weakening or
-        blindly retrying the gate;
-  \item complete independent review and acceptance of frozen replay/retirement plan v19; only then
-        implement its dormant substrate beyond the already approved local T00 retirement at
+        preserve accepted non-authorizing screen \pathcode{1855985}; retain the reviewed additive
+        v3 implementation and H200 gates above, and retain completed real-data diagnostic
+        \pathcode{1873229}, its validator result, and terminal checkpoint; use its actual recurrent
+        late-loss excursions, rather than finite gradient-norm magnitude, to define and compare the
+        next candidate intervention before any production-source promotion;
+  \item repair the residual v38 ownership ordering, missing producers, cardinality fixture, and API
+        declarations, then freeze and independently accept replay/retirement plan v39; only then
+        implement its dormant substrate beyond the already approved T00 retirement at
         \pathcode{9d92d77941e877bf0b99d55df0f051929bb2bcff}, then run the replacement authenticated
         gate at exact production topology through iter 4,000, proving byte-exact
         successor batches, a committed post-resume update against an uninterrupted control, and
@@ -4089,9 +4436,12 @@ matched-intervention, and first source-matched replacement-candidate workloads; 
 Jobs \pathcode{1846561} and \pathcode{1847039} returned provisional valid passes, but validators
 \pathcode{1846728} and \pathcode{1847464} respectively failed before validation and after
 scientific validation but before evidence sealing; neither cycle is externally accepted.  From
-this point, S7 sealing and the v2 production-H200 gate are complete, and the matched screen has
-selected quarter-head as the correction candidate.  It still requires implementation, a new
-acceptable soak, and then a complete fresh-source campaign before production launch; all
+this point, S7 sealing and the v2 production-H200 gate are complete, the matched screen selected
+quarter-head as the correction candidate, and the additive v3 implementation passed its
+non-authorizing H200 gate and completed the 3,300-update real-data diagnostic.  The latter is a
+technical pass but exposes recurrent late loss instability, so it does not yet promote v3 to a
+production source.  A loss-motivated follow-up, an exact-topology resume correction/gate, and then
+a complete fresh-source campaign remain before production launch; all
 four short b37 qualification workloads and their external attestors have already completed.
 Production training would follow the new campaign.  Because data identities include
 numeric UID/GID, the final-source hard successful-path minimum is 21 compute allocations before
@@ -4191,8 +4541,8 @@ Commit \texttt{4ce6e19} matched the CUDA-eager sigmoid and angle VJP, and commit
 immune to nonfinite discarded angles.
 
 \paragraph{Installed Mamba implementation.}
-The source audit used \texttt{mamba-ssm 2.3.2.post1} installed under the active \texttt{hdn}
-environment; those bytes match upstream tag \pathcode{v2.3.2.post1} at commit
+The upstream-reference source audit used \texttt{mamba-ssm 2.3.2.post1} installed under the
+\texttt{hdn} environment; those bytes match upstream tag \pathcode{v2.3.2.post1} at commit
 \pathcode{a14b1dff0454a3bc27d9eb31355dc01e4b2490ec}.  Paths and SHA-256 identities are:
 \begin{itemize}[leftmargin=1.8em]
   \item \pathcode{mamba_ssm/modules/mamba2.py},\\[-2pt]
@@ -4223,11 +4573,35 @@ environment; those bytes match upstream tag \pathcode{v2.3.2.post1} at commit
         {\ttfamily\footnotesize aa1b0aa8f8f7950503adf55220d3feebfea2fe006dc418b5a4e75e1e6842eadc};
         inspect roughly lines 978--1051 and 1475--1550.
 \end{itemize}
-The hashes, package version, paths, and upstream commit are the durable identity; line numbers are
-navigation hints.  Repository Mamba-3 SISO dispatch goes through the FLA wrapper.  Its executable
-baseline uses the patched \pathcode{hdn_mamba} environment; the local compatibility/decay patches
-do not alter the angle scan or adjacent-pair rotation formulas.  The unpatched \pathcode{hdn} FLA
-wrapper is not the runnable decay-correct baseline and was not used to infer those formulas.
+The hashes, package version, paths, and upstream commit are the durable reference identity; line
+numbers are navigation hints.  The executable baseline instead uses the patched
+\pathcode{hdn_mamba} environment.  Its corresponding live SHA-256 identities are
+\begin{itemize}[leftmargin=1.8em]
+  \item \pathcode{angle_dt.py},\\[-2pt]
+        {\ttfamily\footnotesize 7d99f8cff37371cfbfe9d4dd36f17a16135fb07f2c6e14add3ad4dd5c0034e2e};
+  \item \pathcode{mamba3_siso_combined.py},\\[-2pt]
+        {\ttfamily\footnotesize a24d0f14828c7585bd67662f7869f7b3b55c9c5ba64c6e1b46ef88982970ac10};
+  \item \pathcode{mamba3_siso_fwd.py},\\[-2pt]
+        {\ttfamily\footnotesize 5a077f42a4f9242e4c81ba618fc12e4340e0d422d46b13b687e6486390493218};
+  \item \pathcode{mamba3_siso_bwd.py},\\[-2pt]
+        {\ttfamily\footnotesize 6a6f7aa872e4df8d070f45e21cc4d384505f2962473999500715c3a737d66c11};
+  \item \pathcode{mamba3_siso_step.py},\\[-2pt]
+        {\ttfamily\footnotesize b0ec4239f01d83a64dbec3ac2b5068ef5cb68c73cb30298fd90dab8403a09a8d};
+  \item \pathcode{mamba3_mimo_rotary_step.py},\\[-2pt]
+        {\ttfamily\footnotesize e117b5da3d2ddfcfa66673a88dfd88a6d688100291d3b6a1b0b3c24c82ef79d6}; and
+  \item \pathcode{fla/layers/mamba3.py},\\[-2pt]
+        {\ttfamily\footnotesize 05aa8c7eabb7054a4059da7c8d74c4a31d7032a483857d9ce533e4113fcfb07d}.
+\end{itemize}
+The retained \pathcode{.orig} copies of the combined, forward, and backward SISO files exactly
+match the upstream-reference hashes above.  The local changes repair Triton compatibility and FLA
+decay precedence; they do not alter the positive inclusive phase or same-sign adjacent-pair Q/K
+rotation.  Sequence execution obtains
+$\phi_t=\operatorname{mod}(\phi_0+\sum_{s\leq t}\pi\tanh(e_s)DT_s,2\pi)$ and downcasts the phase
+for the fused SISO path.  Module decode uses the unchanged
+\pathcode{mamba3_mimo_rotary_step.py}, whose FP32 carry is unwrapped and whose update has the same
+positive sign; it applies the same rotation to Q and K.  Repository Mamba-3 dispatch goes through
+the FLA wrapper.  The unpatched \pathcode{hdn} FLA wrapper is not the runnable decay-correct
+baseline and was not used to infer those formulas.
 
 \paragraph{Qualification evidence and present status.}
 The lower-tail rejection is recorded in
