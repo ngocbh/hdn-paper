@@ -1373,6 +1373,32 @@ transition and covariance update scan-efficient remains open.
 
 
 \appendix
+\clearpage
+
+% =============================================================================
+\section{Additional Experiments}
+\label{app:additional-experiments}
+
+\paragraph{Length extrapolation.}
+Following Mamba-3~\citep{lahoti2026mamba3}, we evaluate the recurrent-only $1.3$B models from
+Table~\ref{tab:pretrain-lm} on WikiText while increasing the context limit from $1$K to $32$K,
+eight times the $4$K training sequence length. As shown in
+Figure~\ref{fig:length-extrapolation-recurrent}, every model improves on its $4$K result at each
+longer context limit, with most gains saturating by $16$K and no abrupt extrapolation failure.
+Diagonal KDN achieves the lowest word perplexity at every evaluated length, improving from $15.04$
+at $4$K to $14.67$ at $32$K; Isotropic KDN is consistently second among the recurrent models.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.82\textwidth]{figures/length_extrapolation_1p3b.pdf}
+  \vspace{-2mm}
+  \caption{Length extrapolation of recurrent-only $1.3$B models trained with $4$K sequences.
+  We report WikiText word perplexity (lower is better) as the context limit increases from $1$K to
+  $32$K; the dashed line marks the training sequence length.}
+  \label{fig:length-extrapolation-recurrent}
+\end{figure}
+
+\FloatBarrier
 
 % =============================================================================
 \section{Theoretical Proofs}
