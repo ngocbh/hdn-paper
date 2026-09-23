@@ -6,7 +6,7 @@
 \input{command}
 
 
-\title{Kalman Delta Networks}
+\title{Kalman Delta Networks: Uncertainty-aware Associative Memory}
 
 \runningtitle{Kalman Delta Networks}
 
@@ -36,28 +36,7 @@
 \begin{abstract}
 \vspace{-1mm}
 {\centering\section*{Abstract}}
-Linear attention is increasingly used in frontier language models for efficient long-context
-inference and constant-memory decoding. Its fixed-size recurrent memory, however, requires an online
-decision at each token: what to write and how strongly to overwrite existing associations before
-knowing which information future queries will require. Delta-rule
-models learn this strength from the current token embedding but do not track confidence in the memory estimate,
-preventing each write from adapting to accumulated evidence. To represent this uncertainty explicitly, we reformulate recurrent
-associative memory as a linear--Gaussian state-space
-model, for which the Kalman filter is the optimal recursive estimator, and introduce a new family of
-models, \textit{Kalman Delta Networks (KDNs)}. Within KDNs, the transition propagates both the memory state and
-its uncertainty, allowing the Kalman gain to weight each residual write by accumulated evidence and
-observation reliability. Under this formulation, Delta-style updates emerge as a special case that
-substitutes a token-wise isotropic surrogate for predictive covariance and omits covariance tracking.
-Exact tracking, however, entails a dense,
-state-dependent Riccati recursion that is poorly suited to GPU-parallel linear-attention scans.
-To address this issue, we introduce two scan-compatible KDN approximations. \textit{Diagonal KDN}
-projects each one-step posterior onto the diagonal Gaussian family through online mean-field
-variational inference, whereas \textit{Isotropic KDN} uses an isotropic approximation with a single
-uncertainty scalar per head. Their uncertainty recurrences are M\"obius maps, enabling associative
-scans with logarithmic parallel depth and $O(d_k)$ and $O(1)$ auxiliary state per head,
-respectively. Across controlled pretraining at
-750M and 1.3B parameters, KDN variants consistently improve perplexity and mean downstream
-accuracy over state-of-the-art linear-attention models.
+Linear attention enables efficient long-context inference by compressing token history into a fixed-size recurrent memory. This compression makes each update a trade-off between incorporating new information and preserving useful associations. Models such as DeltaNet, Gated DeltaNet, and KDA predict write strength from the current token representation, without explicitly tracking uncertainty in the stored memory. Yet this uncertainty matters: a new observation should have greater influence when the existing association is uncertain and less when it is already well supported. We introduce \textit{Kalman Delta Networks} (KDNs), a family of linear-attention models that explicitly track memory uncertainty to guide each update. By formulating associative memory as a linear–Gaussian state-space  model, KDNs propagate both the memory estimate and its uncertainty, using the Kalman gain to balance accumulated evidence against the reliability of new observations. This formulation also recovers standard delta-rule updates by replacing tracked covariance with a token-predicted isotropic surrogate. To support hardware-efficient training and inference, we derive \textit{Diagonal KDN} and \textit{Isotropic KDN}, which retain one uncertainty value per key channel and per head, respectively. Their uncertainty updates admit associative scans with logarithmic parallel depth, requiring only $O(d_k)$ and $O(1)$ auxiliary state per head. Across controlled pretraining at 750M and 1.3B parameters, both variants consistently improve perplexity and mean downstream accuracy over the evaluated state-of-the-art linear-attention baselines.
 \end{abstract}
 
 
@@ -104,13 +83,12 @@ key--value map. Each token supplies a noisy observation of that map at one key, 
 transition describes how the map persists or drifts between observations. Under linear--Gaussian
 assumptions, the Kalman filter~\citep{kalman1960new} is the optimal recursive estimator that
 propagates both the memory estimate and its covariance, balancing memory uncertainty against
-observation noise to determine the correction gain. The resulting update retains the familiar
+observation noise to determine the correction gain. The resulting update retains the 
 residual delta-write form while assigning greater
 weight to new evidence when the memory is uncertain and protecting associations supported by
 repeated observations. This formulation leads to \emph{Kalman Associative Memory}, which
 generalizes delta-rule mixers through explicit covariance tracking. DeltaNet, Gated DeltaNet, and
-KDA thus emerge as covariance-free approximations that retain different memory transitions while
-omitting this uncertainty recursion.
+KDA thus emerge as covariance-free approximations that retain different memory transitions while omitting this uncertainty recursion.
 
 The exact Kalman update, however, is not a practical linear-attention layer. It
 carries a dense $d_k\times d_k$ covariance per head, and its gain depends on a state-dependent
@@ -133,9 +111,7 @@ perplexity and higher mean six-task zero-shot accuracy than every evaluated stat
 linear-time recurrent mixer---including Mamba-3~\citep{lahoti2026mamba3},
 KDA~\citep{kimiteam2025kimilinear}, and GDN-2~\citep{hatamizadeh2026gdn2}---at both 750M/50B
 and 1.3B/100B. Diagonal KDN also achieves the highest observed 14-cell RULER
-aggregate~\citep{hsieh2024ruler} at both scales.
-
-Our contributions are:
+aggregate~\citep{hsieh2024ruler} at both scales. Our contributions are:
 
 \begin{itemize}[leftmargin=1.4em,itemsep=3pt,topsep=2pt]
   \item \textbf{A principled state-space view of delta-based models.} We cast the delta rule as an
