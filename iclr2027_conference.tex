@@ -1,6 +1,8 @@
 
 \documentclass{article} % For LaTeX2e
 \usepackage{iclr2027_conference,times}
+\usepackage[most]{tcolorbox}
+\usepackage{placeins}
 
 \input{preamble}
 \input{command}
@@ -56,31 +58,30 @@ Linear attention enables efficient long-context inference by compressing token h
 \section{Introduction}
 \label{sec:intro}
 
-Self-attention is the central content-based retrieval mechanism of modern sequence models, allowing
-every query to retrieve the values associated with all preceding keys
-\citep{vaswani2017attention}. This flexibility comes from retaining the token history itself.
-Consequently, the autoregressive key--value cache grows with context length, and computing all
-query--key interactions remains quadratic in the sequence length. Linear attention offers a
-different scaling regime. It compresses the prefix into a fixed-size recurrent state that can
-be updated online and evaluated in parallel by a scan
-\citep{katharopoulos2020transformers}. This efficiency turns attention into an online
-memory-management problem. Each token must edit a compressed summary of the past before the model
-knows which associations future queries will need. An update that is too timid preserves stale
-information; one that is too aggressive destroys useful memory.
+Self-attention enables flexible retrieval from the preceding context by allowing each query to
+aggregate the values associated with earlier keys~\citep{vaswani2017attention}. This
+flexibility, however, requires retaining the full token history, so the autoregressive key--value
+cache grows with context length while query--key interactions remain quadratic in sequence length.
+Linear attention instead compresses the prefix into a fixed-size recurrent state that can be
+updated online and evaluated in parallel by a scan~\citep{katharopoulos2020transformers}. This
+efficiency turns attention into an online memory-management problem: each token must edit a
+compressed summary of the past before the model knows which associations future queries will need.
+An update that is too timid preserves stale information; one that is too aggressive destroys useful
+memory.
 
-Delta-rule mixers make these edits more selective. DeltaNet first reads what the memory predicts
-for the current key and writes only the residual~\citep{schlag2021linear,yang2024parallelizing},
-an update commonly interpreted as one online gradient step on the instantaneous squared prediction
-loss of a fast-weight memory. Gated DeltaNet~\citep{yang2024gdn} and
+Delta-rule mixers address this problem with a more selective update: they first read the memory's prediction
+for the current key, then write only the residual~\citep{schlag2021linear,yang2024parallelizing}.
+This update is commonly interpreted as a single online gradient step on the fast-weight memory's
+instantaneous squared prediction loss. Gated DeltaNet~\citep{yang2024gdn} and
 KDA~\citep{kimiteam2025kimilinear} retain this residual write while adding Mamba-style state-space
 transitions~\citep{gu2023mamba,dao2024transformers} that decay stored content at scalar or
 channel-wise rates. Their transition and write
 are therefore typically understood through different lenses: state-space dynamics and online
-optimization, respectively. More importantly, their write gain is predicted from the current token
-representation rather than derived from explicit confidence in the stored association.
-Consequently, these models have no explicit mechanism for deciding whether a large residual should
-revise a tentative association or be discounted because the association has been repeatedly
-confirmed.
+optimization, respectively. More importantly, their write strength is predicted from the current
+token representation alone, without accounting for the memory's confidence in the stored association. An
+uncertainty-aware rule would instead balance memory confidence against observation reliability,
+writing more when the association is tentative and the observation is reliable, and less when the
+memory is well supported or the observation is noisy.
 
 \textbf{In this paper,} we provide a unified view of the recurrent updates in delta-rule mixers through a
 linear--Gaussian state-space formulation, under which uncertainty emerges as their missing state
@@ -120,7 +121,7 @@ and 1.3B/100B. Diagonal KDN also achieves the highest observed 14-cell RULER
 aggregate~\citep{hsieh2024ruler} at both scales. Our contributions are:
 
 \begin{itemize}[leftmargin=1.4em,itemsep=3pt,topsep=2pt]
-  \item \textbf{A principled state-space view of delta-based models.} We cast the delta rule as an
+  \item \textbf{A principled state-space view of delta-rule models.} We cast the delta rule as an
   innovation update in a linear--Gaussian state-space model, connecting delta-based recurrent
   mixers to the Mamba lineage~\citep{gu2023mamba}. DeltaNet, Gated DeltaNet, and KDA use
   identity, scalar, and diagonal transitions, respectively; unlike Mamba's control-driven additive
@@ -253,12 +254,6 @@ mixers above, Mamba adds the control $\ve{B}_t\ve{x}_t$ directly rather than app
 key-conditioned residual correction.
 
 \paragraph{Notation.}
-In the following sections, $\widetilde{\ve{S}}_t$ denotes the latent random memory,
-$\ve{S}_t$ and $\ve{P}_t$ denote the tracked mean and covariance; the same state convention
-applies columnwise to
-$\widetilde{\ve{s}}_{t,j}$ and $\ve{s}_{t,j}$. A hat marks a one-step predictive quantity before
-conditioning on the current observation, such as $\widehat{\ve{S}}_t$ or
-$\widehat{\ve{P}}_t$.
 For matrices $\ve{X}=[\ve{x}_1,\ldots,\ve{x}_{d_v}]$ and
 $\ve{M}=[\ve{m}_1,\ldots,\ve{m}_{d_v}]$, we write
 \begin{equation}
@@ -268,10 +263,6 @@ $\ve{M}=[\ve{m}_1,\ldots,\ve{m}_{d_v}]$, we write
   \ \text{independently for }j=1,\ldots,d_v.
   \label{eq:columnwise-gaussian-notation}
 \end{equation}
-Equivalently,
-$\operatorname{vec}(\ve{X})\sim
-\N(\operatorname{vec}(\ve{M}),\ve{I}_{d_v}\otimes\ve{P})$.
-Thus $\ve{P}$ denotes the key-space covariance shared across value coordinates.
 
 % =============================================================================
 \section{Kalman Associative Memory}
@@ -290,12 +281,12 @@ the predicted memory and yields a principled gain for incorporating new evidence
   \centering
   \includegraphics[width=0.92\textwidth]{figures/approximate.pdf}
   \vspace{-2mm}
-  \caption{One step of Kalman Associative Memory update and the mean-field variational
-  \mbox{approximation} of Diagonal KDN. Prediction preserves diagonality; the exact update yields a
-  dense posterior; reverse-KL projection restores diagonality without changing its mean. The
-  starred pair $(\ve{S}_t^\star,\ve{P}_t^\star)$ is the optimal posterior of
-  Proposition~\ref{prop:kalman-associative-memory}, while $(\ve{S}_t,\ve{P}_t)$ is the
-  variational approximation given in Proposition~\ref{prop:diag-variational-inference}.
+  \caption{One Kalman Associative Memory update and its mean-field Diagonal KDN approximation.
+  Prediction preserves diagonality; the exact update produces a dense posterior, which reverse-KL
+  projection re-diagonalizes while preserving its mean. Here,
+  $(\ve{S}_t^\star,\ve{P}_t^\star)$ is the optimal posterior from
+  Proposition~\ref{prop:kalman-associative-memory}, and $(\ve{S}_t,\ve{P}_t)$ is the variational
+  approximation from Proposition~\ref{prop:diag-variational-inference}.
   % \htl{should the starred pairs be related to equ28? }
   }
   \label{fig:kdn-variational-approximation}
@@ -336,7 +327,6 @@ language model, this accounts for changes in the latent discourse state that can
 from retention alone. If an incoming sentence reveals that an entity has moved from Paris to
 Rome, $\ve{D}_t$ can attenuate the stale Paris binding, but only the observation can establish the
 new Rome binding.
-In the main development, $\ve{W}_t$ denotes the centered unpredictable component of this drift.
 \paragraph{Observation.}
 The current key reads one direction of the latent map. The observed value is
 \begin{equation}
@@ -353,37 +343,22 @@ fact that can be stored under key $\ve{k}_t$. The covariance $r_t\ve{I}_{d_v}$ s
 observation is: small $r_t$ means trust the token and write strongly, while large $r_t$ means
 treat much of $\ve{v}_t$ as context-specific noise.
 
-We assume
-$\widetilde{\ve{S}}_0\sim\N_{\mathrm{col}}(\ve{0},\ve{I})$.
-Conditioned on the input-dependent quantities
-$\{(\ve{D}_t,\ve{\Omega}_t,\ve{k}_t,r_t)\}_{t\geq1}$, the noise pairs
-$\{(\ve{W}_t,\ve{e}_t)\}_{t\geq1}$ are independent across time,
-$\ve{W}_t$ and $\ve{e}_t$ are independent at each step, and all noises are independent of
-$\widetilde{\ve{S}}_0$.
-
 \paragraph{Online filtering problem.}
+We assume $\widetilde{\ve{S}}_0\sim\N_{\mathrm{col}}(\ve{0},\ve{I})$. Conditioned on the
+input-dependent quantities $\{(\ve{D}_t,\ve{\Omega}_t,\ve{k}_t,r_t)\}_{t\geq1}$, the pairs
+$\{(\ve{W}_t,\ve{e}_t)\}_{t\geq1}$ are independent across time and of
+$\widetilde{\ve{S}}_0$, with $\ve{W}_t\perp\ve{e}_t$ at each step.
 Let $\mathcal{F}_t=\sigma\{(\ve{k}_\tau,\ve{v}_\tau):\tau\leq t\}$ denote the observation
-history through step $t$. At each step, we seek a point estimate of the current latent memory
-$\widetilde{\ve{S}}_t$, rather than its full trajectory. Under squared-error loss, the optimal estimate
-is the posterior mean:
-\begin{equation}
-  \ve{S}_t
-  =\argmin_{\ve{S}}
-    \E\!\left[\left.\|\widetilde{\ve{S}}_t-\ve{S}\|_F^2\,\right|\,\mathcal{F}_t\right]
-  =\E\!\left[\widetilde{\ve{S}}_t\mid\mathcal{F}_t\right].
-  \label{eq:online-filtering-objective}
-\end{equation}
-In this formulation, forgetting belongs to the prediction model for a non-stationary memory,
-rather than acting as an auxiliary gate appended to attention.
+history through step $t$. Given this history, we estimate the current latent memory by its posterior
+mean, $\ve{S}_t=\E[\widetilde{\ve{S}}_t\mid\mathcal{F}_t]$.
 
 
 % =============================================================================
 \subsection{Kalman Filtering}
 \label{sec:kalman-filtering}
 
-Equation~\eqref{eq:online-filtering-objective} defines the target posterior mean of the current
-memory. Under the linear--Gaussian assumptions in \eqref{eq:mem-update-dynamics} and
-\eqref{eq:mem-update-observation}, the Kalman filter computes this expectation exactly by first
+Under the linear--Gaussian assumptions in \eqref{eq:mem-update-dynamics} and
+\eqref{eq:mem-update-observation}, the Kalman filter~\citep{kalman1960new} computes this posterior mean exactly by first
 predicting the latent memory and then conditioning that prediction on the current token. It carries
 the filtering law
 $\widetilde{\ve{S}}_t\mid\mathcal{F}_t
@@ -394,83 +369,11 @@ $\ve{P}_t\in\R^{d_k\times d_k}$ is the common key-space covariance.
 Tracking $\ve{P}_t$ is necessary because each token observes the associative map only at one key
 direction $\ve{k}_t$, and the value $\ve{v}_t$ is noisy. After many tokens, some key directions are
 well supported by past measurements, while others remain uncertain or have become stale
-because of drift. High uncertainty means the current token should be allowed to edit the
-memory strongly; low uncertainty means the prior memory should resist a noisy measurement.
+because of drift. The filter uses this uncertainty to calibrate each write, allowing larger
+corrections in uncertain directions while protecting well-supported associations from noisy
+measurements.
 
-\paragraph{Predict.}
-At step $t-1$, the filter has posterior mean $\ve{S}_{t-1}$ and covariance $\ve{P}_{t-1}$.
-Applying the state dynamics gives the predictive mean and covariance at step $t$,
-\begin{equation}
-  \widehat{\ve{S}}_t = \ve{D}_t \ve{S}_{t-1},
-  \qquad
-  \widehat{\ve{P}}_t = \ve{D}_t\ve{P}_{t-1}\ve{D}_t^{\tr}+\ve{\Omega}_t .
-  \label{eq:kalman-predict}
-\end{equation}
-These quantities summarize the predictive distribution of $\widetilde{\ve{S}}_t$ before the current
-token mapping $(\ve{k}_t,\ve{v}_t)$ is observed. This is
-the formal role of forgetting: $\ve{D}_t$ moves the associative memory forward in time, while
-$\ve{\Omega}_t$ increases uncertainty for drift that the transition cannot capture.
-
-The current token observes the predicted memory along $\ve{k}_t$. Its predicted value and
-innovation are
-\begin{equation}
-  \widehat{\ve{v}}_t = \widehat{\ve{S}}_t^{\tr}\ve{k}_t,
-  \qquad
-  \ve{\delta}_t = \ve{v}_t-\widehat{\ve{v}}_t .
-  \label{eq:kalman-innovation}
-\end{equation}
-The vector $\ve{\delta}_t$ is the innovation: the part of the observed value not explained by the
-predicted memory.
-
-\paragraph{Update.}
-For each value coordinate $j$, the predicted memory column $\widetilde{\ve{s}}_{t,j}$ and scalar
-observation $v_{t,j}$ are jointly Gaussian. Conditioned on $(\mathcal{F}_{t-1},\ve{k}_t)$,
-\begin{equation}
-  \begin{bmatrix}
-    \widetilde{\ve{s}}_{t,j} \\ v_{t,j}
-  \end{bmatrix}
-  \sim
-  \N\!\left(
-  \begin{bmatrix}
-    \widehat{\ve{s}}_{t,j} \\ \ve{k}_t^{\tr}\widehat{\ve{s}}_{t,j}
-  \end{bmatrix},
-  \begin{bmatrix}
-    \widehat{\ve{P}}_t & \widehat{\ve{P}}_t\ve{k}_t \\
-    \ve{k}_t^{\tr}\widehat{\ve{P}}_t
-    & r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t
-  \end{bmatrix}
-  \right).
-  \label{eq:kalman-joint-coordinate}
-\end{equation}
-Applying the Gaussian conditioning formula to each pair and stacking the columnwise posteriors gives
-\begin{equation}
-\begin{alignedat}{3}
-  \widetilde{\ve{S}}_t\mid\mathcal{F}_t
-  &\sim\N_{\mathrm{col}}\!\left(\ve{S}_t,\ve{P}_t\right),
-  \qquad\text{where}\qquad &
-  \ve{S}_t
-  &=\widehat{\ve{S}}_t+\ve{\kappa}_t\ve{\delta}_t^{\tr},
-  \qquad &
-  \ve{P}_t
-  &=(\ve{I}-\ve{\kappa}_t\ve{k}_t^{\tr})\widehat{\ve{P}}_t, \\
-  &&
-  \ve{\kappa}_t
-  &=\frac{\widehat{\ve{P}}_t\ve{k}_t}
-  {r_t+\ve{k}_t^{\tr}\widehat{\ve{P}}_t\ve{k}_t}.
-\end{alignedat}
-  \label{eq:kalman-update}
-\end{equation}
-Thus the posterior mean is a residual write: the filter adds only the part of the observed value
-that the predicted memory failed to explain. The corresponding covariance update records the
-remaining uncertainty after this observation.
-Finally, the layer reads from the filtered memory,
-\begin{equation}
-  \ve{o}_t = \ve{S}_t^{\tr}\ve{q}_t .
-  \label{eq:kalman-read}
-\end{equation}
-The predict--update recursion therefore computes the conditional expectation in
-\eqref{eq:online-filtering-objective} at every step.
-The following proposition summarizes this optimal recursion.
+The resulting uncertainty-aware predict--update recursion is summarized below.
 
 \refstepcounter{definition}\label{prop:kalman-associative-memory}
 \begin{tcolorbox}[
@@ -488,8 +391,8 @@ The following proposition summarizes this optimal recursion.
   bottom=5pt
 ]
 Under the linear--Gaussian state-space model in
-\eqref{eq:mem-update-dynamics}--\eqref{eq:mem-update-observation}, the solution to the online
-MMSE filtering problem in \eqref{eq:online-filtering-objective} is the Kalman update below.
+\eqref{eq:mem-update-dynamics}--\eqref{eq:mem-update-observation}, the posterior-mean solution to
+the online MMSE filtering problem is the Kalman update below.
 Given the memory estimate $\ve{S}_{t-1}$ and uncertainty
 $\ve{P}_{t-1}$ before token $t$, the filter first predicts how the memory drifts under the process
 model
@@ -520,6 +423,10 @@ direction $\ve{\kappa}_t$.
 
 \noindent\textit{Proof.} See Appendix~\ref{app:proof-kalman-optimal-update}.
 
+Thus the posterior mean is a residual write: the filter adds only the part of the observed value
+that the predicted memory failed to explain. The corresponding covariance update records the
+remaining uncertainty after this observation.
+
 \subsection{Delta-rule models as fixed-gain Kalman filters}
 \label{sec:delta-family-kalman}
 
@@ -540,49 +447,27 @@ isotropic surrogate $\widehat{\ve{P}}_t\approx \widehat b_t \ve{I}$ for the pred
 \end{equation}
 For normalized keys, the exact Kalman gain therefore collapses to the scalar write strength
 $\beta_t$ used by the delta-rule family. Substituting $\ve{\kappa}_t=\beta_t \ve{k}_t$ into the
-Kalman update gives the shared fixed-gain residual form
-\begin{equation}
-\begin{aligned}
-  \ve{S}_t
-  &= \ve{D}_t \ve{S}_{t-1}
-     + \beta_t \ve{k}_t
-     \big(\ve{v}_t-(\ve{D}_t\ve{S}_{t-1})^{\tr}\ve{k}_t\big)^{\tr} \\
-  &= (\ve{I}-\beta_t \ve{k}_t \ve{k}_t^{\tr})\ve{D}_t\ve{S}_{t-1}
-     + \beta_t \ve{k}_t \ve{v}_t^{\tr}.
-\end{aligned}
-\label{eq:fixed-gain-delta-family}
-\end{equation}
-DeltaNet, Gated DeltaNet, and KDA are obtained by choosing different process models:
+Kalman update gives the shared fixed-gain residual form. DeltaNet, Gated DeltaNet, and KDA then
+differ through their process models:
 \begin{equation}
   \text{DeltaNet: }\ve{D}_t=\ve{I},\qquad
   \text{GDN: }\ve{D}_t=\alpha_t \ve{I},\qquad
   \text{KDA: }\ve{D}_t=\diag(\ve{\alpha}_t).
   \label{eq:delta-family-transitions}
 \end{equation}
-Thus the three models share the same measurement model and residual write; they differ only
-in how the memory is predicted before the write. Relative to the Kalman optimal update, they
-freeze the uncertainty dynamics and replace the adaptive gain with the fixed first-order
-direction $\beta_t \ve{k}_t$.
+Relative to the Kalman optimal update, they freeze the uncertainty dynamics and replace the
+adaptive gain with the fixed first-order direction $\beta_t \ve{k}_t$.
 
 
 % =============================================================================
 \section{Kalman Delta Networks}
 \label{sec:kla}
 
-The Kalman optimal update in \eqref{eq:kalman-optimal-update-box} is the target, but the
-exact recursion is not directly compatible with fully parallel linear attention. Parallel
-training relies on a scan form
-\begin{equation}
-  \ve{S}_t=\ve{A}_t\ve{S}_{t-1}+\ve{b}_t,
-  \label{eq:parallel-affine-scan}
-\end{equation}
-where the per-token coefficients $\ve{A}_t$ and $\ve{b}_t$ are input-only, or are computable from
-associative prefix statistics. Exact Kalman filtering breaks this structure because
-$\ve{P}_t$ follows a Riccati recursion and the gain $\ve{\kappa}_t$ depends on the accumulated
-posterior uncertainty. Tracking $\ve{P}_t$ also requires a dense $d_k\times d_k$ state per head,
-in addition to the associative memory itself. We therefore ask which parts of the optimal update
-can be relaxed while preserving both its uncertainty-aware residual write and an associative
-scan.
+The Kalman optimal update in \eqref{eq:kalman-optimal-update-box} is the target, but the exact
+recursion is not directly compatible with fully parallel linear attention due to its Riccati
+covariance recursion. This makes the gain depend on accumulated posterior uncertainty and
+requires a dense $d_k\times d_k$ covariance state per head. We therefore seek a relaxation that
+preserves uncertainty-aware residual writes while restoring an associative scan.
 
 \subsection{Diagonal Kalman Delta Network}
 \label{sec:diagonal-kdn}
