@@ -569,7 +569,7 @@ inherits the coordinatewise overconfidence of reverse-KL mean field~\citep{blei2
 These correlations encode observed \emph{joint} key directions; without them, the approximation can
 be overconfident in individual channels yet too uncertain along those directions. Consequently, a
 repeated key or a later key with energy on the same coordinates can trigger an excessively strong
-residual write (see Figure~\ref{fig:kdn-overwrite}, second column; $\mu=1$). To mitigate this overwrite,
+residual write (see the $\mu=1$ curves in Figure~\ref{fig:kdn-overwrite}). To mitigate this overwrite,
 we apply an information scale $\mu>0$ only to the post-write precision increment:
 \begin{equation}
   \ve{u}_t
@@ -582,28 +582,31 @@ we apply an information scale $\mu>0$ only to the post-write precision increment
   \ve{p}_0=\ve{1}.
   \label{eq:diag-cov-update}
 \end{equation}
-Because the gain $\ve{\kappa}_t$ is computed before the post-write update, increasing $\mu$ leaves
-the current write unchanged while reducing later effective writes
-$\beta^{\mathrm{eff}}=\ve{k}^{\tr}\ve{\kappa}$. Setting $\mu=1$ recovers the variational update;
-for a normalized dense key, $\mu=d_k$ compensates the $1/d_k$ dilution of each channel's
-information increment. Refer to Appendix~\ref{app:protection-write} for detailed discussion and
-empirical analyses.
-
-\begin{figure}[t]
+\begin{wrapfigure}{r}{0.50\textwidth}
+  \vspace{-0.8\baselineskip}
   \centering
-  \includegraphics[width=0.92\textwidth]{figures/kdn_overwrite_distributions.pdf}
-  \vspace{-4mm}
-  \caption{Effective-write distributions at initialization (top) and after 50B training tokens
-  (bottom) for parameter-matched 750M KDA and Diagonal KDN models with
-  $\mu\in\{1,\sqrt{d_k},d_k\}$. For normalized KDA keys,
-  $\beta_t^{\mathrm{eff}}=\beta_t$; for Diagonal KDN,
-  $\beta_t^{\mathrm{eff}}=\ve{k}_t^{\tr}\ve{\kappa}_t$. Dashed lines mark pooled means.}
+  \includegraphics[width=\linewidth]{figures/kdn_overwrite_distributions_iclr2027.pdf}
+  \vspace{-0.8\baselineskip}
+  \caption{Effective-write distributions before (top) and after 50B-token pretraining (bottom).
+  Diagonal KDN overlays $\mu=1$ and $\mu=d_k$; dashed lines mark pooled means.}
   \label{fig:kdn-overwrite}
-  \vspace{-2mm}
-\end{figure}
+  \vspace{-0.6\baselineskip}
+\end{wrapfigure}
+The gain $\ve{\kappa}_t$ is computed before the post-write update, so changing $\mu$ leaves the
+current write unchanged and only reduces later effective writes
+$\beta^{\mathrm{eff}}=\ve{k}^{\tr}\ve{\kappa}$. The choice $\mu=1$ recovers the variational update.
+For a normalized dense key, $\mu=d_k$ offsets the $1/d_k$ dilution of each channel's information
+increment. Appendix~\ref{app:protection-write} provides further analysis.
+Figure~\ref{fig:kdn-overwrite} shows the expected shift: increasing $\mu$ from $1$ to $d_k$
+reduces the pooled mean
+$\beta^{\mathrm{eff}}$ from $0.842$ to $0.630$ at initialization and from $0.943$ to $0.826$
+after pretraining.
 
-Combining this calibrated covariance scan with the Kalman residual write yields the Diagonal
-Kalman Delta Network, summarized in Proposition~\ref{prop:kalman-linear-attention}.
+Proposition~\ref{prop:kalman-linear-attention} summarizes the resulting Diagonal Kalman Delta
+Network.
+% Keep the full-width proposition below the wrapped caption.
+\vspace{4\baselineskip}
+\WFclear
 \refstepcounter{definition}\label{prop:kalman-linear-attention}
 \begin{tcolorbox}[
   title={Proposition~\thedefinition: Diagonal Kalman Delta Network},
@@ -1587,8 +1590,8 @@ To analyze the write strength induced by KDN, we record $\beta_t^{\mathrm{eff}}$
 heads, and tokens on a fixed FineWeb-Edu stream for parameter-matched 750M KDA and Diagonal KDN
 models, both at initialization and after 50B training tokens. The resulting distributions are shown
 in Figure~\ref{fig:kdn-overwrite}. At $\mu=1$, Diagonal KDN concentrates its effective writes near
-one, indicating frequent overwrite. Increasing $\mu$ progressively reduces the effective write
-strength.
+one, indicating frequent overwrite. Increasing $\mu$ from $1$ to $d_k$ shifts the distribution
+toward lower effective write strength.
 
 \paragraph{Information scale as future protection.}
 To understand overwrite, consider a normalized key with equal energy on $m$ active channels and
