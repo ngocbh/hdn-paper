@@ -142,116 +142,39 @@ aggregate~\citep{hsieh2024ruler} at both scales. Our contributions are:
 \section{Preliminaries}
 \label{sec:preliminaries}
 
-\paragraph{Self-attention.}
-Causal softmax attention stores every preceding key--value pair and retrieves a
-query-dependent weighted combination \citep{vaswani2017attention},
-  \begin{equation}
-    \ve{o}_t
-    =\sum_{i=1}^{t}
-      \frac{\exp(\ve{q}_t^{\tr}\ve{k}_i/\sqrt{d_k})}
-      {\sum_{j=1}^{t}\exp(\ve{q}_t^{\tr}\ve{k}_j/\sqrt{d_k})}\,\ve{v}_i.
-    \label{eq:softmax-attention}
-  \end{equation}
-  Retaining the complete token history provides direct access to past content, but the
-  autoregressive cache grows linearly with $t$, and processing a full sequence requires
-  quadratic query--key interactions. This scaling cost motivates replacing the growing cache
-  with a fixed-size recurrent memory.
+\paragraph{From self-attention to recurrent memory.}
+Causal self-attention~\citep{vaswani2017attention} retains all preceding key--value pairs for
+flexible retrieval, whereas linear attention~\citep{katharopoulos2020transformers} compresses the
+prefix into a fixed-size matrix $\ve{S}_t\in\R^{d_k\times d_v}$. Each token writes an association to
+$\ve{S}_t$, and a query reads $\ve{o}_t=\ve{S}_t^{\tr}\ve{q}_t$. This removes the growing cache,
+but a purely additive update cannot revise or forget stored associations.
 
-\paragraph{Linear attention.}
-Linear attention addresses this growth by compressing the token history into a fixed-size
-recurrent state $\ve{S}_t \in \R^{d_k \times d_v}$. In its unnormalized associative-memory
-form, each token writes a key--value association to the state, and each query reads from it
-\citep{katharopoulos2020transformers},
-  \begin{equation}
-    \text{(write)}\quad \ve{S}_t = \ve{S}_{t-1} + \ve{k}_t \ve{v}_t^{\tr},
-    \qquad\qquad
-    \text{(read)}\quad \ve{o}_t = \ve{S}_t^{\tr} \ve{q}_t .
-    \label{eq:linattn}
-  \end{equation}
-  Here $\ve{k}_t$ and $\ve{q}_t$ denote feature-mapped keys and queries; when required, the usual
-  linear-attention normalizer can be tracked by a separate recurrent state.
-  The recurrent state removes the growing cache, but its additive update can only write. Old
-  associations cannot be explicitly removed from the fixed-size memory and may therefore
-  interfere with new ones.
-
-\paragraph{DeltaNet.}
-DeltaNet addresses this limitation by replacing the additive update with an error-correcting
-delta rule \citep{schlag2021linear,yang2024parallelizing}. It reads the value currently
-associated with $\ve{k}_t$ and writes only the residual,
-  \begin{equation}
-  \begin{aligned}
-    \ve{S}_t
-      &= \ve{S}_{t-1}
-         + \beta_t \ve{k}_t\,(\ve{v}_t-\ve{S}_{t-1}^{\tr}\ve{k}_t)^{\tr}
-        \qquad\text{(canonical residual form)}\\
-      &= (\ve{I}-\beta_t \ve{k}_t \ve{k}_t^{\tr})\,\ve{S}_{t-1}
-         + \beta_t \ve{k}_t \ve{v}_t^{\tr},
-  \end{aligned}
-    \label{eq:deltanet}
-  \end{equation}
-  For a unit-norm repeated key, this moves the stored value toward $\ve{v}_t$ by a fraction
-  $\beta_t$ and exactly overwrites it when $\beta_t=1$. The erase is local to the current key,
-  however: associations stored elsewhere receive no explicit decay. A stale association can
-  therefore persist for many steps and interfere with a later write when its key is
-  non-orthogonal to the new key.
-
-\paragraph{Gated DeltaNet.}
-Gated DeltaNet~\citep{yang2024gdn} addresses this limitation by applying a data-dependent decay
-$\alpha_t\in(0,1)$ to the entire state before the delta update, following the state-decay
-mechanism of Mamba-2~\citep{dao2024transformers}:
-  \begin{equation}
-  \begin{aligned}
-    \ve{S}_t
-      &= \alpha_t \ve{S}_{t-1}
-         + \beta_t \ve{k}_t\,(\ve{v}_t-(\alpha_t \ve{S}_{t-1})^{\tr}\ve{k}_t)^{\tr}
-        \qquad\text{(canonical residual form)}\\
-      &= \alpha_t\,(\ve{I}-\beta_t \ve{k}_t \ve{k}_t^{\tr})\,\ve{S}_{t-1}
-         + \beta_t \ve{k}_t \ve{v}_t^{\tr},
-  \end{aligned}
-    \label{eq:gdn}
-  \end{equation}
-  The decay makes untouched associations fade geometrically, preventing stale content from
-  persisting indefinitely. However, the single scalar $\alpha_t$ applies the same retention
-  rate to every key channel in a head. The model therefore cannot preserve long-lived
-  information in some channels while rapidly forgetting transient information in others.
-
-\paragraph{KDA.}
-KDA addresses this limitation by replacing the scalar decay with a diagonal transition
-$\ve{D}_t=\diag(\ve{\alpha}_t)$, giving each key channel its own decay rate
-\citep{kimiteam2025kimilinear},
-  \begin{equation}
-  \begin{aligned}
-    \ve{S}_t
-      &= \ve{D}_t \ve{S}_{t-1}
-         + \beta_t \ve{k}_t\,(\ve{v}_t-(\ve{D}_t \ve{S}_{t-1})^{\tr}\ve{k}_t)^{\tr}
-        \qquad\text{(canonical residual form)}\\
-      &= (\ve{I}-\beta_t \ve{k}_t \ve{k}_t^{\tr})\,\ve{D}_t\,\ve{S}_{t-1}
-         + \beta_t \ve{k}_t \ve{v}_t^{\tr},
-  \end{aligned}
-    \label{eq:kda}
-  \end{equation}
-  A single head can thus combine short- and long-lived associations. This is the most
-  expressive transition in the family, but the erase/write strength is still controlled by a
-  scalar gate $\beta_t$ predicted from the current token. Because this gate does not depend on
-  the evidence accumulated in memory, it cannot distinguish a well-supported association from
-  an uncertain one.
-
-\paragraph{Mamba state-space models.}
-The Mamba family uses the selective linear state-space recurrence
+\paragraph{Delta-rule mixers.}
+Delta-rule mixers address this limitation by first predicting the memory through a transition
+$\ve{D}_t$ and then correcting its prediction at the current key with write strength $\beta_t$
+\citep{schlag2021linear,yang2024parallelizing}:
 \begin{equation}
-  \ve{h}_t
-  = \ve{A}_t\ve{h}_{t-1}+\ve{B}_t\ve{x}_t,
-  \qquad
-  \ve{o}_t=\ve{C}_t^{\tr}\ve{h}_t,
-  \label{eq:mamba-ssm}
+\begin{aligned}
+  \widehat{\ve{S}}_t
+  &=\ve{D}_t\ve{S}_{t-1},\\
+  \ve{S}_t
+  &=\widehat{\ve{S}}_t
+    +\beta_t\ve{k}_t
+      \big(\ve{v}_t-\widehat{\ve{S}}_t^{\tr}\ve{k}_t\big)^{\tr}\\
+  &=(\ve{I}-\beta_t\ve{k}_t\ve{k}_t^{\tr})\ve{D}_t\ve{S}_{t-1}
+    +\beta_t\ve{k}_t\ve{v}_t^{\tr}.
+\end{aligned}
+\label{eq:unified-delta-rule}
 \end{equation}
-where $\ve{A}_t$, $\ve{B}_t$, and $\ve{C}_t$ control retention, writing, and reading. Mamba-1
-makes these operations input-dependent~\citep{gu2023mamba}, while Mamba-2 connects the resulting
-selective recurrence to structured masked attention through state-space
-duality~\citep{dao2024transformers}. Mamba-3 adds exponential--trapezoidal discretization,
-complex-valued dynamics, and SISO and MIMO variants~\citep{lahoti2026mamba3}. Unlike the delta-rule
-mixers above, Mamba adds the control $\ve{B}_t\ve{x}_t$ directly rather than applying a
-key-conditioned residual correction.
+DeltaNet uses $\ve{D}_t=\ve{I}$, making writes selective but leaving untouched associations
+unchanged. Gated DeltaNet adds scalar decay $\ve{D}_t=\alpha_t\ve{I}$ to forget stale content
+globally~\citep{yang2024gdn}; KDA generalizes this to
+$\ve{D}_t=\diag(\ve{\alpha}_t)$, allowing different key channels to retain information at different
+rates~\citep{kimiteam2025kimilinear}. The progression is therefore from local residual correction,
+to global forgetting, to channel-wise forgetting. In all three models, however, the scalar
+$\beta_t$ is predicted from the current token rather than derived from confidence in the stored
+association. Appendix~\ref{app:attention-ssm-background} reviews the standard attention and
+state-space formulations.
 
 \paragraph{Notation.}
 For matrices $\ve{X}=[\ve{x}_1,\ldots,\ve{x}_{d_v}]$ and
@@ -276,21 +199,6 @@ but omit covariance tracking and predict the write strength directly from the cu
 Forgetting is interpreted as the transition model's prediction of how the latent memory state
 persists or changes between observations. Tracking the covariance then quantifies confidence in
 the predicted memory and yields a principled gain for incorporating new evidence.
-
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=0.92\textwidth]{figures/approximate.pdf}
-  \vspace{-2mm}
-  \caption{One Kalman Associative Memory update and its mean-field Diagonal KDN approximation.
-  Prediction preserves diagonality; the exact update produces a dense posterior, which reverse-KL
-  projection re-diagonalizes while preserving its mean. Here,
-  $(\ve{S}_t^\star,\ve{P}_t^\star)$ is the optimal posterior from
-  Proposition~\ref{prop:kalman-associative-memory}, and $(\ve{S}_t,\ve{P}_t)$ is the variational
-  approximation from Proposition~\ref{prop:diag-variational-inference}.
-  % \htl{should the starred pairs be related to equ28? }
-  }
-  \label{fig:kdn-variational-approximation}
-\end{figure}
 
 \subsection{Associative Memory as a Linear-Gaussian State-Space Model}
 \label{sec:memory-formulation}
@@ -352,7 +260,6 @@ Let $\mathcal{F}_t=\sigma\{(\ve{k}_\tau,\ve{v}_\tau):\tau\leq t\}$ denote the ob
 history through step $t$. Given this history, we estimate the current latent memory by its posterior
 mean, $\ve{S}_t=\E[\widetilde{\ve{S}}_t\mid\mathcal{F}_t]$.
 
-
 % =============================================================================
 \subsection{Kalman Filtering}
 \label{sec:kalman-filtering}
@@ -373,7 +280,16 @@ because of drift. The filter uses this uncertainty to calibrate each write, allo
 corrections in uncertain directions while protecting well-supported associations from noisy
 measurements.
 
-The resulting uncertainty-aware predict--update recursion is summarized below.
+To derive the filtering recursion, suppose the previous posterior is
+$\widetilde{\ve{S}}_{t-1}\mid\mathcal{F}_{t-1}
+\sim\N_{\mathrm{col}}(\ve{S}_{t-1},\ve{P}_{t-1})$. The linear transition with Gaussian process
+noise preserves this family, giving the predictive distribution
+$\widetilde{\ve{S}}_t\mid\mathcal{F}_{t-1}
+\sim\N_{\mathrm{col}}(\widehat{\ve{S}}_t,\widehat{\ve{P}}_t)$. The observation in
+\eqref{eq:mem-update-observation} measures each predicted column along the same key $\ve{k}_t$ with
+independent Gaussian noise, so the predicted state and $\ve{v}_t$ are jointly Gaussian.
+Conditioning this joint Gaussian on $\ve{v}_t$ yields the residual correction, shared Kalman gain,
+and covariance update summarized below.
 
 \refstepcounter{definition}\label{prop:kalman-associative-memory}
 \begin{tcolorbox}[
@@ -426,6 +342,21 @@ direction $\ve{\kappa}_t$.
 Thus the posterior mean is a residual write: the filter adds only the part of the observed value
 that the predicted memory failed to explain. The corresponding covariance update records the
 remaining uncertainty after this observation.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.92\textwidth]{figures/approximate.pdf}
+  \vspace{-2mm}
+  \caption{One Kalman Associative Memory update and its mean-field Diagonal KDN approximation.
+  Prediction preserves diagonality; the exact update produces a dense posterior, which reverse-KL
+  projection re-diagonalizes while preserving its mean. Here,
+  $(\ve{S}_t^\star,\ve{P}_t^\star)$ is the optimal posterior from
+  Proposition~\ref{prop:kalman-associative-memory}, and $(\ve{S}_t,\ve{P}_t)$ is the variational
+  approximation from Proposition~\ref{prop:diag-variational-inference}.
+  % \htl{should the starred pairs be related to equ28? }
+  }
+  \label{fig:kdn-variational-approximation}
+\end{figure}
 
 \subsection{Delta-rule models as fixed-gain Kalman filters}
 \label{sec:delta-family-kalman}
@@ -507,7 +438,7 @@ key channel is written. Although $\widehat{\ve{P}}_t$ is diagonal, the exact pos
   +\frac{\ve{k}_t\ve{k}_t^{\tr}}{r_t}\right)^{-1}.
   \label{eq:diag-exact-info-update}
 \end{equation}
-This rank-one correction is generally dense, thus immediately taking the exact posterior outside
+This rank-one correction is generally dense, thus taking the exact posterior outside
 $\mathcal{D}_{++}^{d_k}$.
 
 \paragraph{Online variational inference.}
@@ -1326,6 +1257,56 @@ at $4$K to $14.67$ at $32$K; Isotropic KDN is consistently second among the recu
 \end{figure}
 
 \FloatBarrier
+
+% =============================================================================
+\section{Attention and State-Space Background}
+\label{app:attention-ssm-background}
+
+\paragraph{Self-attention.}
+Causal softmax attention stores every preceding key--value pair and retrieves a query-dependent
+weighted combination~\citep{vaswani2017attention},
+\begin{equation}
+  \ve{o}_t
+  =\sum_{i=1}^{t}
+    \frac{\exp(\ve{q}_t^{\tr}\ve{k}_i/\sqrt{d_k})}
+    {\sum_{j=1}^{t}\exp(\ve{q}_t^{\tr}\ve{k}_j/\sqrt{d_k})}\,\ve{v}_i.
+  \label{eq:softmax-attention}
+\end{equation}
+Retaining the complete token history provides direct access to past content, but the autoregressive
+cache grows linearly with $t$, and processing a full sequence requires quadratic query--key
+interactions.
+
+\paragraph{Linear attention.}
+Linear attention replaces the growing cache with a fixed-size recurrent state
+$\ve{S}_t\in\R^{d_k\times d_v}$. In its unnormalized associative-memory form, each token writes a
+key--value association and each query reads from the resulting state
+\citep{katharopoulos2020transformers},
+\begin{equation}
+  \text{(write)}\quad \ve{S}_t=\ve{S}_{t-1}+\ve{k}_t\ve{v}_t^{\tr},
+  \qquad
+  \text{(read)}\quad \ve{o}_t=\ve{S}_t^{\tr}\ve{q}_t.
+  \label{eq:linattn}
+\end{equation}
+Here $\ve{k}_t$ and $\ve{q}_t$ denote feature-mapped keys and queries; when required, the usual
+linear-attention normalizer can be tracked by a separate recurrent state. The recurrent state
+removes the growing cache, but its additive update cannot explicitly revise or remove old
+associations.
+
+\paragraph{Mamba state-space models.}
+The Mamba family uses the selective linear state-space recurrence
+\begin{equation}
+  \ve{h}_t=\ve{A}_t\ve{h}_{t-1}+\ve{B}_t\ve{x}_t,
+  \qquad
+  \ve{o}_t=\ve{C}_t^{\tr}\ve{h}_t,
+  \label{eq:mamba-ssm}
+\end{equation}
+where $\ve{A}_t$, $\ve{B}_t$, and $\ve{C}_t$ control retention, writing, and reading. Mamba-1 makes
+these operations input-dependent~\citep{gu2023mamba}, while Mamba-2 connects the resulting
+selective recurrence to structured masked attention through state-space
+duality~\citep{dao2024transformers}. Mamba-3 adds exponential--trapezoidal discretization,
+complex-valued dynamics, and SISO and MIMO variants~\citep{lahoti2026mamba3}. Unlike the delta-rule
+family in \eqref{eq:unified-delta-rule}, Mamba adds the control $\ve{B}_t\ve{x}_t$ directly rather
+than applying a key-conditioned residual correction.
 
 % =============================================================================
 \section{Theoretical Proofs}
