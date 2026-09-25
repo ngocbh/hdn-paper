@@ -137,7 +137,6 @@ aggregate~\citep{hsieh2024ruler} at both scales. Our contributions are:
   Mamba-3 variants in both reported perplexities and mean six-task zero-shot accuracy.
 \end{itemize}
 
-
 % =============================================================================
 \section{Preliminaries}
 \label{sec:preliminaries}
@@ -146,7 +145,14 @@ aggregate~\citep{hsieh2024ruler} at both scales. Our contributions are:
 Causal self-attention~\citep{vaswani2017attention} retains all preceding key--value pairs for
 flexible retrieval, whereas linear attention~\citep{katharopoulos2020transformers} compresses the
 prefix into a fixed-size matrix $\ve{S}_t\in\R^{d_k\times d_v}$. Each token writes an association to
-$\ve{S}_t$, and a query reads $\ve{o}_t=\ve{S}_t^{\tr}\ve{q}_t$. This removes the growing cache,
+$\ve{S}_t$ and each query reads from it:
+\begin{equation}
+  \text{(write)}\quad \ve{S}_t=\ve{S}_{t-1}+\ve{k}_t\ve{v}_t^{\tr},
+  \qquad
+  \text{(read)}\quad \ve{o}_t=\ve{S}_t^{\tr}\ve{q}_t.
+  \label{eq:linear-attention-main}
+\end{equation}
+This removes the growing cache,
 but a purely additive update cannot revise or forget stored associations.
 
 \paragraph{Delta-rule mixers.}
@@ -587,8 +593,8 @@ we apply an information scale $\mu>0$ only to the post-write precision increment
   \centering
   \includegraphics[width=\linewidth]{figures/kdn_overwrite_distributions_iclr2027.pdf}
   \vspace{-0.8\baselineskip}
-  \caption{Effective-write distributions before (top) and after 50B-token pretraining (bottom).
-  Diagonal KDN overlays $\mu=1$ and $\mu=d_k$; dashed lines mark pooled means.}
+  \vspace{-2mm}
+  \caption{Effective-write distributions before (top) and after 50B-token pretraining (bottom).}
   \label{fig:kdn-overwrite}
   \vspace{-0.6\baselineskip}
 \end{wrapfigure}
