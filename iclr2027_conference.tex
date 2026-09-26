@@ -79,10 +79,10 @@ transitions~\citep{gu2023mamba,dao2024transformers} that decay stored content at
 channel-wise rates. Their transition and write
 are therefore typically understood through different lenses: state-space dynamics and online
 optimization, respectively. More importantly, their write strength is predicted from the current
-token representation alone, without accounting for the memory's confidence in the stored association. An
-uncertainty-aware rule would instead balance memory confidence against observation reliability,
-writing more when the association is tentative and the observation is reliable, and less when the
-memory is well supported or the observation is noisy.
+token representation alone, without accounting for the memory's confidence in the stored association.
+Without tracking this uncertainty, they lack an explicit basis for deciding whether a large residual
+should revise a tentative association or be discounted to protect a well-supported association.
+This risks overwriting reliable associations or leaving uncertain ones insufficiently corrected.
 
 \textbf{In this paper,} we provide a unified view of the recurrent updates in delta-rule mixers through a
 linear--Gaussian state-space formulation, under which uncertainty emerges as their missing state
@@ -109,9 +109,9 @@ variational update that projects the posterior back onto the diagonal family by 
 KL. Conditional on the retained diagonal predictive prior, this projection preserves the exact
 one-step posterior mean. To mitigate excessive overwrite under this approximation, we introduce an
 information-scaling factor that calibrates the retained uncertainty. Diagonal KDN maintains one
-uncertainty value per key channel and requires $O(d_k)$ auxiliary state per head, whereas
-\emph{Isotropic KDN} uses an isotropic covariance approximation, tying these values to a single
-uncertainty scalar per head and requiring only $O(1)$ auxiliary state.
+uncertainty value per key channel and requires $O(d_k)$ auxiliary state per head.
+In addition, we introduce \emph{Isotropic KDN}, which uses one uncertainty scalar per head,
+trading expressiveness for $O(1)$ auxiliary state and minimal overhead compared to KDA.
 
 Empirically, under parameter-matched recurrent-only pretraining on
 FineWeb-Edu~\citep{penedo2024fineweb}, both KDN variants achieve lower WikiText and LAMBADA
