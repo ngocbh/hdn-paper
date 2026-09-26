@@ -900,7 +900,9 @@ Full attention degrades sharply as sequence length grows.
 \FloatBarrier
 
 % =============================================================================
+\vspace{-1mm}
 \section{Related Work}
+\vspace{-1mm}
 \label{sec:related-work}
 
 \paragraph{Fixed-memory attention.}
@@ -913,13 +915,9 @@ DeltaNet, Gated DeltaNet, Comba, RWKV-7, and KDA
 peng2025rwkv7,kimiteam2025kimilinear}; FoX, DeltaFormer, and PaTH-FoX carry related forgetting,
 associative correction, and multiplicative positional encoding to exponential-kernel attention
 \citep{lin2025forgetting,zhong2025understanding,yang2025path}. GDN-2 further decouples erase and
-write~\citep{hatamizadeh2026gdn2}. Preconditioned DeltaNet shows that inverse-Gram
-preconditioning turns DeltaNet into an exact online least-squares solver and develops
-scan-compatible diagonal variants for DeltaNet, GDN, and KDA~\citep{tumma2026preconditioned}.
-This exact update is the static, fixed-noise limit of Kalman Associative Memory. Its practical
-model uses bounded diagonal curvature with a separate token-predicted gain, whereas KDN propagates
-predictive covariance through learned stochastic dynamics and derives the innovation gain jointly
-from uncertainty and observation noise.
+write~\citep{hatamizadeh2026gdn2}. Practical Preconditioned DeltaNet variants~\citep{tumma2026preconditioned}
+combine diagonal curvature with token-predicted gains, whereas KDN derives gains from propagated
+uncertainty and observation noise.
 
 \paragraph{State-space sequence mixers and Bayesian memory.}
 Structured SSMs provide a complementary approach to fixed-memory sequence mixing: S4 makes long-range continuous-time dynamics
@@ -927,29 +925,28 @@ tractable via structured convolutions, while S5 recasts them as a scan-parallel 
 recurrence~\citep{gu2022efficiently,smith2023simplified},
 Mamba adds input selectivity~\citep{gu2023mamba}, Mamba-2 derives attention--SSM duality and SSD
 \citep{dao2024transformers}, and Mamba-3 introduces exponential--trapezoidal discretization, complex
-dynamics, and SISO/MIMO variants~\citep{lahoti2026mamba3}. Unlike Mamba's deterministic,
-control-driven additive updates, KDN treats token values as noisy observations of a stochastic
-key--value map and weights each innovation by propagated covariance. Kalman Linear Attention also
-tracks uncertainty with a scan-parallel information-form filter, but factorizes its belief over
-feature/state-expansion coordinates under time-invariant OU dynamics
-\citep{shaj2026kalmanlinearattention}. KDN instead observes an associative matrix through
-vector-valued, key-conditioned measurements; its exact posterior covariance is dense in key space
-and shared across value channels, with isotropic and diagonal KDNs as scan-compatible approximations.
+dynamics, and SISO/MIMO variants~\citep{lahoti2026mamba3}. KLA~\citep{shaj2026kalmanlinearattention}
+augments Mamba-style sequence mixing with a scan-parallel Kalman filter via belief factorization
+and time-invariant OU dynamics. Unlike Mamba's deterministic, control-driven additive updates, KDN treats token values
+as noisy observations of a stochastic key--value map and weights each innovation by propagated
+covariance. Unlike KLA's factorized belief, KDN's exact posterior has dense key-space covariance
+shared across value channels.
+Concurrently, \citet{dowling2026memory} derive Bayesian Layers with dense covariance propagation.
+However, their implementation requires quadratic covariance storage and sequential chunk processing,
+whereas KDN uses scan-compatible isotropic and diagonal approximations.
 
 % =============================================================================
+\vspace{-1mm}
 \section{Conclusion and Future Work}
+\vspace{-1mm}
 \label{sec:discussion-conclusion}
 
-In this work, we bridge delta-rule recurrent mixers and state-space models by reformulating recurrent
-key--value memory as a linear--Gaussian dynamical system over a latent, non-stationary key--value
-map. This view gives the delta-rule residual write a principled interpretation as the Kalman
-innovation: the part of the observed value not explained by the predicted memory. Unlike the Mamba
-lineage~\citep{gu2023mamba}, whose state update uses a control-driven additive input, these models
-correct a predicted key--value map with a key-conditioned residual but use a token-predicted rather
-than covariance-derived gain. Building on this view, KDN derives the gain from propagated
-uncertainty and observation noise.
-
-To make uncertainty-aware filtering practical, we derive scan-compatible Isotropic and Diagonal KDNs and introduce information scaling to limit future overwrite of stored associations. In parameter-matched recurrent-only pretraining at 750M and 1.3B parameters, both variants achieve lower WikiText and LAMBADA perplexity and higher mean six-task zero-shot accuracy than every evaluated recurrent baseline. Diagonal KDN also attains the highest aggregate RULER score at both scales.
+We introduced two new recurrent mixers, Isotropic and Diagonal KDNs, that generalize existing
+delta-rule mixers by capturing uncertainty in stored associations to calibrate residual writes
+while preserving parallel training. In parameter-matched recurrent-only pretraining at 750M and
+1.3B parameters, both variants achieve lower WikiText and LAMBADA perplexity and higher mean
+six-task zero-shot accuracy than all evaluated recurrent baselines. Diagonal KDN also achieves
+the highest aggregate RULER score at both scales.
 
 These models are steps toward, rather than full realizations of, Kalman Associative Memory. Exact
 filtering maintains a dense key-space covariance and a state-dependent Riccati update, whereas the
@@ -962,61 +959,22 @@ transition and covariance update scan-efficient remains open.
 
 \subsection*{AI use statement}
 
-(This section is \textbf{required} and does not count toward the page limit.)
-
-In this work, we used generative AI tools for [tasks with required disclosure].
-We have not used generative AI tools for [other tasks with required disclosure],
-and [the rest of the required disclosure tasks] are not applicable to this work.
-Additionally, we used generative AI tools for [tasks with recommended
-disclosure]. We have reviewed all AI-assisted work. [Elaborate. For example, “we
-checked LLM-generated research ideas for potential plagiarism through a manual
-literature survey”, “LLM-generated code was verified and tested for correctness
-by 2 authors”, etc.]. We take responsibility for the final content of this work,
-including text, claims or artifacts produced with the aid of generative AI.
-
-See the ICLR 2027 AI Policy for Authors for more details. This statement should
-not be more than 1 page.
-
-\subsection*{Ethics statement}
-
-(This section is \textbf{recommended} and does not count toward the page limit.)
-
-If authors feel that their paper submission raises questions regarding the Code
-of Ethics, they are encouraged to include a paragraph of Ethics Statement (at
-the end of the main text before references) to address potential concerns where
-appropriate. Topics include, but are not limited to, studies that involve human
-subjects, practices to data set releases, potentially harmful insights,
-methodologies and applications, potential conflicts of interest and sponsorship,
-discrimination/bias/fairness concerns, privacy and security issues, legal
-compliance, and research integrity issues (e.g., IRB, documentation, research
-ethics). This statement should not be more than 1 page.
+We used AI tools to polish the writing and assist with implementing and optimizing Triton kernels
+for Isotropic KDN and Diagonal KDN. We implemented and verified recurrent Python reference
+versions of both models, which served as correctness references and guardrails for AI agents
+during kernel implementation and performance optimization. We take responsibility for the final
+content of this work, including all AI-assisted text and code.
 
 \subsection*{Reproducibility statement}
 
-(This section is \textbf{recommended} and does not count toward the page limit.)
-
-It is important that the work published in ICLR is reproducible. Authors are
-strongly encouraged to include a paragraph-long Reproducibility Statement at the
-end of the main text (before references) to discuss the efforts that have been
-made to ensure reproducibility. This paragraph should not itself describe
-details needed for reproducing the results, but rather reference the parts of
-the main paper, appendix, and supplemental materials that will help with
-reproducibility. For example, for novel models or algorithms, a link to an
-anonymous downloadable source code can be submitted as supplementary materials;
-for theoretical results, clear explanations of any assumptions and a complete
-proof of the claims can be included in the appendix; for any datasets used in
-the experiments, a complete description of the data processing steps can be
-provided in the supplementary materials. Each of the above are examples of
-things that can be referenced in the reproducibility statement.
-
-\subsubsection*{Author Contributions}
-If you'd like to, you may include  a section for author contributions as is done
-in many journals. This is optional and at the discretion of the authors.
-
-\subsubsection*{Acknowledgments}
-Use unnumbered third level headings for the acknowledgments. All
-acknowledgments, including those to funding agencies, go at the end of the paper.
-
+We specify the modeling assumptions and update equations in
+Sections~\ref{sec:memory-kalman}--\ref{sec:kla}, with proofs and further derivations in
+Appendices~\ref{app:proofs}, \ref{app:protection-write}, and~\ref{app:iso-kla}.
+Appendix~\ref{sec:experimental-setup} documents the datasets, model configurations,
+parameter- and state-matching procedures, training hyperparameters, and evaluation protocols.
+Appendix~\ref{sec:chunkwise-algorithm} details the chunkwise gain and memory computations.
+We also implemented and verified recurrent Python reference versions of both KDN variants to
+serve as correctness references for Triton kernel development.
 
 \bibliography{main}
 \bibliographystyle{iclr2027_conference}
